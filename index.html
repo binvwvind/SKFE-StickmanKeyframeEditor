@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
-<title>SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v4.8.0</title>
+<title>SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v4.9.0</title>
 <style>
   :root {
     --bg-page: #f4f6f9;
@@ -1586,7 +1586,7 @@
   <div id="uiDragHandle"><div class="bar"></div></div>
 
   <div id="watermark">
-    <div>SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v4.8.0</div>
+    <div>SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v4.9.0</div>
     <div class="author">Author: binvwvind qq交流分享群:1121039855</div>
   </div>
 
@@ -2082,7 +2082,11 @@
     <div id="canvasSliders" style="display:none; margin-top:6px;">
       <div class="row" style="margin-top:6px;"><label><input type="checkbox" id="canvasMaskEnabled"> <span>画布外遮罩（暗角）</span></label></div>
       <div class="row slider" id="canvasMaskAlphaRow" style="display:none;"><label>遮罩透明度</label><input type="range" id="canvasMaskAlpha" min="0" max="1" step="0.01" value="1"><span class="val" id="canvasMaskAlphaVal">1.00</span></div>
-    </div>
+      <!-- 新增颜色选择 -->
+      <div class="row" id="canvasMaskColorRow" style="display:none; margin-top:6px;">
+        <label><span>遮罩颜色</span> <input type="color" id="canvasMaskBgColor" value="#2b2b2b"></label>
+        <label style="margin-left:auto;"><span>网格颜色</span> <input type="color" id="canvasMaskGridColor" value="#ffffff"></label>
+      </div>
     <div class="hint" style="font-size:11px; margin-top:4px;">提示：开启后导出仅保留画布内内容。在「基础属性」中可以调整画布的 X/Y/缩放/旋转；使用变换框或开启自由拉伸可调整宽高。</div>
 
     <div class="divider" style="margin: 8px 0;"></div>
@@ -2238,9 +2242,6 @@
     <span id="multiActions" style="display:none; gap:4px; align-items:center; flex-wrap:wrap;">
       <span id="multiCount" class="text-primary" style="font-size:11px; font-weight:600;"></span>
       <button id="btnMultiTween" class="btn-soft btn-xs" title="在选中的相邻帧之间逐对补间">✨ 多选补间</button>
-      <button id="btnMultiDelete" class="danger btn-xs" title="删除所有选中帧">🗑 删除多选</button>
-      <button id="btnMultiExportPNG" class="btn-xs" title="导出选中帧为透明PNG序列">📤 多选PNG</button>
-      <button id="btnMultiExportGIF" class="btn-xs" title="导出选中帧为GIF">🎞 多选GIF</button>
     </span>
     <span class="sep">|</span>
     <div class="tween-group">
@@ -2470,6 +2471,8 @@
 
   let canvasMaskEnabled = false;
   let canvasMaskAlpha = 1.0;
+  let canvasMaskBgColor = '#2b2b2b'; // 新增
+  let canvasMaskGridColor = '#ffffff'; // 新增
 
   let TIMELINE_H = 0;
   let isPlaying = false;
@@ -2557,8 +2560,13 @@
     for (const id in tracks) {
       const t = tracks[id];
       if (!t || !t.frames) continue;
-      for (const data of t.frames) {
-        if (data && String(data.id) === targetId) set(data, path, value);
+      for (let i = 0; i < t.frames.length; i++) {
+        const data = t.frames[i];
+        if (data && String(data.id) === targetId) {
+          // 如果开启了多选模式，且当前帧不在多选列表中，则跳过
+          if (multiSelectMode && !multiSelectedFrames.has(i)) continue;
+          set(data, path, value);
+        }
       }
     }
     if (selected && String(selected.id) === targetId) set(selected, path, value);
@@ -2679,7 +2687,15 @@ function setGlobalPropForBound(obj, path, value) {
     return {
       frames: frames.map(frame => ({ id: frame.id, duration: frame.duration, isTween: !!frame.isTween })),
       tracks: cloneTracksMap(tracks),
-      currentFrameIndex
+      currentFrameIndex,
+      // === 新增：记录画布相关状态 ===
+      canvasBounds: JSON.parse(JSON.stringify(canvasBounds)),
+      canvasBoundsEnabled,
+      canvasMaskEnabled,
+      canvasMaskAlpha,
+      canvasMaskBgColor,
+      canvasMaskGridColor,
+      canvasBaseBounds: canvasBaseBounds ? JSON.parse(JSON.stringify(canvasBaseBounds)) : null
     };
   }
 
@@ -2700,6 +2716,20 @@ function setGlobalPropForBound(obj, path, value) {
     if (currentFrameIndex >= frames.length) currentFrameIndex = frames.length - 1;
     if (currentFrameIndex < 0) currentFrameIndex = 0;
     objects = getCombinedObjectsForRender();
+    
+    // === 新增：恢复画布相关状态 ===
+    if (snapshot.canvasBounds) canvasBounds = JSON.parse(JSON.stringify(snapshot.canvasBounds));
+    if (snapshot.canvasBoundsEnabled !== undefined) canvasBoundsEnabled = snapshot.canvasBoundsEnabled;
+    if (snapshot.canvasMaskEnabled !== undefined) canvasMaskEnabled = snapshot.canvasMaskEnabled;
+    if (snapshot.canvasMaskAlpha !== undefined) canvasMaskAlpha = snapshot.canvasMaskAlpha;
+    if (snapshot.canvasMaskBgColor !== undefined) canvasMaskBgColor = snapshot.canvasMaskBgColor;
+    if (snapshot.canvasMaskGridColor !== undefined) canvasMaskGridColor = snapshot.canvasMaskGridColor;
+    if (snapshot.canvasBaseBounds !== undefined) {
+      canvasBaseBounds = snapshot.canvasBaseBounds ? JSON.parse(JSON.stringify(snapshot.canvasBaseBounds)) : null;
+    }
+    // 同步刷新 UI
+    syncCanvasUI();
+    syncCanvasMaskUI();
     /* 恢复选中：优先按 id 找回来；找不到再退回原逻辑 */
     if (isSubTrackMode()) {
       selected = getActiveTrackObject();
@@ -4333,10 +4363,8 @@ function importActionPresets() {
   const originalUpdateLockPanelUI = updateLockPanelUI;
   updateLockPanelUI = function() {
     originalUpdateLockPanelUI();
-    if (isPanelLocked && uiResizable) {
-      uiResizable = false;
-      syncResizeUI();
-    }
+    // 【修复】不再强制把 uiResizable 置为 false，只刷新界面
+    // 这样在锁定时，依然会保留你自由缩放后的宽高，仅仅隐藏右下角的缩放手柄
     syncResizeUI();
   };
 
@@ -6839,7 +6867,9 @@ function importActionPresets() {
 
       if (canvasMaskEnabled && canvasBoundsEnabled) {
         ctx.save();
-        ctx.fillStyle = `rgba(0, 0, 0, ${canvasMaskAlpha})`;
+        // 1. 遮罩背景颜色
+        const rgbBg = hexToRgb(canvasMaskBgColor);
+        ctx.fillStyle = `rgba(${rgbBg[0]}, ${rgbBg[1]}, ${rgbBg[2]}, ${canvasMaskAlpha})`;
         ctx.beginPath();
         ctx.rect(0, 0, canvas.clientWidth, canvas.clientHeight);
         ctx.translate(viewOffset.x, viewOffset.y);
@@ -6847,10 +6877,42 @@ function importActionPresets() {
         ctx.translate(canvasBounds.x + canvasBounds.w / 2, canvasBounds.y + canvasBounds.h / 2);
         ctx.rotate(canvasBounds.rotation || 0);
         ctx.rect(-canvasBounds.w / 2, -canvasBounds.h / 2, canvasBounds.w, canvasBounds.h);
-        ctx.fill('evenodd');
+        ctx.fill('evenodd'); 
+
+        // 2. 在遮罩区域内绘制固定大小的网格
+        if (canvasMaskAlpha > 0.05) {
+          ctx.clip('evenodd'); 
+          ctx.rotate(-(canvasBounds.rotation || 0));
+          ctx.translate(-(canvasBounds.x + canvasBounds.w / 2), -(canvasBounds.y + canvasBounds.h / 2));
+
+          // 核心：把固定的屏幕像素大小（gridSize）除以当前的缩放比例，使其不跟随视图缩放
+          const s = Math.max(8, gridSize) / viewScale; 
+          const x0 = -viewOffset.x / viewScale;
+          const y0 = -viewOffset.y / viewScale;
+          const x1 = (canvas.clientWidth - viewOffset.x) / viewScale;
+          const y1 = (canvas.clientHeight - viewOffset.y) / viewScale;
+
+          const rgbGrid = hexToRgb(canvasMaskGridColor);
+          ctx.strokeStyle = `rgba(${rgbGrid[0]}, ${rgbGrid[1]}, ${rgbGrid[2]}, ${0.15 * canvasMaskAlpha})`; 
+          ctx.lineWidth = 1 / viewScale;
+          ctx.beginPath();
+
+          // 让网格线完美对齐画布的左上角边缘
+          const startX = canvasBounds.x + Math.floor((x0 - canvasBounds.x) / s) * s;
+          for (let x = startX; x <= x1; x += s) {
+            ctx.moveTo(x, y0);
+            ctx.lineTo(x, y1);
+          }
+          
+          const startY = canvasBounds.y + Math.floor((y0 - canvasBounds.y) / s) * s;
+          for (let y = startY; y <= y1; y += s) {
+            ctx.moveTo(x0, y);
+            ctx.lineTo(x1, y);
+          }
+          ctx.stroke();
+        }
         ctx.restore();
       }
-
       ctx.save();
       ctx.translate(viewOffset.x, viewOffset.y);
       ctx.scale(viewScale, viewScale);
@@ -8359,17 +8421,41 @@ function importActionPresets() {
   /* ==================== 多选：按钮状态 ==================== */
   function updateMultiActions() {
     const el = document.getElementById('multiActions');
-    if (!el) return;
-    el.style.display = multiSelectMode ? 'inline-flex' : 'none';
+    if (el) el.style.display = multiSelectMode ? 'inline-flex' : 'none';
     const has = multiSelectedFrames.size > 0;
     const cnt = document.getElementById('multiCount');
     if (cnt) cnt.textContent = has ? multiSelectedFrames.size + ' 帧' : '';
-    ['btnMultiDelete', 'btnMultiExportPNG', 'btnMultiExportGIF'].forEach(id => {
-      const b = document.getElementById(id);
-      if (b) b.disabled = !has;
-    });
+    
     const btnT = document.getElementById('btnMultiTween');
     if (btnT) btnT.disabled = multiSelectedFrames.size < 2;
+
+    // ==== 联动修改其他面板的按钮文字 ====
+    const isMulti = multiSelectMode;
+    
+    // 1. 动画面板的删除帧
+    const delBtn = document.getElementById('btnDelFrame');
+    if (delBtn) {
+      delBtn.textContent = isMulti ? '🗑 删除多选帧' : '🗑 删除帧';
+      delBtn.title = isMulti ? '删除所有勾选的帧' : '删除当前帧';
+    }
+
+    // 2. 控制面板的导出 PNG / JPG
+    const pngBtn = document.getElementById('btnExportPNG');
+    if (pngBtn) pngBtn.textContent = isMulti ? '导出多选帧PNG' : '导出PNG';
+    const jpgBtn = document.getElementById('btnExportJPG');
+    if (jpgBtn) jpgBtn.textContent = isMulti ? '导出多选帧JPG' : '导出JPG';
+
+    // 3. 高级设置的 GIF / PNG序列
+    const gifBtn = document.getElementById('btnExportGIF');
+    if (gifBtn) gifBtn.textContent = isMulti ? '导出多选帧GIF' : '导出 GIF';
+    const seqBtn = document.getElementById('btnExportPNGSeq');
+    if (seqBtn) seqBtn.textContent = isMulti ? '导出多选帧PNG序列' : '导出 PNG序列';
+
+    // 4. 全局属性修改标签
+    const geBtn = document.querySelector('.adv-toggle[data-toggle="globalEdit"]');
+    if (geBtn) geBtn.textContent = isMulti ? '多选帧全局属性修改' : '全局属性修改';
+    const geHelp = document.getElementById('globalEditHelpBtn');
+    if (geHelp) geHelp.style.display = isMulti ? 'none' : 'inline'; // 多选模式下隐藏原说明
   }
 
   /* ==================== 补间帧生成 ==================== */
@@ -8763,6 +8849,40 @@ function importActionPresets() {
     });
   }
 
+  function exportSelectedJPGs() {
+    if (!multiSelectMode || multiSelectedFrames.size === 0) return;
+    if (isPlaying) pause();
+    syncFrameRef();
+    const _sz = getExportSize();
+    const trackId = isSubTrackMode() ? activeTrackId : null;
+    const indices = Array.from(multiSelectedFrames).sort((a, b) => a - b);
+    const list = indices.map(i => frames[i]).filter(Boolean);
+    if (!list.length) return;
+
+    const cam = shouldSkipCameraForExport() ? null : (getCurrentCameraObject() || getCameraAtFrame(0));
+    const crop = cam ? null : getCropForFrames(list, _sz.w, _sz.h, trackId);
+
+    // 逐个下载 JPG
+    list.forEach((fr, index) => {
+      const idx = frames.indexOf(fr);
+      const safeIdx = idx >= 0 ? idx : 0;
+      
+      // 使用不透明背景（JPG没有透明通道）
+      const off = renderFrameToDataURL(fr, _sz.w, _sz.h, { transparent: false, crop }, trackId);
+      const dataUrl = off.toDataURL('image/jpeg', 0.92);
+      
+      // 用延迟防止浏览器将连续下载判定为恶意弹窗
+      setTimeout(() => {
+        const a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = `frame_${String(safeIdx + 1).padStart(3, '0')}.jpg`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }, index * 150);
+    });
+  }
+
   function exportSelectedGIF() {
     if (!multiSelectMode || multiSelectedFrames.size === 0) return;
     const indices = Array.from(multiSelectedFrames).sort((a, b) => a - b);
@@ -8771,10 +8891,8 @@ function importActionPresets() {
     exportGIF(list, isSubTrackMode() ? activeTrackId : null);
   }
 
-  document.getElementById('btnMultiDelete').onclick = deleteSelectedFrames;
-  document.getElementById('btnMultiTween').onclick = tweenSelectedFrames;
-  document.getElementById('btnMultiExportPNG').onclick = exportSelectedPNGs;
-  document.getElementById('btnMultiExportGIF').onclick = exportSelectedGIF;
+  const btnMultiTween = document.getElementById('btnMultiTween');
+  if (btnMultiTween) btnMultiTween.onclick = tweenSelectedFrames;
 
   /* ==================== 多轨道空白帧辅助 ==================== */
   function findNextTrackFrameIndex(startIdx) {
@@ -10241,8 +10359,13 @@ function importActionPresets() {
     if (!canvasMaskCheckbox) return;
     canvasMaskCheckbox.checked = canvasMaskEnabled;
     canvasMaskAlphaRow.style.display = canvasMaskEnabled ? 'flex' : 'none';
+    const colorRow = document.getElementById('canvasMaskColorRow');
+    if (colorRow) colorRow.style.display = canvasMaskEnabled ? 'flex' : 'none';
+    
     canvasMaskAlphaInput.value = canvasMaskAlpha;
     canvasMaskAlphaVal.textContent = canvasMaskAlpha.toFixed(2);
+    if (canvasMaskBgColorInput) canvasMaskBgColorInput.value = canvasMaskBgColor;
+    if (canvasMaskGridColorInput) canvasMaskGridColorInput.value = canvasMaskGridColor;
   }
 
   btnToggleCanvasBounds.onclick = () => {
@@ -10277,6 +10400,7 @@ function importActionPresets() {
       canvasMaskEnabled = e.target.checked;
       canvasMaskAlphaRow.style.display = canvasMaskEnabled ? 'flex' : 'none';
       render();
+      saveHistory('切换画布遮罩'); // 新增：记录撤销
     });
   }
   if (canvasMaskAlphaInput) {
@@ -10285,6 +10409,25 @@ function importActionPresets() {
       canvasMaskAlphaVal.textContent = canvasMaskAlpha.toFixed(2);
       render();
     });
+  }
+
+  // 新增：绑定遮罩颜色和网格颜色
+  const canvasMaskBgColorInput = document.getElementById('canvasMaskBgColor');
+  const canvasMaskGridColorInput = document.getElementById('canvasMaskGridColor');
+
+  if (canvasMaskBgColorInput) {
+    canvasMaskBgColorInput.addEventListener('input', e => {
+      canvasMaskBgColor = e.target.value;
+      render();
+    });
+    canvasMaskBgColorInput.addEventListener('change', () => saveHistory('修改遮罩颜色'));
+  }
+  if (canvasMaskGridColorInput) {
+    canvasMaskGridColorInput.addEventListener('input', e => {
+      canvasMaskGridColor = e.target.value;
+      render();
+    });
+    canvasMaskGridColorInput.addEventListener('change', () => saveHistory('修改网格颜色'));
   }
 
   document.querySelectorAll('.canvas-ratio-btn').forEach(btn => {
@@ -11966,6 +12109,11 @@ function togglePin(part) {
   let sliderDragStartRot = 0;
 
   function onPosSliderStart() {
+    // 新增：按下滑动条时，立刻记录当前状态（相当于预存修改前的状态）
+    if (canvasSelected || selected) {
+      pushPreSnapshot(getSnapshot(), '滑动调整');
+    }
+
     if (canvasSelected && canvasBoundsEnabled) {
       sliderDragStartPos = { x: canvasBounds.x + canvasBounds.w / 2, y: canvasBounds.y + canvasBounds.h / 2 };
       sliderDragStartScale = canvasBaseBounds ? (canvasBounds.w / canvasBaseBounds.w) : 1;
@@ -12046,7 +12194,7 @@ function togglePin(part) {
     if (posRotSlider) posRotSlider.value = 0;
     if (canvasSelected || selected) {
       markCurrentFrameModified();
-      saveHistory('滑动调整');
+      // saveHistory('滑动调整');  // 删除这行，因为已经在 onPosSliderStart 记录了
     }
     syncUI();
   }
@@ -12125,36 +12273,6 @@ function togglePin(part) {
     }));
   }
   
-  if (objSizeInput) {
-    objSizeInput.addEventListener('change', () => {
-      const val = parseFloat(objSizeInput.value);
-      if (!isFinite(val) || val <= 0) { updatePosInputs(); return; }
-      if (canvasSelected && canvasBoundsEnabled && canvasBaseBounds) {
-        const pre = getSnapshot();
-        const k = Math.max(0.05, Math.min(10, val));
-        const cx = canvasBounds.x + canvasBounds.w / 2;
-        const cy = canvasBounds.y + canvasBounds.h / 2;
-        canvasBounds.w = canvasBaseBounds.w * k;
-        canvasBounds.h = canvasBaseBounds.h * k;
-        canvasBounds.x = cx - canvasBounds.w / 2;
-        canvasBounds.y = cy - canvasBounds.h / 2;
-        syncCanvasUI();
-        render();
-        pushPreSnapshot(pre, '缩放画布');
-      } else if (selected) {
-        const pre = getSnapshot();
-        selected.scale = Math.max(0.01, Math.min(100, val));
-        if (selected.type === 'acc' || selected.type === 'shape' || selected.type === 'bubble') {
-          setGlobalPropForBound(selected, 'scale', selected.scale);
-        } else {
-          setGlobalProp(selected, 'scale', selected.scale);
-        }
-        syncUI(); render(); markCurrentFrameModified();
-        pushPreSnapshot(pre, '调整大小');
-      }
-    });
-  }
-
   if (objSizeInput) {
     objSizeInput.addEventListener('change', () => {
       const val = parseFloat(objSizeInput.value);
@@ -12978,16 +13096,18 @@ function togglePin(part) {
     fileInputEl.value = '';
   });
 
-  // 绑定替换按钮事件
-  document.getElementById('btnReplace').onclick = () => {
-    if (!selected || (selected.type !== 'image' && selected.type !== 'acc')) {
-      alert('请先在画布中选中一个图片或配饰，再进行替换。');
-      return;
-    }
-    fileInputEl.dataset.mode = 'replace';
-    fileInputEl.accept = 'image/*';
-    fileInputEl.click();
-  };
+  const btnReplace = document.getElementById('btnReplace');
+  if (btnReplace) {
+    btnReplace.onclick = () => {
+      if (!selected || (selected.type !== 'image' && selected.type !== 'acc')) {
+        alert('请先在画布中选中一个图片或配饰，再进行替换。');
+        return;
+      }
+      fileInputEl.dataset.mode = 'replace';
+      fileInputEl.accept = 'image/*';
+      fileInputEl.click();
+    };
+  }
 
   targetFigureSelect.addEventListener('change', e => {
     if (selected && (selected.type === 'acc' || selected.type === 'shape')) {
@@ -13426,7 +13546,13 @@ function togglePin(part) {
   document.getElementById('btnNextFrame').onclick = () => goToFrame(currentFrameIndex + 1);
   document.getElementById('btnPlay').onclick = (e) => { if (e) e.preventDefault(); togglePlay(); };
   document.getElementById('btnAddFrame').onclick = () => addFrame();
-  document.getElementById('btnDelFrame').onclick = deleteFrame;
+  const btnDelFrame = document.getElementById('btnDelFrame');
+  if (btnDelFrame) {
+    btnDelFrame.onclick = () => {
+      if (multiSelectMode) deleteSelectedFrames();
+      else deleteFrame();
+    };
+  }
 
   document.getElementById('btnClearAllFrames').onclick = () => {
     if (isPlaying) pause();
@@ -13529,11 +13655,42 @@ function togglePin(part) {
   document.getElementById('frameThumbMode').addEventListener('change', e => { frameThumbMode = e.target.checked; updateFrameBar(); render(); });
 
   /* 导出按钮 */
-  document.getElementById('btnExportPNG').onclick = () => exportImage('png');
-  document.getElementById('btnExportJPG').onclick = () => exportImage('jpg');
-  document.getElementById('btnExportGIF').onclick = () => exportGIF();
-  document.getElementById('btnExportPNGSeq').onclick = exportPNGSeq;
-  document.getElementById('btnExportMP4').onclick = exportMP4;
+  const btnExportPNG = document.getElementById('btnExportPNG');
+  if (btnExportPNG) {
+    btnExportPNG.onclick = () => {
+      if (multiSelectMode) exportSelectedPNGs();
+      else exportImage('png');
+    };
+  }
+  
+  const btnExportJPG = document.getElementById('btnExportJPG');
+  if (btnExportJPG) {
+    btnExportJPG.onclick = () => {
+      if (multiSelectMode) exportSelectedJPGs();
+      else exportImage('jpg');
+    };
+  }
+  
+  const btnExportGIF = document.getElementById('btnExportGIF');
+  if (btnExportGIF) {
+    btnExportGIF.onclick = () => {
+      if (multiSelectMode) exportSelectedGIF();
+      else exportGIF();
+    };
+  }
+  
+  const btnExportPNGSeq = document.getElementById('btnExportPNGSeq');
+  if (btnExportPNGSeq) {
+    btnExportPNGSeq.onclick = () => {
+      if (multiSelectMode) exportSelectedPNGs();
+      else exportPNGSeq();
+    };
+  }
+  
+  const btnExportMP4 = document.getElementById('btnExportMP4');
+  if (btnExportMP4) {
+    btnExportMP4.onclick = exportMP4;
+  }
 
   /* 导出图片 */
   function exportImage(format) {
@@ -13643,21 +13800,21 @@ function togglePin(part) {
       if (hist) hist.style.top = '';
     }
 
-    // 桌面端：顶部停靠时把 UI 面板往下推，否则会被时间轴压住
+    // 【修复】不论是否开启了自由缩放，桌面端顶部停靠时先把 UI 面板往下推，否则会被时间轴压住
     if (!isMobile && ui) {
       const baseTop = 14;
       ui.style.top = (baseTop + (timelineDock === 'top' ? h : 0)) + 'px';
+      // 高度计算也加上时间轴的高度
       ui.style.maxHeight = 'calc(100vh - ' + (baseTop + (timelineDock === 'top' ? h : 0) + 100) + 'px)';
     }
 
-    if (uiResizable) return; // 防冲突新增
+    if (uiResizable) return; // 防冲突：自由缩放的其余逻辑不需要重复执行
 
     // 移动端底部抽屉
     if (isMobile) {
       const expand = document.getElementById('btnMobileExpand');
       const isUiHidden = ui && ui.classList.contains('hidden');
       
-      // 动态计算底部偏移，如果动画面板置顶，就不再计算底部避让
       let bottomOffset = 0;
       if (timelineDock === 'bottom' && visible) {
         bottomOffset = h;
@@ -13668,7 +13825,7 @@ function togglePin(part) {
         if (!isUiHidden) {
           if (!uiPanelDragged) {
             ui.style.top = 'auto';
-            ui.style.maxHeight = '70vh'; // 和 CSS 保持一致
+            ui.style.maxHeight = '70vh';
           } else {
             const topPx = parseFloat(ui.style.top) || 60;
             ui.style.maxHeight = Math.max(120, window.innerHeight - topPx - bottomOffset) + 'px';
@@ -13700,6 +13857,24 @@ function togglePin(part) {
   function initTimelineDock() {
     const tl = document.getElementById('timeline');
     if (!tl) return;
+
+    // 【修复】如果时间轴被错误地包在了其他元素（比如 #ui）里，强制把它移出来挂载到 body 下
+    if (tl.parentElement !== document.body) {
+      document.body.appendChild(tl);
+    }
+
+    // 【修复】强制重置基础定位属性，防止被外部容器干扰导致拉伸/错位
+    tl.style.position = 'fixed';
+    tl.style.left = '0';
+    tl.style.right = '0';
+    if (timelineDock === 'top') {
+      tl.style.top = '0';
+      tl.style.bottom = 'auto';
+    } else {
+      tl.style.top = 'auto';
+      tl.style.bottom = '0';
+    }
+
     const controls = tl.querySelector('.timeline-controls');
     const bar = document.getElementById('frameBar');
     if (controls && bar && controls.parentElement === tl) {

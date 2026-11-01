@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
-<title>SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v4.6.1</title>
+<title>SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v4.7.0</title>
 <style>
   :root {
     --bg-page: #f4f6f9;
@@ -67,7 +67,6 @@
   .tool-panel,
   .ease-editor-card,
   #swatchPopover,
-  #moveHandle,
   #historyControls {
     background: var(--bg-panel);
     border: none;
@@ -904,32 +903,29 @@
     width: 36px; text-align: center; font-weight: 600;
   }
 
-  #floatControls { position: absolute; display: none; gap: 8px; z-index: 100; transform: translate(-50%, -50%); }
-  #floatControls button {
-    width: 44px; height: 44px; border-radius: 50%;
-    font-size: 22px; font-weight: 600; padding: 0;
-    display: flex; align-items: center; justify-content: center;
-    box-shadow: var(--shadow-float);
+  /* ==================== v4.7.0 四角变换框 ==================== */
+  #transformBoxUI {
+    position: fixed; inset: 0; z-index: 148;
+    pointer-events: none; display: none;
+  }
+  .tbox-btn {
+    position: fixed; width: 30px; height: 30px; padding: 0;
+    border-radius: 50%; border: 2px solid #fff;
     background: var(--bg-panel); color: var(--color-primary);
-    border: none;
-  }
-  #floatControls button:hover { background: var(--btn-hover); }
-  #floatControls button:active { transform: scale(.95); }
-
-  #moveHandle {
-    position: fixed; display: none; z-index: 150;
-    transform: translate(-50%, -50%);
-    align-items: center; gap: 4px;
-    padding: 7px 12px;
-    border-radius: var(--radius-chip);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; font-weight: 700; line-height: 1;
     box-shadow: var(--shadow-float);
-    color: var(--color-primary);
-    font-size: 13px; font-weight: 600;
-    cursor: grab; touch-action: none; user-select: none;
-    -webkit-user-select: none; white-space: nowrap;
+    pointer-events: auto; touch-action: none;
+    transform: translate(-50%, -50%);
+    user-select: none; -webkit-user-select: none;
   }
-  #moveHandle:active { cursor: grabbing; }
-  #moveHandle span:first-child { font-size: 16px; line-height: 1; }
+  .tbox-btn:hover { background: var(--color-primary-soft-hover); }
+  .tbox-btn.on { background: var(--color-primary); color: var(--color-primary-text); }
+  .tbox-btn.disabled { opacity: .42; cursor: not-allowed; }
+  #tbBtnMove { cursor: move; }
+  #tbBtnScale { cursor: nwse-resize; }
+  #tbBtnRotate { cursor: grab; }
+  #tbBtnMirror { cursor: pointer; }
 
   #anchorHandle {
     position: fixed; display: none; z-index: 150;
@@ -1271,18 +1267,6 @@
   }
   .coord-input-wrap input:focus { background: var(--bg-panel); border-radius: 6px; box-shadow: var(--focus-ring); }
 
-  #objRotation {
-    width: 78px; padding: 5px 8px;
-    border-radius: 8px; border: 1px solid var(--border-color);
-    background: var(--bg-input); color: var(--text-main);
-    text-align: center; outline: none;
-    font-variant-numeric: tabular-nums;
-    -moz-appearance: textfield;
-  }
-  #objRotation::-webkit-outer-spin-button,
-  #objRotation::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-  #objRotation:focus { box-shadow: var(--focus-ring); }
-
   #frameBar.thumb-mode .frame-chip {
     padding: 4px; width: 58px; height: auto;
     display: flex; flex-direction: column; align-items: center; gap: 2px;
@@ -1411,7 +1395,6 @@
     .coord-row { gap: 6px; }
     .coord-input-wrap { font-size: 13px; padding: 5px 10px; }
     .coord-input-wrap input { width: 60px; font-size: 14px; }
-    #btnMoveHandle { padding: 7px 12px; font-size: 13px; }
     .end-group .row.slider input[type=range] { width: 110px; }
   }
   #btnPinView.on,
@@ -1531,14 +1514,11 @@
 <body>
 <canvas id="c"></canvas>
 
-<div id="floatControls">
-  <button id="btnPlus">＋</button>
-  <button id="btnMinus">－</button>
-</div>
-
-<div id="moveHandle" title="拖动移动">
-  <span>✥</span>
-  <span class="mh-label">移动</span>
+<div id="transformBoxUI">
+  <button type="button" id="tbBtnMove" class="tbox-btn" title="拖动整体移动">✥</button>
+  <button type="button" id="tbBtnScale" class="tbox-btn" title="拖动等比缩放（开启自由拉伸后按 X/Y 分别拉伸）">↘</button>
+  <button type="button" id="tbBtnRotate" class="tbox-btn" title="拖动旋转">↻</button>
+  <button type="button" id="tbBtnMirror" class="tbox-btn" title="单击水平翻转">⇆</button>
 </div>
 
 <div id="anchorHandle" title="拖动改变锚点位置">
@@ -1606,7 +1586,7 @@
   <div id="uiDragHandle"><div class="bar"></div></div>
 
   <div id="watermark">
-    <div>SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v4.6.1</div>
+    <div>SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v4.7.0</div>
     <div class="author">Author: binvwvind qq交流分享群:1121039855</div>
   </div>
 
@@ -1742,38 +1722,44 @@
 
   <div class="divider"></div>
   <div class="section-title">基础属性</div>
-  <div class="row" style="margin-bottom:4px;">
-    <label class="field-label" style="font-weight:600;">名称</label>
-    <input type="text" id="objNameInput" maxlength="24" placeholder="输入名称..." title="重命名当前对象">
+  <div class="row" style="margin-bottom:8px; display:flex; align-items:center; justify-content:space-between;">
+    <input type="text" id="objNameInput" maxlength="24" placeholder="输入名称..." title="重命名当前对象" style="flex: 0 1 130px; width: 130px;">
+    <label style="display:flex; align-items:center; gap:4px;"><span>颜色</span> <input type="color" id="color" value="#111111"></label>
   </div>
-  <div class="row">
-    <label><span>颜色</span> <input type="color" id="color" value="#111111"></label>
+  
+  <div class="row slider"><label>线条</label><input type="range" id="lw" min="2" max="20" value="11"><span class="val" id="lwVal">11</span></div>
+  <div class="row slider"><label>缩放</label><input type="range" id="objScale" min="0" max="4" step="0.01" value="1.67"><span class="val" id="objScaleVal">1.67</span></div>
+  <div class="row slider"><label>透明</label><input type="range" id="objAlpha" min="0" max="1" step="0.01" value="1"><span class="val" id="objAlphaVal">1.00</span></div>
+  
+  <div class="row slider"><label>X轴</label><input type="range" id="posXSlider" min="-100" max="100" step="1" value="0"><span class="val" style="color:var(--text-sub); font-size:11px;">相对</span></div>
+  <div class="row slider"><label>Y轴</label><input type="range" id="posYSlider" min="-100" max="100" step="1" value="0"><span class="val" style="color:var(--text-sub); font-size:11px;">相对</span></div>
+
+  <div class="row" style="margin-top:8px;">
+    <button id="btnTransformBox" class="btn-xs" style="flex:1; font-weight:600;" title="在选中对象周围显示四角变换框">变换框：移动/缩放/旋转/镜像</button>
   </div>
-  <div class="row slider"><label>线条</label><input type="range" id="lw" min="2" max="14" value="11"><span class="val" id="lwVal">11</span></div>
+  <div class="row" style="margin-top:4px;">
+    <button id="btnFreeStretch" class="btn-xs" style="flex:1; font-weight:600;" title="开启后拖动右下角按钮可按 X/Y 分别拉伸（图片 / 形状 / 配饰 / 画布）">⇱ 自由拉伸</button>
+  </div>
+
   <div id="objPanel">
-    <div class="row coord-row" style="margin-bottom:8px;">
-      <label class="field-label" style="font-weight:600; margin-right:2px;">位置</label>
-      <label class="coord-input-wrap">X <input type="number" id="objX" step="1" inputmode="decimal" title="X"></label>
-      <label class="coord-input-wrap">Y <input type="number" id="objY" step="1" inputmode="decimal" title="Y"></label>
-      <button id="btnSnapToggle" class="btn-xs" style="padding:4px 8px; font-size:14px;" title="开启/关闭移动吸附">吸附</button>
-      <button id="btnMoveHandle" style="margin-left:auto;" title="拖动画面上的 ✥ 按钮移动对象"><span>移动</span></button>
+    <div class="row" style="margin-top:8px; gap:6px; flex-wrap:nowrap;">
+      <label class="coord-input-wrap" style="flex:1; gap:4px; padding:4px 6px; height: 26px; box-sizing: border-box; overflow: hidden;">X <input type="number" id="objX" step="1" inputmode="decimal" title="X" style="flex:1; width:100%; min-width:0; text-align:left; padding:0; border:none; background:transparent; font-size:12px;"></label>
+      <label class="coord-input-wrap" style="flex:1; gap:4px; padding:4px 6px; height: 26px; box-sizing: border-box; overflow: hidden;">Y <input type="number" id="objY" step="1" inputmode="decimal" title="Y" style="flex:1; width:100%; min-width:0; text-align:left; padding:0; border:none; background:transparent; font-size:12px;"></label>
+      <label class="coord-input-wrap" style="flex:1.4; gap:4px; padding:4px 6px; white-space:nowrap; height: 26px; box-sizing: border-box; overflow: hidden;">旋转 <input type="number" id="objRotation" step="1" value="0" title="旋转角度（可超过±180°）" style="flex:1; width:100%; min-width:0; text-align:right; padding:0; border:none; background:transparent; font-size:12px; -webkit-appearance: auto; appearance: auto;"><span id="objRotationVal" style="display:none;">0°</span></label>
     </div>
-    <div class="row slider"><label>缩放</label><input type="range" id="objScale" min="0" max="4" step="0.01" value="1.67"><span class="val" id="objScaleVal">1.67</span></div>
-    <div class="row slider"><label>透明</label><input type="range" id="objAlpha" min="0" max="1" step="0.01" value="1"><span class="val" id="objAlphaVal">1.00</span></div>
-    <div class="row" style="gap:6px;">
-      <label>旋转</label>
-      <input type="number" id="objRotation" step="1" value="0" title="旋转角度（可超过±180°）">
-      <span class="val" id="objRotationVal">0°</span>
-      <button id="btnRotHandle" class="btn-xs" style="margin-left:auto;" title="开启旋转手柄">↻ 旋转</button>
-      <button id="btnAnchorToggle" class="btn-xs" title="自定义锚点" style="display:none;">⚓</button>
+    
+    <div class="row" style="margin-top:6px; justify-content:space-between;">
+      <button id="btnSnapToggle" class="btn-xs" style="padding:4px 12px; font-size:12px;" title="开启/关闭移动吸附">🧲 吸附</button>
+      <button id="btnAnchorToggle" class="btn-xs" title="自定义锚点" style="display:none;">⚓ 自定义锚点</button>
     </div>
-    <div class="row" id="objAnchorRow" style="display:none;">
+    
+    <div class="row" id="objAnchorRow" style="display:none; margin-top:4px;">
       <label class="coord-input-wrap">锚点X <input type="number" id="objAnchorX" step="1" value="0"></label>
       <label class="coord-input-wrap">锚点Y <input type="number" id="objAnchorY" step="1" value="0"></label>
       <button id="btnAnchorCenter" class="btn-xs">复位</button>
     </div>
-    <div class="row"><label><input type="checkbox" id="objMirror"> <span>水平镜像</span></label></div>
-    <div class="layer-btns">
+
+    <div class="layer-btns" style="margin-top:10px;">
       <button id="btnUp">⬆ +1层</button>
       <button id="btnDown">⬇ -1层</button>
       <button id="btnTop">⤒ 置顶</button>
@@ -2418,7 +2404,6 @@
   /* ==================== 基础环境 ==================== */
   const canvas = document.getElementById('c');
   let ctx = canvas.getContext('2d');
-  const floatControls = document.getElementById('floatControls');
   const layerListEl = document.getElementById('layerList');
   const targetFigureSelect = document.getElementById('targetFigure');
   const uiPanel = document.getElementById('ui');
@@ -2525,8 +2510,17 @@
   let otherTracksVisibility = 'show';
   let subTrackOptionSignature = '';
 
-  /* 旋转手柄 / 锚点模式状态 */
-  let rotHandleOn = false;
+  /* ==================== v4.7.0 变换框系统状态 ==================== */
+  let transformBoxOn = false;
+  let freeStretchOn = false;
+  try { transformBoxOn = localStorage.getItem('skfe_transform_box_v1') === '1'; } catch (_) {}
+  try { freeStretchOn = localStorage.getItem('skfe_free_stretch_v1') === '1'; } catch (_) {}
+  /* 画布边界的虚拟选中目标（与普通对象区分） */
+  const CANVAS_BOUNDS_TARGET = { type: 'canvasBounds', name: '画布边界' };
+  /* 变换框拖拽状态 */
+  let tboxDrag = null;
+
+  /* 锚点模式状态 */
   let anchorModeOn = false;
   let jointStretchOn = false; // 关节拉伸模式状态
   let isolatedJointName = null; // 当前被隔离/单独显示的关节名称
@@ -2712,7 +2706,7 @@ function setGlobalPropForBound(obj, path, value) {
       selected = null;
     }
     drag = null; isPanning = false; canvasSelected = false;
-    rotHandleOn = false; anchorModeOn = false;
+    cancelTransformBoxDrag(); anchorModeOn = false;
     trackThumbCache.clear();
     updateFrameBar();
     render();
@@ -3617,7 +3611,7 @@ function setGlobalPropForBound(obj, path, value) {
               w: accData.w, h: accData.h, alpha: accData.alpha, scale: accData.scale,
               layer: accData.layer, bindTo: accData.bindTo, targetId: f.id,
               offX: accData.offX, offY: accData.offY, rot: accData.rot, locked: false,
-              ax: 0, ay: 0
+              ax: 0, ay: 0, mirror: false
             };
             generateName(acc);
             addObjectToFrames(acc);
@@ -4503,7 +4497,7 @@ function importActionPresets() {
       id: ++uid, type: 'shape', shape: shapeType, name: 'Shape',
       x, y, w: 60, h: 60, alpha: 1, scale: 1, layer: 1, locked: false,
       fillColor: '#ff6b6b', strokeColor: '#333333', strokeWidth: 0,
-      bindTo: 'none', targetId: null, offX: 0, offY: 0, rot: 0, ax: 0, ay: 0
+      bindTo: 'none', targetId: null, offX: 0, offY: 0, rot: 0, ax: 0, ay: 0, mirror: false
     };
   }
 
@@ -4516,7 +4510,7 @@ function importActionPresets() {
     return {
       id: ++uid, type: 'acc', name: 'Accessory',
       img, x, y, w, h, alpha: 1, scale: 1, layer: 1, locked: false,
-      bindTo: 'none', targetId: null, offX: 0, offY: 0, rot: 0, ax: 0, ay: 0
+      bindTo: 'none', targetId: null, offX: 0, offY: 0, rot: 0, ax: 0, ay: 0, mirror: false
     };
   }
 
@@ -5537,12 +5531,14 @@ function importActionPresets() {
       ctx.globalAlpha = im.alpha * alphaMul;
       ctx.translate(im.x + ax, im.y + ay);
       if (rot) ctx.rotate(rot);
+      if (im.mirror) ctx.scale(-1, 1);
       ctx.drawImage(im.img, -b.w / 2 - ax, -b.h / 2 - ay, b.w, b.h);
       ctx.restore();
-      if (isSel && !isExporting) {
+      if (isSel && !isExporting && !transformBoxOn) {
         ctx.save();
         ctx.translate(im.x + ax, im.y + ay);
         if (rot) ctx.rotate(rot);
+        if (im.mirror) ctx.scale(-1, 1);
         ctx.strokeStyle = im.locked ? 'rgba(239, 68, 68, 0.95)' : 'rgba(74,144,255,.95)';
         ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
         ctx.strokeRect(-b.w / 2 - ax, -b.h / 2 - ay, b.w, b.h);
@@ -5582,15 +5578,17 @@ function importActionPresets() {
       ctx.globalAlpha = acc.alpha * alphaMul;
       ctx.translate(trans.x + ax, trans.y + ay);
       ctx.rotate(trans.angle);
+      if (acc.mirror) ctx.scale(-1, 1);
       ctx.drawImage(acc.img, -w / 2 - ax, -h / 2 - ay, w, h);
       ctx.restore();
-      if (isSel && !isExporting) {
+      if (isSel && !isExporting && !transformBoxOn) {
         ctx.save();
         applyFigTransformCtx(figTr);
         ctx.strokeStyle = acc.locked ? 'rgba(239, 68, 68, 0.95)' : 'rgba(255,165,0,.95)';
         ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
         ctx.translate(trans.x + ax, trans.y + ay);
         ctx.rotate(trans.angle);
+        if (acc.mirror) ctx.scale(-1, 1);
         ctx.strokeRect(-w / 2 - ax, -h / 2 - ay, w, h);
         ctx.restore();
       }
@@ -5613,6 +5611,7 @@ function importActionPresets() {
       ctx.globalAlpha = shape.alpha * alphaMul;
       ctx.translate(trans.x + ax, trans.y + ay);
       ctx.rotate(trans.angle);
+      if (shape.mirror) ctx.scale(-1, 1);
       ctx.translate(-ax, -ay);
       ctx.beginPath();
       if (shape.shape === 'circle') ctx.ellipse(0, 0, w / 2, h / 2, 0, 0, TAU);
@@ -5622,13 +5621,14 @@ function importActionPresets() {
       if (fc !== 'transparent' && fc !== '#00000000') { ctx.fillStyle = fc; ctx.fill(); }
       if (lw > 0) { ctx.lineWidth = lw; ctx.strokeStyle = tint || shape.strokeColor; ctx.stroke(); }
       ctx.restore();
-      if (isSel && !isExporting) {
+      if (isSel && !isExporting && !transformBoxOn) {
         ctx.save();
         applyFigTransformCtx(figTr);
         ctx.strokeStyle = shape.locked ? 'rgba(239, 68, 68, 0.95)' : 'rgba(255,165,0,.95)';
         ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
         ctx.translate(trans.x + ax, trans.y + ay);
         ctx.rotate(trans.angle);
+        if (shape.mirror) ctx.scale(-1, 1);
         ctx.strokeRect(-w / 2 - ax, -h / 2 - ay, w, h);
         ctx.restore();
       }
@@ -5708,7 +5708,7 @@ function importActionPresets() {
         ctx.restore();
       }
       ctx.restore();
-      if (isSel && !isExporting) {
+      if (isSel && !isExporting && !transformBoxOn) {
         ctx.save();
         applyFigTransformCtx(figTr);
         ctx.translate(trans.x + ax, trans.y + ay);
@@ -5793,39 +5793,573 @@ function importActionPresets() {
     }
   }
 
-  /* ==================== 旋转手柄 / 锚点标记 ==================== */
-  function getObjectCenterScreen() {
-    if (!selected) return null;
-    const b = getObjectBounds(selected);
-    return { x: (b.left + b.right) / 2, y: (b.top + b.bottom) / 2, top: b.top };
+  /* ==================== v4.7.0 变换框系统 ==================== */
+  /*
+   * 说明：
+   * 1. 框体基于对象渲染矩阵推导的 OBB（有向包围盒），不是 AABB，
+   *    这样对象旋转/镜像后框仍然与渲染结果严格对齐。
+   * 2. 四角按钮使用 DOM 绝对定位，位置随 render() 刷新，触摸命中更稳。
+   * 3. 框内空白区域支持拖拽平移；四角按钮分别负责移动 / 缩放 / 旋转 / 镜像。
+   */
+
+  /* ---------- 2D 仿射矩阵（与 canvas 变换顺序一致） ---------- */
+  function tboxMat(a, b, c, d, e, f) { return { a, b, c, d, e, f }; }
+  function tboxMatIdentity() { return tboxMat(1, 0, 0, 1, 0, 0); }
+  function tboxMatT(x, y) { return tboxMat(1, 0, 0, 1, x, y); }
+  function tboxMatR(rad) { const c = Math.cos(rad), s = Math.sin(rad); return tboxMat(c, s, -s, c, 0, 0); }
+  function tboxMatS(sx, sy) { return tboxMat(sx, 0, 0, sy, 0, 0); }
+  function tboxMatMul(m1, m2) {
+    return tboxMat(
+      m1.a * m2.a + m1.c * m2.b,
+      m1.b * m2.a + m1.d * m2.b,
+      m1.a * m2.c + m1.c * m2.d,
+      m1.b * m2.c + m1.d * m2.d,
+      m1.a * m2.e + m1.c * m2.f + m1.e,
+      m1.b * m2.e + m1.d * m2.f + m1.f
+    );
+  }
+  function tboxMatApply(m, p) {
+    return { x: m.a * p.x + m.c * p.y + m.e, y: m.b * p.x + m.d * p.y + m.f };
+  }
+  function tboxClamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+  /* 把本地矩形四角经矩阵映射为世界四点（顺序：左上、右上、右下、左下） */
+  function tboxQuadFromMatrix(m, x0, y0, x1, y1) {
+    return [
+      tboxMatApply(m, { x: x0, y: y0 }),
+      tboxMatApply(m, { x: x1, y: y0 }),
+      tboxMatApply(m, { x: x1, y: y1 }),
+      tboxMatApply(m, { x: x0, y: y1 })
+    ];
   }
 
-  function getRotateHandlePos() {
-    const c = getObjectCenterScreen();
-    if (!c) return null;
-    const off = 46 / viewScale;
-    return { x: c.x, y: c.top - off };
+  function tboxObbFromCorners(corners) {
+    const cx = (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4;
+    const cy = (corners[0].y + corners[1].y + corners[2].y + corners[3].y) / 4;
+    let ex = corners[1].x - corners[0].x, ey = corners[1].y - corners[0].y;
+    let fx = corners[3].x - corners[0].x, fy = corners[3].y - corners[0].y;
+    let w = Math.hypot(ex, ey), h = Math.hypot(fx, fy);
+    const angle = Math.atan2(ey, ex);
+    return { cx, cy, w, h, angle, corners };
   }
 
-  function drawRotateHandle() {
-    if (!selected || selected.locked) return;
-    const c = getObjectCenterScreen();
-    const h = getRotateHandlePos();
-    if (!c || !h) return;
+  /* 变换框目标：优先画布边界，其次当前选中对象 */
+  function getTransformBoxTarget() {
+    if (canvasSelected && canvasBoundsEnabled) return CANVAS_BOUNDS_TARGET;
+    if (selected && selected.type !== 'video') return selected;
+    return null;
+  }
+
+  /* ---------- 各类型对象的 OBB（与 queueXxx 渲染矩阵严格一致） ---------- */
+  function getObjectOBB(o) {
+    if (!o) return null;
+    if (o === CANVAS_BOUNDS_TARGET) {
+      const w = canvasBounds.w, h = canvasBounds.h;
+      const cx = canvasBounds.x + w / 2, cy = canvasBounds.y + h / 2;
+      const m = tboxMatMul(tboxMatT(cx, cy), tboxMatR(canvasBounds.rotation || 0));
+      return tboxObbFromCorners(tboxQuadFromMatrix(m, -w / 2, -h / 2, w / 2, h / 2));
+    }
+    if (o.type === 'figure') {
+      const j = jointData(o);
+      const xs = [j.headC.x, j.pelvis.x, j.neck.x, j.handL.x, j.handR.x, j.footL.x, j.footR.x, j.wristL.x, j.wristR.x, j.toeL.x, j.toeR.x];
+      const ys = [j.headC.y - j.headR, j.headC.y + j.headR, j.pelvis.y, j.neck.y, j.handL.y, j.handR.y, j.footL.y, j.footR.y, j.wristL.y, j.wristR.y, j.toeL.y, j.toeR.y];
+      const pad = (o.lw * o.scale) / 2 + 4;
+      const l = Math.min.apply(null, xs) - pad, r = Math.max.apply(null, xs) + pad;
+      const t = Math.min.apply(null, ys) - pad, b = Math.max.apply(null, ys) + pad;
+      let m = tboxMatMul(tboxMatT(o.x, o.y), tboxMatR((o.rot || 0) * Math.PI / 180));
+      if (o.mirror) m = tboxMatMul(m, tboxMatS(-1, 1));
+      m = tboxMatMul(m, tboxMatT(-o.x, -o.y));
+      return tboxObbFromCorners(tboxQuadFromMatrix(m, l, t, r, b));
+    }
+    if (o.type === 'image') {
+      const b = imageBounds(o);
+      const { ax, ay } = getAnchorOffset(o, o.scale);
+      let m = tboxMatMul(tboxMatT(o.x + ax, o.y + ay), tboxMatR((o.rot || 0) * Math.PI / 180));
+      if (o.mirror) m = tboxMatMul(m, tboxMatS(-1, 1));
+      return tboxObbFromCorners(tboxQuadFromMatrix(m, -b.w / 2 - ax, -b.h / 2 - ay, b.w / 2 - ax, b.h / 2 - ay));
+    }
+    if (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble') {
+      const trans = getBindTransform(o);
+      const figTr = getBoundFigureTransform(o);
+      const finalScale = o.scale * trans.syncScale;
+      let m = tboxMatIdentity();
+      if (figTr) {
+        m = tboxMatMul(tboxMatT(figTr.x, figTr.y), tboxMatR(figTr.rot * Math.PI / 180));
+        if (figTr.mirror) m = tboxMatMul(m, tboxMatS(-1, 1));
+        m = tboxMatMul(m, tboxMatT(-figTr.x, -figTr.y));
+      }
+      const w = o.w * finalScale, h = o.h * finalScale;
+      const { ax, ay } = getAnchorOffset(o, finalScale);
+      m = tboxMatMul(m, tboxMatT(trans.x + ax, trans.y + ay));
+      m = tboxMatMul(m, tboxMatR(trans.angle));
+      if (o.type !== 'bubble' && o.mirror) m = tboxMatMul(m, tboxMatS(-1, 1));
+      if (o.type === 'shape') m = tboxMatMul(m, tboxMatT(-ax, -ay));
+      if (o.type === 'acc') {
+        return tboxObbFromCorners(tboxQuadFromMatrix(m, -w / 2 - ax, -h / 2 - ay, w / 2 - ax, h / 2 - ay));
+      }
+      return tboxObbFromCorners(tboxQuadFromMatrix(m, -w / 2, -h / 2, w / 2, h / 2));
+    }
+    if (o.type === 'camera') {
+      const w = o.w * (o.scale || 1), h = o.h * (o.scale || 1);
+      const m = tboxMatMul(tboxMatT(o.x, o.y), tboxMatR((o.rot || 0) * Math.PI / 180));
+      return tboxObbFromCorners(tboxQuadFromMatrix(m, -w / 2, -h / 2, w / 2, h / 2));
+    }
+    return null;
+  }
+
+  /* ---------- 世界坐标 → 屏幕坐标（普通视图 / 摄像机子轨道视角） ---------- */
+  function tboxWorldToScreen(p) {
+    const cam = getCameraViewObject();
+    if (cam) {
+      const t = getCameraViewTransform(cam);
+      const dx = p.x - cam.x, dy = p.y - cam.y;
+      const c = Math.cos(-t.rot), s = Math.sin(-t.rot);
+      return {
+        x: t.cx + (dx * c - dy * s) * t.fit,
+        y: t.cy + (dx * s + dy * c) * t.fit
+      };
+    }
+    return { x: p.x * viewScale + viewOffset.x, y: p.y * viewScale + viewOffset.y };
+  }
+
+  /* 屏幕坐标 → 绑定空间（绑定对象在火柴人旋转/镜像后仍能正确移动） */
+  function tboxWorldToBindSpace(o, p) {
+    if (!o || (o.type !== 'acc' && o.type !== 'shape' && o.type !== 'bubble')) return { x: p.x, y: p.y };
+    const tr = getBoundFigureTransform(o);
+    if (!tr) return { x: p.x, y: p.y };
+    const dx = p.x - tr.x, dy = p.y - tr.y;
+    const rad = tr.rot * Math.PI / 180;
+    const c = Math.cos(-rad), s = Math.sin(-rad);
+    let rx = dx * c - dy * s;
+    const ry = dx * s + dy * c;
+    if (tr.mirror) rx = -rx;
+    return { x: tr.x + rx, y: tr.y + ry };
+  }
+
+  /* ---------- 计算视觉框（屏幕坐标，最小 80px） ---------- */
+  function getTransformBoxGeometry() {
+    if (!transformBoxOn || isPlaying || window.__isExporting) return null;
+    const target = getTransformBoxTarget();
+    if (!target) return null;
+    if (target !== CANVAS_BOUNDS_TARGET && target.locked) return null;
+    const obb = getObjectOBB(target);
+    if (!obb) return null;
+    const pts = obb.corners.map(tboxWorldToScreen);
+    if (!pts.every(q => isFinite(q.x) && isFinite(q.y))) return null;
+    const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
+    const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
+    let ex = pts[1].x - pts[0].x, ey = pts[1].y - pts[0].y;
+    let fx = pts[3].x - pts[0].x, fy = pts[3].y - pts[0].y;
+    let w = Math.hypot(ex, ey), h = Math.hypot(fx, fy);
+    if (!isFinite(w) || w < 0.001) { w = 1; ex = 1; ey = 0; }
+    if (!isFinite(h) || h < 0.001) { h = 1; fx = 0; fy = 1; }
+    const ux = ex / w, uy = ey / w;
+    const vx = fx / h, vy = fy / h;
+    const vw = Math.max(80, w), vh = Math.max(80, h);
+    const hw = vw / 2, hh = vh / 2;
+    const corners = [
+      { x: cx - ux * hw - vx * hh, y: cy - uy * hw - vy * hh }, /* 左上 */
+      { x: cx + ux * hw - vx * hh, y: cy + uy * hw - vy * hh }, /* 右上 */
+      { x: cx + ux * hw + vx * hh, y: cy + uy * hw + vy * hh }, /* 右下 */
+      { x: cx - ux * hw + vx * hh, y: cy - uy * hw + vy * hh }  /* 左下 */
+    ];
+    return { target, obb, cx, cy, w: vw, h: vh, angle: Math.atan2(uy, ux), corners };
+  }
+
+  /* 屏幕点是否落在视觉框内 */
+  function pointInTransformBoxScreen(screen) {
+    const g = getTransformBoxGeometry();
+    if (!g) return false;
+    const dx = screen.x - g.cx, dy = screen.y - g.cy;
+    const c = Math.cos(-g.angle), s = Math.sin(-g.angle);
+    const lx = dx * c - dy * s;
+    const ly = dx * s + dy * c;
+    return Math.abs(lx) <= g.w / 2 + 2 && Math.abs(ly) <= g.h / 2 + 2;
+  }
+
+  /* ---------- 绘制框体（屏幕坐标系，导出时不绘制） ---------- */
+  function drawTransformBox() {
+    if (!transformBoxOn || window.__isExporting) return;
+    const g = getTransformBoxGeometry();
+    if (!g) return;
+    const dpr = window.devicePixelRatio || 1;
     ctx.save();
-    ctx.strokeStyle = 'rgba(74,144,255,0.75)';
-    ctx.lineWidth = 2 / viewScale;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.beginPath();
+    ctx.moveTo(g.corners[0].x, g.corners[0].y);
+    ctx.lineTo(g.corners[1].x, g.corners[1].y);
+    ctx.lineTo(g.corners[2].x, g.corners[2].y);
+    ctx.lineTo(g.corners[3].x, g.corners[3].y);
+    ctx.closePath();
+    ctx.strokeStyle = 'rgba(74,144,255,.92)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([7, 5]);
+    ctx.stroke();
     ctx.setLineDash([]);
-    ctx.beginPath(); ctx.moveTo(c.x, c.top); ctx.lineTo(h.x, h.y); ctx.stroke();
-    ctx.beginPath(); ctx.arc(h.x, h.y, 12 / viewScale, 0, TAU);
-    ctx.fillStyle = 'rgba(74,144,255,0.95)'; ctx.fill();
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5 / viewScale; ctx.stroke();
-    ctx.fillStyle = '#fff';
-    ctx.font = `bold ${13 / viewScale}px system-ui, sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('↻', h.x, h.y + 0.5 / viewScale);
     ctx.restore();
   }
+
+  /* ---------- 四角按钮定位 / 禁用状态 ---------- */
+  function updateTransformBoxDOM() {
+    const wrap = document.getElementById('transformBoxUI');
+    if (!wrap) return;
+    const g = getTransformBoxGeometry();
+    if (!g) { wrap.style.display = 'none'; return; }
+    wrap.style.display = 'block';
+    const rect = canvas.getBoundingClientRect();
+    const place = (id, p) => {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      btn.style.left = (rect.left + p.x) + 'px';
+      btn.style.top = (rect.top + p.y) + 'px';
+      btn.style.display = 'flex';
+    };
+    /* 右上 ✥ / 右下 ↘ / 左下 ↻ / 左上 ⇆ */
+    place('tbBtnMove', g.corners[1]);
+    place('tbBtnScale', g.corners[2]);
+    place('tbBtnRotate', g.corners[3]);
+    const mirrorBtn = document.getElementById('tbBtnMirror');
+    const target = g.target;
+    const canMirror = target !== CANVAS_BOUNDS_TARGET && ['figure', 'image', 'acc', 'shape'].includes(target.type);
+    if (canMirror) place('tbBtnMirror', g.corners[0]);
+    else if (mirrorBtn) mirrorBtn.style.display = 'none';
+
+    const pinned = target !== CANVAS_BOUNDS_TARGET && target.type === 'figure' && hasAnyPinInAllFrames(target);
+    const moveBtn = document.getElementById('tbBtnMove');
+    const rotBtn = document.getElementById('tbBtnRotate');
+    if (moveBtn) moveBtn.classList.toggle('disabled', !!pinned);
+    if (rotBtn) rotBtn.classList.toggle('disabled', !!pinned);
+    const scaleBtn = document.getElementById('tbBtnScale');
+    if (scaleBtn) scaleBtn.classList.toggle('disabled', false);
+  }
+
+  /* ---------- 是否允许执行某类操作 ---------- */
+  function tboxCanOperate(target, mode) {
+    if (!target) return false;
+    if (target !== CANVAS_BOUNDS_TARGET && target.locked) return false;
+    if (mode === 'mirror') {
+      return target !== CANVAS_BOUNDS_TARGET && ['figure', 'image', 'acc', 'shape'].includes(target.type);
+    }
+    if (target !== CANVAS_BOUNDS_TARGET && target.type === 'figure' && (mode === 'move' || mode === 'rotate')) {
+      if (hasAnyPinInAllFrames(target)) {
+        alert('当前元件存在关节固定，请先在「关节」面板中解除所有帧的固定，才能整体位移或旋转。');
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /* ---------- 拖拽状态 ---------- */
+  function tboxScreenFromEvent(e) {
+    const r = canvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+
+  function beginTBoxDrag(mode, e, g) {
+    if (!g || tboxDrag) return true;
+    const target = g.target;
+    if (!tboxCanOperate(target, mode)) return true;
+    const screen = tboxScreenFromEvent(e);
+    const world = getPos(e);
+    const d = {
+      mode, target, pointerId: e.pointerId,
+      pre: getSnapshot(), moved: false,
+      screenStart: screen, worldStart: world,
+      screenCenter: { x: g.cx, y: g.cy },
+      centerWorld: { x: g.obb.cx, y: g.obb.cy },
+      startDist: Math.max(1, Math.hypot(screen.x - g.cx, screen.y - g.cy)),
+      angle: g.angle,
+      targetIsCanvas: target === CANVAS_BOUNDS_TARGET
+    };
+    {
+      const dx = screen.x - g.cx, dy = screen.y - g.cy;
+      const c = Math.cos(-g.angle), s = Math.sin(-g.angle);
+      d.startLocal = { x: dx * c - dy * s, y: dx * s + dy * c };
+    }
+    if (target === CANVAS_BOUNDS_TARGET) {
+      d.canvas0 = { x: canvasBounds.x, y: canvasBounds.y, w: canvasBounds.w, h: canvasBounds.h };
+      d.centerWorld = { x: canvasBounds.x + canvasBounds.w / 2, y: canvasBounds.y + canvasBounds.h / 2 };
+      d.startRotDeg = d.accumRot = (canvasBounds.rotation || 0) * 180 / Math.PI;
+      d.lastAngle = Math.atan2(world.y - d.centerWorld.y, world.x - d.centerWorld.x);
+    } else {
+      d.startX = target.x; d.startY = target.y;
+      d.startScale = target.scale || 1;
+      d.startW = target.w; d.startH = target.h;
+      d.startRot = target.rot || 0;
+      d.accumRot = d.startRot;
+      d.startPos = getObjectWorldPos(target);
+      d.bound = isBoundObj(target);
+      d.bindStart = tboxWorldToBindSpace(target, world);
+      d.pivot = getRotatePivot(target) || d.startPos;
+      const rp = d.bound ? d.bindStart : world;
+      d.lastAngle = Math.atan2(rp.y - d.pivot.y, rp.x - d.pivot.x);
+    }
+    tboxDrag = d;
+    document.addEventListener('pointermove', onTBoxDragMove, true);
+    document.addEventListener('pointerup', onTBoxDragEnd, true);
+    document.addEventListener('pointercancel', onTBoxDragEnd, true);
+    try { if (e.target && e.target.setPointerCapture) e.target.setPointerCapture(e.pointerId); } catch (_) {}
+    return true;
+  }
+
+  function applyTBoxMove(d, world) {
+    const target = d.target;
+    if (target === CANVAS_BOUNDS_TARGET) {
+      const dx = world.x - d.worldStart.x, dy = world.y - d.worldStart.y;
+      const cx = d.centerWorld.x + dx, cy = d.centerWorld.y + dy;
+      canvasBounds.x = cx - canvasBounds.w / 2;
+      canvasBounds.y = cy - canvasBounds.h / 2;
+      syncCanvasUI();
+      return;
+    }
+    if (d.bound) {
+      const bp = tboxWorldToBindSpace(target, world);
+      const tx = d.startPos.x + (bp.x - d.bindStart.x);
+      const ty = d.startPos.y + (bp.y - d.bindStart.y);
+      setObjectWorldPos(target, tx, ty);
+      setGlobalPropForBound(target, 'offX', target.offX);
+      setGlobalPropForBound(target, 'offY', target.offY);
+      return;
+    }
+    let tx = d.startX + (world.x - d.worldStart.x);
+    let ty = d.startY + (world.y - d.worldStart.y);
+    if (target.type !== 'camera') {
+      const snap = calcSnap(tx, ty);
+      tx += snap.dx; ty += snap.dy;
+      snapLines.x = snap.lineX;
+      snapLines.y = snap.lineY;
+    }
+    setObjectWorldPos(target, tx, ty);
+  }
+
+  function applyTBoxRotate(d, world) {
+    const target = d.target;
+    if (target === CANVAS_BOUNDS_TARGET) {
+      const ang = Math.atan2(world.y - d.centerWorld.y, world.x - d.centerWorld.x);
+      const raw = ang - d.lastAngle;
+      d.accumRot += Math.atan2(Math.sin(raw), Math.cos(raw)) * 180 / Math.PI;
+      d.lastAngle = ang;
+      canvasBounds.rotation = d.accumRot * Math.PI / 180;
+      if (canvasRotationInput && document.activeElement !== canvasRotationInput) {
+        const deg = Math.round(d.accumRot);
+        canvasRotationInput.value = deg;
+        const cv = document.getElementById('canvasRotationVal');
+        if (cv) cv.textContent = deg + '°';
+      }
+      return;
+    }
+    const rp = d.bound ? tboxWorldToBindSpace(target, world) : world;
+    const ang = Math.atan2(rp.y - d.pivot.y, rp.x - d.pivot.x);
+    const raw = ang - d.lastAngle;
+    d.accumRot += Math.atan2(Math.sin(raw), Math.cos(raw)) * 180 / Math.PI;
+    d.lastAngle = ang;
+    target.rot = d.accumRot;
+    if (d.bound) setGlobalPropForBound(target, 'rot', target.rot);
+    else setGlobalProp(target, 'rot', target.rot);
+    if (objRotationInput && document.activeElement !== objRotationInput) {
+      objRotationInput.value = Math.round(d.accumRot);
+      if (objRotationVal) objRotationVal.textContent = Math.round(d.accumRot) + '°';
+    }
+  }
+
+  function applyTBoxScale(d, screen) {
+    const target = d.target;
+    const isFreeType = target === CANVAS_BOUNDS_TARGET || ['image', 'shape', 'acc'].includes(target.type);
+    if (freeStretchOn && isFreeType) {
+      /* 自由拉伸：按框的 X/Y 轴分别计算 kx / ky（不依赖视觉框最小尺寸） */
+      const cos = Math.cos(-d.angle), sin = Math.sin(-d.angle);
+      const dx = screen.x - d.screenCenter.x, dy = screen.y - d.screenCenter.y;
+      const lx = dx * cos - dy * sin;
+      const ly = dx * sin + dy * cos;
+      const bx = Math.abs(d.startLocal.x) > 4 ? d.startLocal.x : (d.startLocal.x < 0 ? -4 : 4);
+      const by = Math.abs(d.startLocal.y) > 4 ? d.startLocal.y : (d.startLocal.y < 0 ? -4 : 4);
+      const kx = tboxClamp(lx / bx, 0.05, 10);
+      const ky = tboxClamp(ly / by, 0.05, 10);
+      if (target === CANVAS_BOUNDS_TARGET) {
+        const cx = d.centerWorld.x, cy = d.centerWorld.y;
+        canvasBounds.w = Math.max(10, d.canvas0.w * kx);
+        canvasBounds.h = Math.max(10, d.canvas0.h * ky);
+        canvasBounds.x = cx - canvasBounds.w / 2;
+        canvasBounds.y = cy - canvasBounds.h / 2;
+        syncCanvasUI();
+      } else {
+        target.w = Math.max(1, (d.startW || 1) * kx);
+        target.h = Math.max(1, (d.startH || 1) * ky);
+        if (d.bound) {
+          setGlobalPropForBound(target, 'w', target.w);
+          setGlobalPropForBound(target, 'h', target.h);
+        } else {
+          setGlobalProp(target, 'w', target.w);
+          setGlobalProp(target, 'h', target.h);
+        }
+      }
+      return;
+    }
+
+    /* 等比缩放：以鼠标到框中心距离比作为因子 */
+    const dist = Math.hypot(screen.x - d.screenCenter.x, screen.y - d.screenCenter.y);
+    let k = tboxClamp(dist / d.startDist, 0.05, 10);
+    if (target === CANVAS_BOUNDS_TARGET) {
+      const cx = d.centerWorld.x, cy = d.centerWorld.y;
+      canvasBounds.w = Math.max(10, d.canvas0.w * k);
+      canvasBounds.h = Math.max(10, d.canvas0.h * k);
+      canvasBounds.x = cx - canvasBounds.w / 2;
+      canvasBounds.y = cy - canvasBounds.h / 2;
+      syncCanvasUI();
+      return;
+    }
+    const ns = Math.max(0.01, d.startScale * k);
+    target.scale = ns;
+    const pinnedFig = target.type === 'figure' && hasAnyPinInAllFrames(target);
+    if (!d.bound && !pinnedFig && target.type !== 'camera') {
+      /* 围绕 OBB 中心缩放：位置随因子反算，保持中心不动 */
+      target.x = d.centerWorld.x + (d.startPos.x - d.centerWorld.x) * k;
+      target.y = d.centerWorld.y + (d.startPos.y - d.centerWorld.y) * k;
+      if (target.type === 'figure') enforcePins(target);
+    }
+    if (d.bound) setGlobalPropForBound(target, 'scale', target.scale);
+    else setGlobalProp(target, 'scale', target.scale);
+  }
+
+  function onTBoxDragMove(e) {
+    const d = tboxDrag;
+    if (!d || e.pointerId !== d.pointerId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (isPlaying) { cancelTransformBoxDrag(); return; }
+    if (d.target === CANVAS_BOUNDS_TARGET) {
+      if (!canvasSelected || !canvasBoundsEnabled) { cancelTransformBoxDrag(); return; }
+    } else if (selected !== d.target) {
+      cancelTransformBoxDrag(); return;
+    }
+    const screen = tboxScreenFromEvent(e);
+    if (!d.moved && Math.hypot(screen.x - d.screenStart.x, screen.y - d.screenStart.y) > 0.5) d.moved = true;
+    const world = getPos(e);
+    if (d.mode === 'move') applyTBoxMove(d, world);
+    else if (d.mode === 'rotate') applyTBoxRotate(d, world);
+    else if (d.mode === 'scale') applyTBoxScale(d, screen);
+    render();
+  }
+
+  function removeTBoxDragListeners() {
+    document.removeEventListener('pointermove', onTBoxDragMove, true);
+    document.removeEventListener('pointerup', onTBoxDragEnd, true);
+    document.removeEventListener('pointercancel', onTBoxDragEnd, true);
+  }
+
+  function cancelTransformBoxDrag() {
+    if (!tboxDrag) return;
+    removeTBoxDragListeners();
+    tboxDrag = null;
+    snapLines = { x: null, y: null };
+  }
+
+  function onTBoxDragEnd(e) {
+    const d = tboxDrag;
+    if (!d) return;
+    removeTBoxDragListeners();
+    tboxDrag = null;
+    if (e) {
+      try { if (e.target && e.target.releasePointerCapture) e.target.releasePointerCapture(e.pointerId); } catch (_) {}
+      pointers.delete(e.pointerId);
+    }
+    snapLines = { x: null, y: null };
+    if (!d.moved) { render(); return; }
+    if (d.mode === 'move' && d.target !== CANVAS_BOUNDS_TARGET && !d.bound) {
+      applyGlobalPositionDeltaForObject(d.target, d.startPos);
+    }
+    let label = '变换对象';
+    if (d.mode === 'move') label = d.target === CANVAS_BOUNDS_TARGET ? '拖动画布边界' : '移动对象';
+    else if (d.mode === 'scale') label = d.target === CANVAS_BOUNDS_TARGET ? '缩放画布' : '缩放对象';
+    else if (d.mode === 'rotate') label = d.target === CANVAS_BOUNDS_TARGET ? '旋转画布' : '旋转对象';
+    pushPreSnapshot(d.pre, label);
+    markCurrentFrameModified();
+    invalidateAllFrameThumbs();
+    updateFrameBar();
+    syncUI();
+    render();
+  }
+
+  /* 移动后把世界位移同步到该元件的其他帧 */
+  function applyGlobalPositionDeltaForObject(o, prev) {
+    if (!globalEditEnabled || !o || !prev) return;
+    if (o.type === 'figure') { applyGlobalPositionDelta(o, prev); return; }
+    if (o.type === 'camera') { /* 摄像机也按位移同步 */ }
+    if (o.type === 'video') return;
+    const dx = o.x - prev.x, dy = o.y - prev.y;
+    if (!dx && !dy) return;
+    const tid = String(o.id);
+    const t = tracks[tid];
+    if (!t || !t.frames) return;
+    for (let i = 0; i < t.frames.length; i++) {
+      if (i === currentFrameIndex) continue;
+      const data = t.frames[i];
+      if (data && String(data.id) === tid) { data.x += dx; data.y += dy; }
+    }
+    invalidateAllFrameThumbs();
+  }
+
+  /* 单击镜像 */
+  function toggleTransformBoxMirror(target) {
+    if (!target || target === CANVAS_BOUNDS_TARGET) return;
+    if (!['figure', 'image', 'acc', 'shape'].includes(target.type) || target.locked) return;
+    target.mirror = !target.mirror;
+    if (isBoundObj(target)) setGlobalPropForBound(target, 'mirror', target.mirror);
+    else setGlobalProp(target, 'mirror', target.mirror);
+    markCurrentFrameModified();
+    invalidateAllFrameThumbs();
+    updateFrameBar();
+    render();
+    saveHistory('镜像对象');
+  }
+
+  /* 绑定四角按钮 */
+  (function initTransformBoxButtons() {
+    const bindBtn = (id, mode) => {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      btn.addEventListener('pointerdown', (e) => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (isPlaying) return;
+        const g = getTransformBoxGeometry();
+        if (!g) return;
+        if (mode === 'mirror') { toggleTransformBoxMirror(g.target); return; }
+        beginTBoxDrag(mode, e, g);
+      });
+      btn.addEventListener('contextmenu', (e) => e.preventDefault());
+    };
+    bindBtn('tbBtnMove', 'move');
+    bindBtn('tbBtnScale', 'scale');
+    bindBtn('tbBtnRotate', 'rotate');
+    bindBtn('tbBtnMirror', 'mirror');
+
+    const btnBox = document.getElementById('btnTransformBox');
+    if (btnBox) {
+      btnBox.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        transformBoxOn = !transformBoxOn;
+        try { localStorage.setItem('skfe_transform_box_v1', transformBoxOn ? '1' : '0'); } catch (_) {}
+        if (!transformBoxOn) cancelTransformBoxDrag();
+        syncUI();
+        render();
+      });
+    }
+    const btnFree = document.getElementById('btnFreeStretch');
+    if (btnFree) {
+      btnFree.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (btnFree.disabled) return;
+        freeStretchOn = !freeStretchOn;
+        try { localStorage.setItem('skfe_free_stretch_v1', freeStretchOn ? '1' : '0'); } catch (_) {}
+        syncUI();
+        render();
+      });
+    }
+  })();
+
+  /* ==================== 锚点标记 ==================== */
 
   function drawAnchorMarker() {
     if (!selected || selected.locked) return;
@@ -5864,19 +6398,6 @@ function importActionPresets() {
   }
 
   /* ==================== 画布渲染 ==================== */
-  function updateFloatControls() {
-    if (selected && (selected.type === 'image' || selected.type === 'video')) {
-      const b = selected.type === 'image'
-        ? imageBounds(selected)
-        : { x: selected.x - selected.w * selected.scale / 2, y: selected.y - selected.h * selected.scale / 2, w: selected.w * selected.scale, h: selected.h * selected.scale };
-      floatControls.style.display = 'flex';
-      floatControls.style.left = ((b.x + b.w) * viewScale + viewOffset.x + 30) + 'px';
-      floatControls.style.top = ((b.y + b.h) * viewScale + viewOffset.y + 30) + 'px';
-    } else {
-      floatControls.style.display = 'none';
-    }
-  }
-
   let coordFlashTimer = null;
   function flashCoordDisplay() {
     const el = document.getElementById('coordDisplay');
@@ -5889,10 +6410,10 @@ function importActionPresets() {
     coordFlashTimer = setTimeout(() => {
       coordFlashTimer = null;
       const el2 = document.getElementById('coordDisplay');
-      if (moveHandleOn) return;
+      if (tboxDrag) return;
       el2.style.opacity = '0';
       setTimeout(() => {
-        if (!moveHandleOn && !coordFlashTimer && el2.style.opacity === '0') {
+        if (!tboxDrag && !coordFlashTimer && el2.style.opacity === '0') {
           el2.style.display = 'none';
         }
       }, 300);
@@ -5926,22 +6447,22 @@ function importActionPresets() {
       document.getElementById('coordType').textContent = typeIcon + ' ' + typeName;
       document.getElementById('coordXY').textContent = `X: ${Math.round(x)}  Y: ${Math.round(displayY(y))}`;
     } else {
-      if (!moveHandleOn && !coordFlashTimer && el.style.opacity !== '0' && el.style.display !== 'none') {
+      if (!tboxDrag && !coordFlashTimer && el.style.opacity !== '0' && el.style.display !== 'none') {
         el.style.opacity = '0';
         setTimeout(() => {
-          if (!moveHandleOn && !coordFlashTimer && el.style.opacity === '0') el.style.display = 'none';
+          if (!tboxDrag && !coordFlashTimer && el.style.opacity === '0') el.style.display = 'none';
         }, 300);
       }
       return;
     }
     
-    if (moveHandleOn && (selected || canvasSelected)) {
+    if (tboxDrag && (selected || canvasSelected)) {
       el.style.display = 'block';
       el.style.opacity = '1';
     } else if (!coordFlashTimer && el.style.opacity !== '0' && el.style.display !== 'none') {
       el.style.opacity = '0';
       setTimeout(() => {
-        if (!moveHandleOn && !coordFlashTimer && el.style.opacity === '0') el.style.display = 'none';
+        if (!tboxDrag && !coordFlashTimer && el.style.opacity === '0') el.style.display = 'none';
       }, 300);
     }
   }
@@ -6153,30 +6674,8 @@ function importActionPresets() {
     }
     return false;
   }
-  let moveHandleOn = false;
-  let moveHandleDrag = null;
   let headHandleOn = false;
   let headHandleDrag = null;
-
-  function updateMoveHandle() {
-    if (!moveHandleEl) return;
-    if (!moveHandleOn || !selected || isPlaying || selected.locked) { moveHandleEl.style.display = 'none'; return; }
-    const b = getObjectBounds(selected);
-    const leftScreen = b.left * viewScale + viewOffset.x;
-    const rightScreen = b.right * viewScale + viewOffset.x;
-    const midY = ((b.top + b.bottom) / 2) * viewScale + viewOffset.y;
-    const margin = 56;
-    let x = rightScreen + margin;
-    if (x > window.innerWidth - 44) x = leftScreen - margin;
-    x = Math.max(44, Math.min(window.innerWidth - 44, x));
-    const viewH = canvas.clientHeight || window.innerHeight;
-    const y = Math.max(46, Math.min(viewH - 46, midY));
-    if (!isFinite(x) || !isFinite(y)) { moveHandleEl.style.display = 'none'; return; }
-    const rect = canvas.getBoundingClientRect();
-    moveHandleEl.style.left = (x + rect.left) + 'px';
-    moveHandleEl.style.top = (y + rect.top) + 'px';
-    moveHandleEl.style.display = 'flex';
-  }
 
   function updateAnchorHandle() {
     if (!anchorHandleEl) return;
@@ -6283,6 +6782,7 @@ function importActionPresets() {
     if (camView) {
       renderCameraViewScene(camView, trackAlphaOpts);
       drawLayerNumbers();
+      drawTransformBox();
       return;
     }
 
@@ -6333,7 +6833,6 @@ function importActionPresets() {
       ctx.translate(viewOffset.x, viewOffset.y);
       ctx.scale(viewScale, viewScale);
       drawCanvasBounds();
-      if (rotHandleOn && selected && !selected.locked) drawRotateHandle();
       if (anchorModeOn && selected && !selected.locked &&
           (selected.type === 'image' || selected.type === 'acc' || selected.type === 'shape' || selected.type === 'bubble')) {
         drawAnchorMarker();
@@ -6360,6 +6859,7 @@ function importActionPresets() {
       }
 
       drawLayerNumbers();
+      drawTransformBox();
     }
   }
 
@@ -6510,11 +7010,10 @@ function importActionPresets() {
       }
     }
     renderCanvas(false);
-    updateFloatControls();
     updateLayerList();
     updateFrameBar();
     updateCoordDisplay();
-    updateMoveHandle();
+    updateTransformBoxDOM();
     updateAnchorHandle();
     updatePosInputs();
     updateCameraPreview();
@@ -6783,7 +7282,7 @@ function importActionPresets() {
     canvasSelected = false;
     drag = null;
     isPanning = false;
-    rotHandleOn = false;
+    cancelTransformBoxDrag();
     anchorModeOn = false;
     selected = isSubTrackMode() ? getActiveTrackObject() : selected;
     /* 进入摄像机轨道 → 自动适配可用区域，避免被 UI 面板 / 时间轴遮挡 */
@@ -6893,7 +7392,7 @@ function importActionPresets() {
     objects = getCombinedObjectsForRender();
     selected = isSubTrackMode() ? getActiveTrackObject() : null;
     drag = null; isPanning = false; canvasSelected = false;
-    rotHandleOn = false; anchorModeOn = false;
+    cancelTransformBoxDrag(); anchorModeOn = false;
     seekVideoToFrame(currentFrameIndex);
     render(); syncUI();
   }
@@ -7182,7 +7681,7 @@ function importActionPresets() {
       objects = getCombinedObjectsForRender();
       selected = getActiveTrackObject();
       canvasSelected = false;
-      rotHandleOn = false; anchorModeOn = false;
+      cancelTransformBoxDrag(); anchorModeOn = false;
       seekVideoToFrame(currentFrameIndex);
       updateFrameBar();
       render(); syncUI();
@@ -7213,7 +7712,7 @@ function importActionPresets() {
     invalidateAllFrameThumbs();
     objects = getCombinedObjectsForRender();
     selected = null; canvasSelected = false;
-    rotHandleOn = false; anchorModeOn = false;
+    cancelTransformBoxDrag(); anchorModeOn = false;
     seekVideoToFrame(currentFrameIndex);
     updateFrameBar();
     render(); syncUI();
@@ -7237,7 +7736,7 @@ function importActionPresets() {
       objects = getCombinedObjectsForRender();
       selected = getActiveTrackObject();
       canvasSelected = false;
-      rotHandleOn = false; anchorModeOn = false;
+      cancelTransformBoxDrag(); anchorModeOn = false;
       seekVideoToFrame(currentFrameIndex);
       updateFrameBar();
       render(); syncUI();
@@ -7257,7 +7756,7 @@ function importActionPresets() {
     invalidateAllFrameThumbs();
     objects = getCombinedObjectsForRender();
     selected = null; canvasSelected = false;
-    rotHandleOn = false; anchorModeOn = false;
+    cancelTransformBoxDrag(); anchorModeOn = false;
     seekVideoToFrame(currentFrameIndex);
     updateFrameBar();
     render(); syncUI();
@@ -7279,7 +7778,7 @@ function importActionPresets() {
     syncFrameRef();
     isPlaying = true;
     selected = null; drag = null; canvasSelected = false;
-    rotHandleOn = false; anchorModeOn = false;
+    cancelTransformBoxDrag(); anchorModeOn = false;
     document.getElementById('btnPlay').textContent = '⏸ 暂停';
     document.getElementById('playBadge').style.display = 'block';
     let idx = currentFrameIndex;
@@ -8433,7 +8932,7 @@ function importActionPresets() {
       objects = getCombinedObjectsForRender();
       selected = getActiveTrackObject();
       canvasSelected = false;
-      rotHandleOn = false; anchorModeOn = false;
+      cancelTransformBoxDrag(); anchorModeOn = false;
       seekVideoToFrame(currentFrameIndex);
       updateFrameBar();
       render(); syncUI();
@@ -9746,11 +10245,15 @@ function importActionPresets() {
         canvasBounds = { x: cx - side / 2, y: cy - side / 2, w: side, h: side, rotation: 0 };
       }
       canvasBaseBounds = { ...canvasBounds };
+      /* 新增：开启边界时，自动选中画布，这样变换框会直接弹出来 */
+      canvasSelected = true;
+      selected = null; 
       syncCanvasUI();
       syncCanvasMaskUI();
     } else {
       canvasSelected = false;
     }
+    syncUI(); /* 新增：刷新面板，确保变换框按钮正确亮起 */
     render();
     saveHistory('切换画布边界');
   };
@@ -9981,15 +10484,11 @@ function importActionPresets() {
   const objRotationInput = document.getElementById('objRotation');
   const objRotationVal = document.getElementById('objRotationVal');
   const jointStretchToggle = document.getElementById('jointStretchToggle');
-  const objMirrorCheckbox = document.getElementById('objMirror');
-  const btnMoveHandle = document.getElementById('btnMoveHandle');
-  const btnRotHandle = document.getElementById('btnRotHandle');
   const btnAnchorToggle = document.getElementById('btnAnchorToggle');
   const objAnchorRow = document.getElementById('objAnchorRow');
   const objAnchorX = document.getElementById('objAnchorX');
   const objAnchorY = document.getElementById('objAnchorY');
   const btnAnchorCenter = document.getElementById('btnAnchorCenter');
-  const moveHandleEl = document.getElementById('moveHandle');
   const anchorHandleEl = document.getElementById('anchorHandle');
   let anchorHandleDrag = null;
   const btnGlow = document.getElementById('btnGlow');
@@ -10481,9 +10980,7 @@ function togglePin(part) {
         objRotationVal.textContent = rotDeg + '°';
         objRotationInput.disabled = false;
       }
-      if (objMirrorCheckbox) { objMirrorCheckbox.checked = false; objMirrorCheckbox.disabled = true; }
       btnUp.disabled = true; btnDown.disabled = true; btnTop.disabled = true; btnBottom.disabled = true;
-      btnRotHandle.style.display = 'none';
       btnAnchorToggle.style.display = 'none';
       objAnchorRow.style.display = 'none';
     } else if (hasSel) {
@@ -10505,35 +11002,33 @@ function togglePin(part) {
         objRotationVal.textContent = rotDeg + '°';
         objRotationInput.disabled = false;
       }
-      if (objMirrorCheckbox) {
-        objMirrorCheckbox.checked = !!selected.mirror;
-        objMirrorCheckbox.disabled = false;
-      }
-      btnRotHandle.style.display = '';
-      btnRotHandle.classList.toggle('on', rotHandleOn);
       updateAnchorUI();
     } else {
       objPanel.style.display = 'none';
       btnUp.disabled = true; btnDown.disabled = true; btnTop.disabled = true; btnBottom.disabled = true;
       if (objRotationInput) objRotationInput.disabled = true;
-      if (objMirrorCheckbox) { objMirrorCheckbox.checked = false; objMirrorCheckbox.disabled = true; }
-      btnRotHandle.style.display = 'none';
       btnAnchorToggle.style.display = 'none';
       objAnchorRow.style.display = 'none';
-      rotHandleOn = false;
       anchorModeOn = false;
     }
 
-    if (btnMoveHandle) {
-      btnMoveHandle.disabled = !selected || selected.locked;
-      btnMoveHandle.classList.toggle('on', moveHandleOn && !!selected && !selected.locked);
+    /* v4.7.0 变换框 / 自由拉伸按钮状态 */
+    const btnTBox = document.getElementById('btnTransformBox');
+    if (btnTBox) {
+      btnTBox.classList.toggle('on', !!transformBoxOn);
+      btnTBox.setAttribute('aria-pressed', transformBoxOn ? 'true' : 'false');
     }
+    const btnFree = document.getElementById('btnFreeStretch');
+    if (btnFree) {
+      const freeTargetOk = hasCanvasSel || (!!selected && !selected.locked && ['image', 'shape', 'acc'].includes(selected.type));
+      btnFree.disabled = !freeTargetOk;
+      btnFree.classList.toggle('on', !!freeStretchOn);
+      btnFree.setAttribute('aria-pressed', freeStretchOn ? 'true' : 'false');
+    }
+
     if (objXInput && objYInput && !hasCanvasSel) {
       objXInput.disabled = !selected || selected.locked;
       objYInput.disabled = !selected || selected.locked;
-    }
-    if (!selected || !moveHandleOn || selected.locked) {
-      if (moveHandleEl) moveHandleEl.style.display = 'none';
     }
 
     if (hideJointsCheckbox) hideJointsCheckbox.checked = hideJointsEnabled;
@@ -10555,9 +11050,7 @@ function togglePin(part) {
     canvasSelected = false;
     selected = f;
     isolatedJointName = null; // 切换对象自动退出隔离模式
-    moveHandleOn = false;
-    if (moveHandleEl) moveHandleEl.style.display = 'none';
-    rotHandleOn = false;
+    cancelTransformBoxDrag();
     anchorModeOn = false;
     if (f && f.type === 'camera') { anchorModeOn = false; }
     updateJointSliders();
@@ -10723,8 +11216,8 @@ function togglePin(part) {
   }
 
   function hideHandles() {
-    if (rotHandleOn) { rotHandleOn = false; syncUI(); }
-    if (moveHandleOn) { moveHandleOn = false; if (moveHandleEl) moveHandleEl.style.display = 'none'; }
+    /* v4.7.0：变换框是常驻模式，这里只清理可能残留的变换框拖拽 */
+    cancelTransformBoxDrag();
   }
 
   function onPointerDown(e) {
@@ -10754,7 +11247,7 @@ function togglePin(part) {
     }
     if (pointers.size > 2) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
-    if (e.target.closest('#floatControls') || e.target.closest('#ui') || e.target.closest('#timeline') ||
+    if (e.target.closest('#transformBoxUI') || e.target.closest('#ui') || e.target.closest('#timeline') ||
         e.target.closest('#btnShowTimeline') || e.target.closest('#historyControls')) return;
 
     const p = getPos(e);
@@ -10792,25 +11285,6 @@ function togglePin(part) {
       return;
     }
 
-    /* 旋转手柄命中 */
-    if (rotHandleOn && selected && !selected.locked) {
-      const hp = getRotateHandlePos();
-      if (hp && Math.hypot(p.x - hp.x, p.y - hp.y) < 24 / viewScale) {
-        const pivot = getRotatePivot(selected);
-        const startAng = Math.atan2(p.y - pivot.y, p.x - pivot.x);
-        drag = {
-          o: selected, part: 'rotate',
-          pivot,
-          startAngle: startAng,
-          startRot: selected.rot || 0,
-          lastAngle: startAng,
-          accumRot: selected.rot || 0
-        };
-        canvas.setPointerCapture(e.pointerId);
-        return;
-      }
-    }
-
     // 移除直接点击锚点标记拖动，改为由专用手柄处理
 
     if (canvasBoundsEnabled && canvasBoundsEditMode) {
@@ -10825,6 +11299,17 @@ function togglePin(part) {
         Math.abs(ly - (-canvasBounds.h / 2)), Math.abs(ly - (canvasBounds.h / 2))
       );
       if (minDist < 20 / viewScale) {
+        /* === 新增：点击画布边框时，自动将选中目标切换为画布 === */
+        if (!canvasSelected) {
+          canvasSelected = true;
+          selected = null;
+          syncUI();
+          updateLayerList();
+          updateCoordDisplay();
+          updatePosInputs();
+          flashCoordDisplay();
+        }
+        /* ======================================================= */
         draggingCanvasBounds = true;
         canvasDragStart = { x: p.x, y: p.y, cx: canvasBounds.x, cy: canvasBounds.y };
         canvas.setPointerCapture(e.pointerId);
@@ -10991,6 +11476,14 @@ function togglePin(part) {
     }
 
     if (!clickedObj) {
+      /* v4.7.0 变换框：点击框内空白区域 → 拖拽移动对象 */
+      if (transformBoxOn && !eraserOn) {
+        const g = getTransformBoxGeometry();
+        if (g && pointInTransformBoxScreen(tboxScreenFromEvent(e))) {
+          beginTBoxDrag('move', e, g);
+          return;
+        }
+      }
       /* 子轨道隔离：点击其他元件或空白处不改变选中状态 */
       if (subTrackMode) {
         if (!isTouch) {
@@ -11170,6 +11663,16 @@ function togglePin(part) {
         Math.abs(ly - (-canvasBounds.h / 2)), Math.abs(ly - (canvasBounds.h / 2))
       );
       canvas.style.cursor = minDist < 20 / viewScale ? 'move' : 'default';
+    }
+
+    /* v4.7.0 变换框：悬停框内显示移动光标 */
+    if (transformBoxOn && !eraserOn && !drag && !isPanning && pointers.size === 0) {
+      const g = getTransformBoxGeometry();
+      if (g && pointInTransformBoxScreen(tboxScreenFromEvent(e))) {
+        canvas.style.cursor = 'move';
+      } else if (canvas.style.cursor === 'move' && !(canvasBoundsEnabled && canvasBoundsEditMode)) {
+        canvas.style.cursor = 'default';
+      }
     }
 
     if (pointers.size === 2) {
@@ -11495,22 +11998,69 @@ function togglePin(part) {
     render();
   }
 
-  document.getElementById('btnPlus').onclick = (e) => {
-    e.stopPropagation();
-    if (selected && (selected.type === 'image' || selected.type === 'video')) {
-      selected.scale *= 1.2; setGlobalProp(selected, 'scale', selected.scale);
-      syncUI(); render(); markCurrentFrameModified(); saveHistory('放大对象');
-    }
-  };
-  document.getElementById('btnMinus').onclick = (e) => {
-    e.stopPropagation();
-    if (selected && (selected.type === 'image' || selected.type === 'video')) {
-      selected.scale /= 1.2; setGlobalProp(selected, 'scale', selected.scale);
-      syncUI(); render(); markCurrentFrameModified(); saveHistory('缩小对象');
-    }
-  };
+  /* ==================== v4.7.1 坐标 X/Y 相对滑条逻辑 ==================== */
+  const posXSlider = document.getElementById('posXSlider');
+  const posYSlider = document.getElementById('posYSlider');
+  let sliderDragStartPos = { x: 0, y: 0 };
 
-  /* ==================== 坐标输入 / 移动手柄 / 旋转手柄 / 锚点 ==================== */
+  function onPosSliderStart() {
+    if (canvasSelected && canvasBoundsEnabled) {
+      sliderDragStartPos = { x: canvasBounds.x + canvasBounds.w / 2, y: canvasBounds.y + canvasBounds.h / 2 };
+    } else if (selected) {
+      sliderDragStartPos = getObjectWorldPos(selected);
+    } else {
+      sliderDragStartPos = { x: 0, y: 0 };
+    }
+  }
+
+  function onPosSliderMove(axis) {
+    if (!canvasSelected && !selected) return;
+    const val = axis === 'x' ? parseFloat(posXSlider.value) : parseFloat(posYSlider.value);
+    
+    // 灵敏度：滑条每移动 1，物体移动 4 像素
+    const delta = val * 4; 
+
+    if (canvasSelected && canvasBoundsEnabled) {
+      const nx = sliderDragStartPos.x + (axis === 'x' ? delta : 0);
+      const ny = sliderDragStartPos.y - (axis === 'y' ? delta : 0); // Y屏幕向下为正，世界向上为正
+      canvasBounds.x = nx - canvasBounds.w / 2;
+      canvasBounds.y = ny - canvasBounds.h / 2;
+      syncCanvasUI();
+    } else if (selected) {
+      const nx = sliderDragStartPos.x + (axis === 'x' ? delta : 0);
+      const ny = sliderDragStartPos.y - (axis === 'y' ? delta : 0);
+      setObjectWorldPos(selected, nx, ny);
+    }
+    render();
+    updatePosInputs();
+  }
+
+  function onPosSliderEnd() {
+    if (posXSlider) posXSlider.value = 0;
+    if (posYSlider) posYSlider.value = 0;
+    if (canvasSelected || selected) {
+      markCurrentFrameModified();
+      saveHistory('滑动移动');
+    }
+    syncUI();
+  }
+
+  if (posXSlider) {
+    posXSlider.addEventListener('pointerdown', onPosSliderStart);
+    posXSlider.addEventListener('input', () => onPosSliderMove('x'));
+    posXSlider.addEventListener('change', onPosSliderEnd);
+    posXSlider.addEventListener('pointerup', onPosSliderEnd);
+  }
+  if (posYSlider) {
+    posYSlider.addEventListener('pointerdown', onPosSliderStart);
+    posYSlider.addEventListener('input', () => onPosSliderMove('y'));
+    posYSlider.addEventListener('change', onPosSliderEnd);
+    posYSlider.addEventListener('pointerup', onPosSliderEnd);
+  }
+  /* ====================================================================== */
+
+
+  /* ==================== 坐标输入 / 锚点 ==================== */
   function commitCoordInput() {
     if (!selected) return;
     if (globalEditEnabled && selected.type === 'figure' && hasAnyPinInAllFrames(selected)) {
@@ -11564,79 +12114,6 @@ function togglePin(part) {
     };
   }
 
-  if (btnMoveHandle) {
-    btnMoveHandle.addEventListener('click', (e) => {
-      e.preventDefault(); e.stopPropagation();
-      if (!selected) return;
-      if (!moveHandleOn && globalEditEnabled && selected.type === 'figure' && hasAnyPinInAllFrames(selected)) {
-        alert('当前元件存在关节固定，请先在「关节」面板中解除所有帧的固定，才能整体位移。');
-        return;
-      }
-      moveHandleOn = !moveHandleOn;
-      if (moveHandleOn) { rotHandleOn = false; anchorModeOn = false; }
-      btnMoveHandle.classList.toggle('on', moveHandleOn);
-      syncUI();
-      updateMoveHandle();
-    });
-  }
-
-  if (moveHandleEl) {
-    moveHandleEl.addEventListener('pointerdown', (e) => {
-      if (!selected) return;
-      e.preventDefault(); e.stopPropagation();
-      const p = getObjectWorldPos(selected);
-      moveHandleDrag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, wx: p.x, wy: p.y, moved: false, pre: getSnapshot() };
-      try { moveHandleEl.setPointerCapture(e.pointerId); } catch (_) {}
-    });
-    moveHandleEl.addEventListener('pointermove', (e) => {
-      if (!moveHandleDrag || e.pointerId !== moveHandleDrag.id || !selected) return;
-      e.preventDefault(); e.stopPropagation();
-      const dx = (e.clientX - moveHandleDrag.sx) / viewScale;
-      const dy = (e.clientY - moveHandleDrag.sy) / viewScale;
-      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) moveHandleDrag.moved = true;
-      
-      let tx = moveHandleDrag.wx + dx;
-      let ty = moveHandleDrag.wy + dy;
-      const snap = calcSnap(tx, ty);
-      setObjectWorldPos(selected, tx + snap.dx, ty + snap.dy);
-      snapLines.x = snap.lineX;
-      snapLines.y = snap.lineY;
-      if (isBoundObj(selected)) {
-        setGlobalPropForBound(selected, 'offX', selected.offX);
-        setGlobalPropForBound(selected, 'offY', selected.offY);
-      }
-      render();
-    });
-    const endMove = (e) => {
-      if (!moveHandleDrag || e.pointerId !== moveHandleDrag.id) return;
-      const didMove = moveHandleDrag.moved;
-      const pre = moveHandleDrag.pre;
-      const startWX = moveHandleDrag.wx;
-      const startWY = moveHandleDrag.wy;
-      moveHandleDrag = null;
-      try { moveHandleEl.releasePointerCapture(e.pointerId); } catch (_) {}
-      if (didMove) {
-        if (selected && selected.type === 'figure') {
-          applyGlobalPositionDelta(selected, { x: startWX, y: startWY });
-        }
-        pushPreSnapshot(pre, '移动对象');
-      }
-      syncUI(); markCurrentFrameModified(); render();
-    };
-    moveHandleEl.addEventListener('pointerup', endMove);
-    moveHandleEl.addEventListener('pointercancel', endMove);
-  }
-
-  /* 旋转手柄开关 */
-  btnRotHandle.addEventListener('click', (e) => {
-    e.preventDefault(); e.stopPropagation();
-    if (!selected) return;
-    rotHandleOn = !rotHandleOn;
-    if (rotHandleOn) { moveHandleOn = false; anchorModeOn = false; }
-    syncUI();
-    render();
-  });
-
   /* 关节拉伸开关绑定 */
   if (jointStretchToggle) {
     jointStretchToggle.addEventListener('change', (e) => {
@@ -11649,7 +12126,6 @@ function togglePin(part) {
     e.preventDefault(); e.stopPropagation();
     if (!selected) return;
     anchorModeOn = !anchorModeOn;
-    if (anchorModeOn) { rotHandleOn = false; moveHandleOn = false; }
     syncUI();
     render();
   });
@@ -11790,17 +12266,6 @@ function togglePin(part) {
     });
     objRotationInput.addEventListener('change', () => {
       saveHistory(canvasSelected ? '旋转画布' : '旋转对象');
-    });
-  }
-
-  if (objMirrorCheckbox) {
-    objMirrorCheckbox.addEventListener('change', (e) => {
-      if (canvasSelected || !selected) return;
-      selected.mirror = e.target.checked;
-      setGlobalProp(selected, 'mirror', selected.mirror);
-      render();
-      markCurrentFrameModified();
-      saveHistory('镜像对象');
     });
   }
 
@@ -14311,25 +14776,6 @@ function togglePin(part) {
       });
     }
   }
-
-  /* DEBUG-HOOK-START */
-  window.__dbg = {
-    get objects() { return objects; },
-    get tracks() { return tracks; },
-    get frames() { return frames; },
-    get selected() { return selected; },
-    get activeTrackId() { return activeTrackId; },
-    get currentFrameIndex() { return currentFrameIndex; },
-    get viewOffset() { return viewOffset; },
-    get viewScale() { return viewScale; },
-    getCameraViewObject, getCameraViewTransform, getCameraAtFrame, findCameraObject,
-    getExportCrop, getCropForFrames, getExportSize, makeCamera, addObjectToFrames,
-    setGlobalProp, render, renderCanvas, getCombinedObjectsForRender, isSubTrackMode,
-    getTrackFrame, getTrackObjectsAt, cameraToCrop, worldToEraseLocal, objectEraserMatrix,
-    startEraserStroke, finishEraserStroke, clearEraserFrame, clearEraserAll,
-    getActiveViewScale, getEraserScale
-  };
-  /* DEBUG-HOOK-END */
 
   initTimelineDock();
   initCameraPreviewFloat();

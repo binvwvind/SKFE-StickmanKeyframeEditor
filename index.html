@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
-<title>SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v4.9.0</title>
+<title>SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v4.9.1</title>
 <style>
   :root {
     --bg-page: #f4f6f9;
@@ -1586,7 +1586,7 @@
   <div id="uiDragHandle"><div class="bar"></div></div>
 
   <div id="watermark">
-    <div>SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v4.9.0</div>
+    <div>SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v4.9.1</div>
     <div class="author">Author: binvwvind qq交流分享群:1121039855</div>
   </div>
 
@@ -1878,6 +1878,7 @@
         <label><input type="checkbox" id="jointColorDiff"> <span>不同关节颜色区分</span></label>
         <label style="font-size:12px; cursor:pointer; font-weight:600; color:var(--color-primary);" title="开启后拖拽关节，长度和旋转会同时跟随鼠标"><input type="checkbox" id="jointStretchToggle"> <span>关节拉伸</span></label>
       </div>
+      <div class="row slider"><label>圆滑度</label><input type="range" id="jointSmooth" min="0" max="1" step="0.01" value="1"><span class="val" id="jointSmoothVal">1.00</span></div>
       
       
       <!-- 头部、颈部、腰部 -->
@@ -2087,6 +2088,7 @@
         <label><span>遮罩颜色</span> <input type="color" id="canvasMaskBgColor" value="#2b2b2b"></label>
         <label style="margin-left:auto;"><span>网格颜色</span> <input type="color" id="canvasMaskGridColor" value="#ffffff"></label>
       </div>
+    </div>      
     <div class="hint" style="font-size:11px; margin-top:4px;">提示：开启后导出仅保留画布内内容。在「基础属性」中可以调整画布的 X/Y/缩放/旋转；使用变换框或开启自由拉伸可调整宽高。</div>
 
     <div class="divider" style="margin: 8px 0;"></div>
@@ -2939,7 +2941,8 @@ function setGlobalPropForBound(obj, path, value) {
       onionEnabled, onionBefore, onionAfter,
       canvasBounds, canvasBoundsEnabled,
       pageBgColor, gridEnabled, gridSize,
-      canvasMaskEnabled, canvasMaskAlpha
+      canvasMaskEnabled, canvasMaskAlpha,
+      canvasMaskBgColor, canvasMaskGridColor, // 新增
     };
     const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -2985,6 +2988,8 @@ function setGlobalPropForBound(obj, path, value) {
       if (data.gridSize !== undefined) gridSize = data.gridSize;
       if (data.canvasMaskEnabled !== undefined) canvasMaskEnabled = !!data.canvasMaskEnabled;
       if (data.canvasMaskAlpha !== undefined) canvasMaskAlpha = data.canvasMaskAlpha;
+      if (data.canvasMaskBgColor !== undefined) canvasMaskBgColor = data.canvasMaskBgColor; // 新增
+      if (data.canvasMaskGridColor !== undefined) canvasMaskGridColor = data.canvasMaskGridColor; // 新增
       syncPageAppearanceUI();
       syncCanvasMaskUI();
       syncCanvasUI();
@@ -3028,7 +3033,8 @@ function setGlobalPropForBound(obj, path, value) {
         onionEnabled, onionBefore, onionAfter,
         canvasBounds, canvasBoundsEnabled,
         pageBgColor, gridEnabled, gridSize,
-        canvasMaskEnabled, canvasMaskAlpha
+        canvasMaskEnabled, canvasMaskAlpha,
+        canvasMaskBgColor, canvasMaskGridColor, // 新增
       };
       localStorage.setItem(PROJECT_SAVE_KEY, JSON.stringify(projectData));
       alert('已保存到本地');
@@ -3098,6 +3104,7 @@ function setGlobalPropForBound(obj, path, value) {
       currentFrameIndex, uid, defaultFPS, viewOffset, viewScale,
       canvasBounds, canvasBoundsEnabled, canvasBaseBounds,
       canvasMaskEnabled, canvasMaskAlpha,
+      canvasMaskBgColor, canvasMaskGridColor, // 新增
       groundShadowEnabled, shadowColor, shadowAlpha,
       groundLineEnabled, groundLineY,
       gridEnabled, gridSize, pageBgColor,
@@ -3167,6 +3174,8 @@ function setGlobalPropForBound(obj, path, value) {
         if (data.canvasBaseBounds) canvasBaseBounds = data.canvasBaseBounds;
         canvasMaskEnabled = !!data.canvasMaskEnabled;
         if (data.canvasMaskAlpha !== undefined) canvasMaskAlpha = data.canvasMaskAlpha;
+        if (data.canvasMaskBgColor !== undefined) canvasMaskBgColor = data.canvasMaskBgColor; // 新增
+        if (data.canvasMaskGridColor !== undefined) canvasMaskGridColor = data.canvasMaskGridColor; // 新增
         groundShadowEnabled = !!data.groundShadowEnabled;
         if (data.shadowColor) shadowColor = data.shadowColor;
         if (data.shadowAlpha !== undefined) shadowAlpha = data.shadowAlpha;
@@ -4493,6 +4502,7 @@ function importActionPresets() {
       light: { enabled: false, color: '#ffbb66', size: 1.0, angle: 315 },
       glow: { enabled: false, color: '#ff9d3d', alpha: 0.8, blur: 18 },
       joint: { enabled: false, color: '#ff0000', len: 0.5 },
+      jointSmooth: 1,
       extremity: {
         enabled: false,
         armAngleL: 30 * Math.PI / 180, armAngleR: 30 * Math.PI / 180,
@@ -5001,7 +5011,13 @@ function importActionPresets() {
 
   function smoothPolyline(pts, radius) {
     if (pts.length < 2) return;
-    if (pts.length === 2) { ctx.moveTo(pts[0].x, pts[0].y); ctx.lineTo(pts[1].x, pts[1].y); return; }
+    if (pts.length === 2 || radius <= 0.1) {
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineTo(pts[i].x, pts[i].y);
+      }
+      return;
+    }
     ctx.moveTo(pts[0].x, pts[0].y);
     for (let i = 1; i < pts.length - 1; i++) {
       const prev = pts[i - 1], cur = pts[i], next = pts[i + 1];
@@ -5187,7 +5203,8 @@ function importActionPresets() {
 
     const j = jointData(f);
     const curLW = f.lw * f.scale;
-    const radius = Math.max(10, curLW * 2.2);
+    const smoothVal = (f.jointSmooth !== undefined) ? f.jointSmooth : 1;
+    const radius = smoothVal <= 0.01 ? 0 : Math.max(curLW * 2.2 * smoothVal, 1);
     const minOwnLayer = Math.min(...Object.values(f.layer));
     const extOn = !!(f.extremity && f.extremity.enabled);
 
@@ -10184,6 +10201,8 @@ function importActionPresets() {
   const hideJointsCheckbox = document.getElementById('hideJoints');
   const jointSizeInput = document.getElementById('jointSize');
   const jointSizeVal = document.getElementById('jointSizeVal');
+  const jointSmoothInput = document.getElementById('jointSmooth');
+  const jointSmoothVal = document.getElementById('jointSmoothVal');
   const jointColorDiffCheckbox = document.getElementById('jointColorDiff');
 
   hideJointsCheckbox.addEventListener('change', e => {
@@ -10197,6 +10216,17 @@ function importActionPresets() {
     render();
   });
   jointSizeInput.addEventListener('change', () => saveHistory('调整关节大小'));
+  
+  jointSmoothInput.addEventListener('input', e => {
+    if (selected && selected.type === 'figure') {
+      selected.jointSmooth = +e.target.value;
+      jointSmoothVal.textContent = selected.jointSmooth.toFixed(2);
+      setGlobalProp(selected, 'jointSmooth', selected.jointSmooth);
+      render();
+    }
+  });
+  jointSmoothInput.addEventListener('change', () => saveHistory('调整关节圆滑度'));
+
   jointColorDiffCheckbox.addEventListener('change', e => {
     jointColorDiff = e.target.checked;
     render();
@@ -10358,14 +10388,25 @@ function importActionPresets() {
   function syncCanvasMaskUI() {
     if (!canvasMaskCheckbox) return;
     canvasMaskCheckbox.checked = canvasMaskEnabled;
-    canvasMaskAlphaRow.style.display = canvasMaskEnabled ? 'flex' : 'none';
+    
+    if (canvasMaskAlphaRow) canvasMaskAlphaRow.style.display = canvasMaskEnabled ? 'flex' : 'none';
+    
+    // 内部直接获取，避免外部变量未声明引发的崩溃
     const colorRow = document.getElementById('canvasMaskColorRow');
     if (colorRow) colorRow.style.display = canvasMaskEnabled ? 'flex' : 'none';
     
-    canvasMaskAlphaInput.value = canvasMaskAlpha;
-    canvasMaskAlphaVal.textContent = canvasMaskAlpha.toFixed(2);
-    if (canvasMaskBgColorInput) canvasMaskBgColorInput.value = canvasMaskBgColor;
-    if (canvasMaskGridColorInput) canvasMaskGridColorInput.value = canvasMaskGridColor;
+    const alphaInput = document.getElementById('canvasMaskAlpha');
+    if (alphaInput) {
+      alphaInput.value = canvasMaskAlpha;
+      const alphaVal = document.getElementById('canvasMaskAlphaVal');
+      if (alphaVal) alphaVal.textContent = canvasMaskAlpha.toFixed(2);
+    }
+
+    const bgColorInput = document.getElementById('canvasMaskBgColor');
+    if (bgColorInput) bgColorInput.value = canvasMaskBgColor;
+
+    const gridColorInput = document.getElementById('canvasMaskGridColor');
+    if (gridColorInput) gridColorInput.value = canvasMaskGridColor;
   }
 
   btnToggleCanvasBounds.onclick = () => {
@@ -10411,23 +10452,22 @@ function importActionPresets() {
     });
   }
 
-  // 新增：绑定遮罩颜色和网格颜色
-  const canvasMaskBgColorInput = document.getElementById('canvasMaskBgColor');
-  const canvasMaskGridColorInput = document.getElementById('canvasMaskGridColor');
+  const canvasMaskBgColorEl = document.getElementById('canvasMaskBgColor');
+  const canvasMaskGridColorEl = document.getElementById('canvasMaskGridColor');
 
-  if (canvasMaskBgColorInput) {
-    canvasMaskBgColorInput.addEventListener('input', e => {
+  if (canvasMaskBgColorEl) {
+    canvasMaskBgColorEl.addEventListener('input', e => {
       canvasMaskBgColor = e.target.value;
       render();
     });
-    canvasMaskBgColorInput.addEventListener('change', () => saveHistory('修改遮罩颜色'));
+    canvasMaskBgColorEl.addEventListener('change', () => saveHistory('修改遮罩颜色'));
   }
-  if (canvasMaskGridColorInput) {
-    canvasMaskGridColorInput.addEventListener('input', e => {
+  if (canvasMaskGridColorEl) {
+    canvasMaskGridColorEl.addEventListener('input', e => {
       canvasMaskGridColor = e.target.value;
       render();
     });
-    canvasMaskGridColorInput.addEventListener('change', () => saveHistory('修改网格颜色'));
+    canvasMaskGridColorEl.addEventListener('change', () => saveHistory('修改网格颜色'));
   }
 
   document.querySelectorAll('.canvas-ratio-btn').forEach(btn => {
@@ -11138,6 +11178,18 @@ function togglePin(part) {
 
     if (hideJointsCheckbox) hideJointsCheckbox.checked = hideJointsEnabled;
     if (jointSizeInput) { jointSizeInput.value = jointSize; jointSizeVal.textContent = jointSize; }
+    
+    if (jointSmoothInput) {
+      if (isFig) {
+        const js = selected.jointSmooth !== undefined ? selected.jointSmooth : 1;
+        jointSmoothInput.value = js;
+        jointSmoothVal.textContent = js.toFixed(2);
+      } else {
+        jointSmoothInput.value = 1;
+        jointSmoothVal.textContent = '1.00';
+      }
+    }
+    
     if (jointColorDiffCheckbox) jointColorDiffCheckbox.checked = jointColorDiff;
 
     updateJointSliders();

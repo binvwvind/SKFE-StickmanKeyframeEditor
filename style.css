@@ -182,12 +182,60 @@
   }
   #frameBar::-webkit-scrollbar { display: none; }
 
+  #scrubberWrap {
+    position: relative;
+    width: 100%;
+    margin: 4px 0;
+    display: none;
+  }
+  #scrubberWrap.visible { display: block; }
+
   #timelineScrubber {
-    width: 100%; margin: 4px 0; display: none;
+    width: 100%; margin: 0; display: block;
     accent-color: var(--color-primary);
     height: 4px;
     -webkit-appearance: none;
     background: var(--btn-bg); border-radius: 999px; outline: none;
+  }
+
+  .scrubber-time {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 10px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    padding: 1px 4px;
+    border-radius: 5px;
+    background: var(--bg-panel);
+    box-shadow: 0 0 0 2px var(--bg-panel);
+    color: var(--color-primary);
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #scrubberTimeNow { font-weight: 600; }
+
+  .scrubber-time.st-slide-left {
+    animation: stSlideLeft .22s cubic-bezier(.2, .7, .3, 1);
+  }
+  .scrubber-time.st-slide-right {
+    animation: stSlideRight .22s cubic-bezier(.2, .7, .3, 1);
+  }
+  @keyframes stSlideLeft {
+    0%   { filter: opacity(.2); transform: translate(7px, -50%) scale(.84); }
+    60%  { filter: opacity(1);  transform: translate(0, -50%) scale(1.05); }
+    100% { filter: opacity(1);  transform: translate(0, -50%) scale(1); }
+  }
+  @keyframes stSlideRight {
+    0%   { filter: opacity(.2); transform: translate(-7px, -50%) scale(.84); }
+    60%  { filter: opacity(1);  transform: translate(0, -50%) scale(1.05); }
+    100% { filter: opacity(1);  transform: translate(0, -50%) scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .scrubber-time.st-slide-left,
+    .scrubber-time.st-slide-right { animation: none; }
   }
   #timelineScrubber::-webkit-slider-thumb {
     -webkit-appearance: none; width: 13px; height: 13px;
@@ -212,6 +260,9 @@
     background: var(--color-primary); border-color: transparent;
     color: var(--color-primary-text); font-weight: 600;
     border-radius: 12px;
+    /* 新增下面两行 防止文字变长后把按钮撑变形或换行 */
+    padding: 4px 10px; 
+    white-space: nowrap;
   }
   .frame-chip.active:hover {
     background: var(--color-primary-hover);

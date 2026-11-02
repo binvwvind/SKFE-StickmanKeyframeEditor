@@ -725,7 +725,11 @@
 <div id="timeline">
   <button id="btnHideTimeline">收起 ▼</button>
   <div id="frameBar"></div>
-  <input type="range" id="timelineScrubber" min="0" max="0" value="0" step="1">
+  <div id="scrubberWrap">
+    <input type="range" id="timelineScrubber" min="0" max="0" value="0" step="1">
+    <span id="scrubberTimeNow" class="scrubber-time"></span>
+    <span id="scrubberTimeTotal" class="scrubber-time"></span>
+  </div>
   
   <div class="timeline-controls">
     <button id="btnPrevFrame" title="上一帧" data-i18n-title="timeline.prevTitle">◀</button>

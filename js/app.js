@@ -4560,6 +4560,76 @@ function importActionPresets() {
     }
   }
 
+  let scrubberSide = null;
+
+  function formatTimeMs(ms) {
+    const sec = Math.max(0, ms) / 1000;
+    if (sec < 60) return sec.toFixed(2) + 's';
+    const m = Math.floor(sec / 60);
+    const s = sec - m * 60;
+    return m + ':' + s.toFixed(1).padStart(4, '0');
+  }
+
+  function pulseScrubberTime(moveLeft) {
+    const cls = moveLeft ? 'st-slide-left' : 'st-slide-right';
+    ['scrubberTimeNow', 'scrubberTimeTotal'].forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.classList.remove('st-slide-left', 'st-slide-right');
+      void el.offsetWidth;   /* 强制 reflow，让动画可重复触发 */
+      el.classList.add(cls);
+    });
+  }
+
+  function updateScrubberTime() {
+    const wrap = document.getElementById('scrubberWrap');
+    const nowEl = document.getElementById('scrubberTimeNow');
+    const totalEl = document.getElementById('scrubberTimeTotal');
+    const scrubber = document.getElementById('timelineScrubber');
+    if (!wrap || !nowEl || !totalEl || !scrubber) return;
+
+    const show = frames.length > 1;
+    wrap.classList.toggle('visible', show);
+    if (!show) { scrubberSide = null; return; }
+
+    const totalMs = frames.reduce((s, f) => s + (f.duration || 0), 0);
+    const idx = Math.max(0, Math.min(currentFrameIndex, frames.length - 1));
+    let nowMs = 0;
+    for (let i = 0; i < idx; i++) nowMs += frames[i].duration || 0;
+
+    nowEl.textContent = formatTimeMs(nowMs);
+    totalEl.textContent = formatTimeMs(totalMs);
+
+    const max = frames.length - 1;
+    const ratio = max > 0 ? idx / max : 0;
+    const useLeft = ratio >= 0.5;   /* true: 当前时刻在 thumb 左侧，总时长在左端 */
+
+    const W = scrubber.clientWidth;
+    if (W <= 0) return;
+    const thumbW = 13;
+    const trackLeft = thumbW / 2;
+    const trackRight = Math.max(trackLeft, W - thumbW / 2);
+    const thumbCenter = trackLeft + (trackRight - trackLeft) * ratio;
+    const GAP = 9;
+
+    if (useLeft) {
+      nowEl.style.left = 'auto';
+      nowEl.style.right = (W - thumbCenter + GAP) + 'px';
+      totalEl.style.left = '0';
+      totalEl.style.right = 'auto';
+    } else {
+      nowEl.style.right = 'auto';
+      nowEl.style.left = (thumbCenter + GAP) + 'px';
+      totalEl.style.right = '0';
+      totalEl.style.left = 'auto';
+    }
+
+    if (scrubberSide !== null && scrubberSide !== useLeft) {
+      pulseScrubberTime(useLeft);
+    }
+    scrubberSide = useLeft;
+  }
+
   function updateFrameBarHighlight() {
     const bar = document.getElementById('frameBar');
     if (!bar) return;
@@ -4568,6 +4638,11 @@ function importActionPresets() {
       if (i === currentFrameIndex) chip.classList.add('active');
       else chip.classList.remove('active');
     });
+    const scrubber = document.getElementById('timelineScrubber');
+    if (scrubber && +scrubber.value !== currentFrameIndex) {
+      scrubber.value = currentFrameIndex;
+    }
+    updateScrubberTime();
   }
 
   /* ==================== 显示图层数字 ==================== */
@@ -5121,8 +5196,8 @@ function importActionPresets() {
     if (scrubber) {
       scrubber.max = frames.length - 1;
       scrubber.value = currentFrameIndex;
-      scrubber.style.display = frames.length > 1 ? 'block' : 'none';
     }
+    updateScrubberTime();
 
     let dragIndicator = document.getElementById('dragIndicator');
     if (!dragIndicator) {
@@ -5345,9 +5420,28 @@ function importActionPresets() {
     });
 
     const newChips = bar.querySelectorAll('.frame-chip');
+    const totalFrames = frames.length; // 获取总帧数
+    
     newChips.forEach((chip, i) => {
-      if (i === currentFrameIndex) chip.classList.add('active');
-      else chip.classList.remove('active');
+      const isActive = (i === currentFrameIndex);
+      
+      if (isActive) {
+        chip.classList.add('active');
+      } else {
+        chip.classList.remove('active');
+      }
+      
+      // 动态修改文字显示
+      const textToShow = isActive ? `${i + 1}/${totalFrames}` : `${i + 1}`;
+      
+      // 如果开启了缩略图模式，修改内部的 .frame-idx
+      const idxSpan = chip.querySelector('.frame-idx');
+      if (idxSpan) {
+        idxSpan.textContent = textToShow;
+      } else {
+        // 如果没开启缩略图模式，直接修改按钮的文本
+        chip.textContent = textToShow;
+      }
     });
 
     const active = bar.querySelector('.frame-chip.active');
@@ -11833,13 +11927,24 @@ function togglePin(part) {
     if (!tl) return;
     tl.classList.toggle('timeline-top', timelineDock === 'top');
     tl.classList.toggle('timeline-bottom', timelineDock === 'bottom');
+    // ⬇⬇⬇ 新增：同步更新内联样式，否则会覆盖 CSS 类的效果
+    if (timelineDock === 'top') {
+      tl.style.top = '0';
+      tl.style.bottom = 'auto';
+    } else {
+      tl.style.top = 'auto';
+      tl.style.bottom = '0';
+    }
+    tl.style.position = 'fixed';
+    tl.style.left = '0';
+    tl.style.right = '0';
     const hideBtn = document.getElementById('btnHideTimeline');
     if (hideBtn) hideBtn.textContent = (timelineDock === 'top') ? '收起 ▲' : '收起 ▼';
     const dockBtn = document.getElementById('btnTimelineDock');
     if (dockBtn) dockBtn.textContent = (timelineDock === 'top') ? '⇩ 置底' : '⇧ 置顶';
     refreshTimelineDockOffsets();
     if (!opts.skipResize) resize();
-  }
+}
 
   function initTimelineDock() {
     const tl = document.getElementById('timeline');

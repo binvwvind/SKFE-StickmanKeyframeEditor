@@ -2,6 +2,31 @@
 (function () {
   'use strict';
 
+  /* ==================== 外部模块解构（SKFE.core） ==================== */
+  const { P, TAU, displayY, TRACK_ALL_ID } = SKFE.core.constants;
+  const { EventBus } = SKFE.core.eventBus;
+  const { darkenColor, hexToRgb, rgbToHex, lerpColor, themeHexToRgba, themeMixHex } = SKFE.core.colorUtils;
+  const { along, norm, distToSeg, worldToFigureLocal } = SKFE.core.geometry;
+
+  /* ==================== 全局状态（AppState） ==================== */
+  const AppState = {
+    /* 主帧元信息：只保存 id / duration / isTween（时长与顺序），不再保存 objects */
+    frames: [{ id: 1, duration: 83, isTween: false }],
+    /* 每元件独立轨道：{ 'obj_1': { name, frames: [ objData | null, ... ] } } */
+    tracks: {},
+    objects: [],
+    selected: null,
+    viewOffset: { x: 0, y: 0 },
+    viewScale: 1,
+    currentFrameIndex: 0,
+    activeTrackId: 'all',
+    canvasBounds: { x: -400, y: -400, w: 800, h: 800, rotation: 0 },
+    canvasBoundsEnabled: false,
+    canvasSelected: false
+  };
+
+  /* ==================== EventBus（事件总线） ==================== */
+
   /* ==================== 基础环境 ==================== */
   const canvas = document.getElementById('c');
   let ctx = canvas.getContext('2d');
@@ -15,8 +40,6 @@
 
   const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768;
 
-  let viewOffset = { x: 0, y: 0 };
-  let viewScale = 1;
   let isPanning = false;
   let panStart = { x: 0, y: 0 };
   let cameraPreviewVisible = false; // 移到这里，防止初始化报错
@@ -25,23 +48,12 @@
   let snapEnabled = localStorage.getItem('skfe_snap_enabled') !== '0';
   let snapLines = { x: null, y: null }; // 存储紫色辅助线的世界坐标
 
-  const P = { torso: 82, headR: 17, upperArm: 40, foreArm: 38, thigh: 45, shin: 45, lw: 6 };
-  const TAU = Math.PI * 2;
 
   let pageBgColor = '#f4f6f9';
   let pageBgAlpha = 1;
   let gridEnabled = true;
   let gridSize = 32;
 
-  /* 主帧元信息：只保存 id / duration / isTween（时长与顺序），不再保存 objects */
-  let frames = [{ id: 1, duration: 83, isTween: false }];
-  let currentFrameIndex = 0;
-
-  /* 每元件独立轨道：{ 'obj_1': { name, frames: [ objData | null, ... ] } } */
-  let tracks = {};
-
-  let objects = [];
-  let selected = null;
   let drag = null;
   let uid = 0;
   let currentColor = '#111111';
@@ -57,13 +69,10 @@
   let groundLineEditMode = false;
   let draggingGroundLine = false;
 
-  let canvasBounds = { x: -400, y: -400, w: 800, h: 800, rotation: 0 };
-  let canvasBoundsEnabled = false;
   let canvasBoundsEditMode = false;
   let draggingCanvasBounds = false;
   let canvasDragStart = { x: 0, y: 0, cx: 0, cy: 0 };
   let canvasBaseBounds = null;
-  let canvasSelected = false;
   let viewPinned = false;
   let pinnedView = null;
 
@@ -88,7 +97,7 @@
   let _renderList = null;
   window.__isExporting = false; // 导出时用于局部画布判断
 
-  const counts = { figure: 0, image: 0, acc: 0, shape: 0, bubble: 0 };
+  const counts = { figure: 0, image: 0, acc: 0, shape: 0, bubble: 0, ink: 0 }; // brush-v5.1.0: §6.3.10 追加 ink 计数
 
   const PRESET_KEY = 'tco_figure_presets_v1';
   let presets = [];
@@ -109,8 +118,6 @@
   const trackThumbCache = new Map();
 
   /* 多轨道：'all' = 全局主时间轴；其它值 = 元件 id 的子轨道 */
-  const TRACK_ALL_ID = 'all';
-  let activeTrackId = TRACK_ALL_ID;
   let otherTracksVisibility = 'show';
   let subTrackOptionSignature = '';
 
@@ -129,7 +136,6 @@
   let jointStretchOn = false; // 关节拉伸模式状态
   let isolatedJointName = null; // 当前被隔离/单独显示的关节名称
 
-  const displayY = y => -y;
 
   /* ==================== 全局属性修改 ==================== */
   let globalEditEnabled = true;
@@ -140,7 +146,7 @@
 
   /* 仅导出路径调用；不影响预览、缩略图、编辑 */
   function shouldSkipCameraForExport() {
-    return exportCanvasFirst && canvasBoundsEnabled;
+    return exportCanvasFirst && AppState.canvasBoundsEnabled;
   }
 
   function setGlobalProp(fig, path, value) {
@@ -155,8 +161,8 @@
       cur[keys[keys.length - 1]] = v;
     };
     const targetId = String(fig.id);
-    for (const id in tracks) {
-      const t = tracks[id];
+    for (const id in AppState.tracks) {
+      const t = AppState.tracks[id];
       if (!t || !t.frames) continue;
       for (let i = 0; i < t.frames.length; i++) {
         const data = t.frames[i];
@@ -167,19 +173,23 @@
         }
       }
     }
-    if (selected && String(selected.id) === targetId) set(selected, path, value);
+    if (AppState.selected && String(AppState.selected.id) === targetId) set(AppState.selected, path, value);
   }
 
-/* 判断对象是否处于"已绑定"状态（配饰/图形/对话框） */
+/* 判断对象是否处于"已绑定"状态（配饰/图形/对话框/画笔） */
 function isBoundObj(o) {
-  return !!(o && (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble')
+  return !!(o && (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble' || o.type === 'ink')
     && o.bindTo !== 'none' && o.targetId);
 }
 
-/* 绑定对象专用的全局覆盖：只覆盖 id 相同且同样处于绑定状态的帧数据 */
+/* 绑定对象专用的全局覆盖
+   global-v5.1.1: 不再要求"帧数据也必须处于绑定态"——同一元件的所有帧统一写入，
+   否则某些帧（例如建帧时全局属性是关的、或绑定只在当前帧生效）会被跳过，
+   表现就是"开了全局属性修改，总有一帧位置/大小不对"。 */
+const BOUND_PLACEMENT_PATHS = { offX: 1, offY: 1, bindTo: 1, targetId: 1, rot: 1, scale: 1, x: 1, y: 1, ax: 1, ay: 1, mirror: 1 };
 function setGlobalPropForBound(obj, path, value) {
   if (!globalEditEnabled) return;
-  if (!isBoundObj(obj)) return;
+  if (!obj) return;
   const targetId = String(obj.id);
   const set = (o, p, v) => {
     const keys = p.split('.');
@@ -190,42 +200,58 @@ function setGlobalPropForBound(obj, path, value) {
     }
     cur[keys[keys.length - 1]] = v;
   };
-  for (const id in tracks) {
-    const t = tracks[id];
+  for (const id in AppState.tracks) {
+    const t = AppState.tracks[id];
     if (!t || !t.frames) continue;
     for (const data of t.frames) {
-      if (data && String(data.id) === targetId && isBoundObj(data)) {
-        set(data, path, value);
-      }
+      if (data && String(data.id) === targetId) set(data, path, value);
     }
   }
-  if (selected && String(selected.id) === targetId && isBoundObj(selected)) {
-    set(selected, path, value);
+  if (AppState.selected && String(AppState.selected.id) === targetId) {
+    set(AppState.selected, path, value);
+  }
+  /* 位置类属性同步后，把"当前世界位置"写进各帧的 x/y 作为兜底缓存：
+     若某帧缺少目标火柴人（getBindTransform 会退回 x/y），也能停在同一处而不是旧出生点。 */
+  if (isBoundObj(obj) && BOUND_PLACEMENT_PATHS[path]) {
+    const tr = getBindTransform(obj);
+    if (tr) {
+      for (const id in AppState.tracks) {
+        const t = AppState.tracks[id];
+        if (!t || !t.frames) continue;
+        for (const data of t.frames) {
+          if (data && String(data.id) === targetId) { data.x = tr.x; data.y = tr.y; }
+        }
+      }
+      if (AppState.selected && String(AppState.selected.id) === targetId) {
+        AppState.selected.x = tr.x;
+        AppState.selected.y = tr.y;
+      }
+    }
   }
 }
 
   function addObjectToFrames(obj) {
     if (!obj || obj.type === 'video') return;
     const id = String(obj.id);
-    const total = Math.max(1, frames.length);
+    const total = Math.max(1, AppState.frames.length);
     const arr = new Array(total).fill(null);
-    arr[currentFrameIndex] = obj;
-    tracks[id] = { name: obj.name || (obj.type + id), frames: arr };
+    arr[AppState.currentFrameIndex] = obj;
+    AppState.tracks[id] = { name: obj.name || (obj.type + id), frames: arr };
     if (isSubTrackMode()) {
       /* 新建元件后自动切到它自己的子轨道，避免对象落在别人的轨道之外 */
-      activeTrackId = id;
+      AppState.activeTrackId = id;
       refreshSubTrackOptions();
     } else if (globalEditEnabled && total > 1) {
       for (let i = 0; i < total; i++) {
-        if (i === currentFrameIndex) continue;
+        if (i === AppState.currentFrameIndex) continue;
         const clone = cloneObjectKeepImg(obj);
         clone.id = obj.id;
-        tracks[id].frames[i] = clone;
+        AppState.tracks[id].frames[i] = clone;
       }
     }
     syncMainLengthFromTracks();
-    objects.length = 0;
-    for (const o of getCombinedObjectsForRender()) objects.push(o);
+    AppState.objects.length = 0;
+    for (const o of getCombinedObjectsForRender()) AppState.objects.push(o);
   }
 
   /* ==================== 全屏 ==================== */
@@ -283,12 +309,12 @@ function setGlobalPropForBound(obj, path, value) {
 
   function getSnapshot() {
     return {
-      frames: frames.map(frame => ({ id: frame.id, duration: frame.duration, isTween: !!frame.isTween })),
-      tracks: cloneTracksMap(tracks),
-      currentFrameIndex,
+      frames: AppState.frames.map(frame => ({ id: frame.id, duration: frame.duration, isTween: !!frame.isTween })),
+      tracks: cloneTracksMap(AppState.tracks),
+      currentFrameIndex: AppState.currentFrameIndex,
       // === 新增：记录画布相关状态 ===
-      canvasBounds: JSON.parse(JSON.stringify(canvasBounds)),
-      canvasBoundsEnabled,
+      canvasBounds: JSON.parse(JSON.stringify(AppState.canvasBounds)),
+      canvasBoundsEnabled: AppState.canvasBoundsEnabled,
       canvasMaskEnabled,
       canvasMaskAlpha,
       canvasMaskBgColor,
@@ -298,26 +324,26 @@ function setGlobalPropForBound(obj, path, value) {
   }
 
   function restoreSnapshot(snapshot) {
-    const prevSelectedId = selected ? String(selected.id) : null;
+    const prevSelectedId = AppState.selected ? String(AppState.selected.id) : null;
     if (Array.isArray(snapshot)) {
       /* 兼容旧版（v1，frames[i].objects）历史快照 */
       const migrated = migrateLegacyFrames(snapshot);
-      frames = migrated.frames;
-      tracks = migrated.tracks;
+      AppState.frames = migrated.frames;
+      AppState.tracks = migrated.tracks;
     } else if (snapshot && Array.isArray(snapshot.frames) && snapshot.tracks) {
-      frames = snapshot.frames.map(frame => ({ id: frame.id, duration: frame.duration, isTween: !!frame.isTween }));
-      tracks = cloneTracksMap(snapshot.tracks);
+      AppState.frames = snapshot.frames.map(frame => ({ id: frame.id, duration: frame.duration, isTween: !!frame.isTween }));
+      AppState.tracks = cloneTracksMap(snapshot.tracks);
     } else {
       return;
     }
     syncMainLengthFromTracks();
-    if (currentFrameIndex >= frames.length) currentFrameIndex = frames.length - 1;
-    if (currentFrameIndex < 0) currentFrameIndex = 0;
-    objects = getCombinedObjectsForRender();
+    if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = AppState.frames.length - 1;
+    if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
+    AppState.objects = getCombinedObjectsForRender();
     
     // === 新增：恢复画布相关状态 ===
-    if (snapshot.canvasBounds) canvasBounds = JSON.parse(JSON.stringify(snapshot.canvasBounds));
-    if (snapshot.canvasBoundsEnabled !== undefined) canvasBoundsEnabled = snapshot.canvasBoundsEnabled;
+    if (snapshot.canvasBounds) AppState.canvasBounds = JSON.parse(JSON.stringify(snapshot.canvasBounds));
+    if (snapshot.canvasBoundsEnabled !== undefined) AppState.canvasBoundsEnabled = snapshot.canvasBoundsEnabled;
     if (snapshot.canvasMaskEnabled !== undefined) canvasMaskEnabled = snapshot.canvasMaskEnabled;
     if (snapshot.canvasMaskAlpha !== undefined) canvasMaskAlpha = snapshot.canvasMaskAlpha;
     if (snapshot.canvasMaskBgColor !== undefined) canvasMaskBgColor = snapshot.canvasMaskBgColor;
@@ -330,18 +356,17 @@ function setGlobalPropForBound(obj, path, value) {
     syncCanvasMaskUI();
     /* 恢复选中：优先按 id 找回来；找不到再退回原逻辑 */
     if (isSubTrackMode()) {
-      selected = getActiveTrackObject();
+      AppState.selected = getActiveTrackObject();
     } else if (prevSelectedId) {
-      selected = objects.find(o => o && String(o.id) === prevSelectedId) || null;
+      AppState.selected = AppState.objects.find(o => o && String(o.id) === prevSelectedId) || null;
     } else {
-      selected = null;
+      AppState.selected = null;
     }
-    drag = null; isPanning = false; canvasSelected = false;
+    drag = null; isPanning = false; AppState.canvasSelected = false;
     cancelTransformBoxDrag(); anchorModeOn = false;
     trackThumbCache.clear();
     updateFrameBar();
-    render();
-    syncUI();
+    EventBus.emit('app:update');
     updateUndoRedoButtons();
   }
 
@@ -353,7 +378,7 @@ function setGlobalPropForBound(obj, path, value) {
     if (undoStack.length > MAX_HISTORY) undoStack.shift();
     redoStack = [];
     updateUndoRedoButtons();
-    scheduleAutoArchiveSave();
+    SKFE.systems.autosave.scheduleAutoArchiveSave();
   }
 
   function pushPreSnapshot(snap, label) {
@@ -364,7 +389,7 @@ function setGlobalPropForBound(obj, path, value) {
     if (undoStack.length > MAX_HISTORY) undoStack.shift();
     redoStack = [];
     updateUndoRedoButtons();
-    scheduleAutoArchiveSave();
+    SKFE.systems.autosave.scheduleAutoArchiveSave();
   }
 
   function undo() {
@@ -400,13 +425,13 @@ function setGlobalPropForBound(obj, path, value) {
 
   /* ==================== 补间帧恢复 ==================== */
   function markCurrentFrameModified() {
-    if (frames[currentFrameIndex] && frames[currentFrameIndex].isTween) {
-      frames[currentFrameIndex].isTween = false;
+    if (AppState.frames[AppState.currentFrameIndex] && AppState.frames[AppState.currentFrameIndex].isTween) {
+      AppState.frames[AppState.currentFrameIndex].isTween = false;
       updateFrameBar();
     }
-    if (frames[currentFrameIndex]) delete frames[currentFrameIndex]._thumb;
-    if (isSubTrackMode()) trackThumbCache.delete(activeTrackId + '|' + currentFrameIndex);
-    scheduleAutoArchiveSave();
+    if (AppState.frames[AppState.currentFrameIndex]) delete AppState.frames[AppState.currentFrameIndex]._thumb;
+    if (isSubTrackMode()) trackThumbCache.delete(AppState.activeTrackId + '|' + AppState.currentFrameIndex);
+    SKFE.systems.autosave.scheduleAutoArchiveSave();
   }
 
   /* ==================== 项目文件导出与导入 ==================== */
@@ -419,7 +444,7 @@ function setGlobalPropForBound(obj, path, value) {
   }
 
   function serializeFrames() {
-    return frames.map(frame => ({
+    return AppState.frames.map(frame => ({
       id: frame.id,
       duration: frame.duration,
       isTween: !!frame.isTween
@@ -428,8 +453,8 @@ function setGlobalPropForBound(obj, path, value) {
 
   function serializeTracks() {
     const out = {};
-    for (const id in tracks) {
-      const t = tracks[id];
+    for (const id in AppState.tracks) {
+      const t = AppState.tracks[id];
       if (!t) continue;
       out[id] = {
         name: t.name || id,
@@ -531,11 +556,11 @@ function setGlobalPropForBound(obj, path, value) {
       version: 2,
       frames: serializeFrames(),
       tracks: serializeTracks(),
-      currentFrameIndex, defaultFPS,
+      currentFrameIndex: AppState.currentFrameIndex, defaultFPS,
       groundShadowEnabled, shadowColor, shadowAlpha,
       groundLineEnabled, groundLineY,
       onionEnabled, onionBefore, onionAfter,
-      canvasBounds, canvasBoundsEnabled,
+      canvasBounds: AppState.canvasBounds, canvasBoundsEnabled: AppState.canvasBoundsEnabled,
       pageBgColor, gridEnabled, gridSize,
       canvasMaskEnabled, canvasMaskAlpha,
       canvasMaskBgColor, canvasMaskGridColor, // 新增
@@ -554,14 +579,14 @@ function setGlobalPropForBound(obj, path, value) {
   function applyLoadedProject(data) {
     const { newFrames, newTracks, promises } = deserializeProject(data);
     return Promise.all(promises).then(() => {
-      frames = newFrames;
-      tracks = newTracks;
+      AppState.frames = newFrames;
+      AppState.tracks = newTracks;
       syncMainLengthFromTracks();
-      currentFrameIndex = data.currentFrameIndex || 0;
-      if (currentFrameIndex >= frames.length) currentFrameIndex = 0;
-      if (currentFrameIndex < 0) currentFrameIndex = 0;
-      if (activeTrackId !== TRACK_ALL_ID && !tracks[activeTrackId]) activeTrackId = TRACK_ALL_ID;
-      objects = getCombinedObjectsForRender();
+      AppState.currentFrameIndex = data.currentFrameIndex || 0;
+      if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = 0;
+      if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
+      if (AppState.activeTrackId !== TRACK_ALL_ID && !AppState.tracks[AppState.activeTrackId]) AppState.activeTrackId = TRACK_ALL_ID;
+      AppState.objects = getCombinedObjectsForRender();
       defaultFPS = data.defaultFPS || 12;
       groundShadowEnabled = data.groundShadowEnabled || false;
       shadowColor = data.shadowColor || '#000000';
@@ -575,10 +600,10 @@ function setGlobalPropForBound(obj, path, value) {
         if (onionBefore > 12) { onionBefore = 12; onionAfter = 0; }
         else onionAfter = 12 - onionBefore;
       }
-      if (data.canvasBounds) canvasBounds = data.canvasBounds;
-      if (!canvasBounds.rotation) canvasBounds.rotation = 0;
-      canvasBoundsEnabled = data.canvasBoundsEnabled || false;
-      canvasBaseBounds = { ...canvasBounds };
+      if (data.canvasBounds) AppState.canvasBounds = data.canvasBounds;
+      if (!AppState.canvasBounds.rotation) AppState.canvasBounds.rotation = 0;
+      AppState.canvasBoundsEnabled = data.canvasBoundsEnabled || false;
+      canvasBaseBounds = { ...AppState.canvasBounds };
       if (data.pageBgColor) pageBgColor = data.pageBgColor;
       if (data.gridEnabled !== undefined) gridEnabled = !!data.gridEnabled;
       if (data.gridSize !== undefined) gridSize = data.gridSize;
@@ -590,13 +615,12 @@ function setGlobalPropForBound(obj, path, value) {
       syncCanvasMaskUI();
       syncCanvasUI();
       syncAdvToggles();
-      selected = null;
-      canvasSelected = false;
+      AppState.selected = null;
+      AppState.canvasSelected = false;
       trackThumbCache.clear();
       applyFPS(defaultFPS);
       updateFrameBar();
-      render();
-      syncUI();
+      EventBus.emit('app:update');
     });
   }
 
@@ -607,7 +631,7 @@ function setGlobalPropForBound(obj, path, value) {
         const data = JSON.parse(e.target.result);
         if (!data || !Array.isArray(data.frames)) throw new Error('Invalid project file');
         applyLoadedProject(data).then(() => {
-          saveHistory('导入项目');
+          EventBus.emit('history:save', '导入项目');
           alert('项目导入成功');
         });
       } catch (err) {
@@ -623,11 +647,11 @@ function setGlobalPropForBound(obj, path, value) {
         version: 2,
         frames: serializeFrames(),
         tracks: serializeTracks(),
-        currentFrameIndex, defaultFPS,
+        currentFrameIndex: AppState.currentFrameIndex, defaultFPS,
         groundShadowEnabled, shadowColor, shadowAlpha,
         groundLineEnabled, groundLineY,
         onionEnabled, onionBefore, onionAfter,
-        canvasBounds, canvasBoundsEnabled,
+        canvasBounds: AppState.canvasBounds, canvasBoundsEnabled: AppState.canvasBoundsEnabled,
         pageBgColor, gridEnabled, gridSize,
         canvasMaskEnabled, canvasMaskAlpha,
         canvasMaskBgColor, canvasMaskGridColor, // 新增
@@ -645,7 +669,7 @@ function setGlobalPropForBound(obj, path, value) {
     try {
       const data = JSON.parse(raw);
       applyLoadedProject(data).then(() => {
-        saveHistory('读取本地项目');
+        EventBus.emit('history:save', '读取本地项目');
         alert('本地项目读取成功');
       });
     } catch (err) {
@@ -668,28 +692,7 @@ function setGlobalPropForBound(obj, path, value) {
   document.getElementById('btnLoadProjectLocal').onclick = loadProjectFromLocal;
 
   /* ==================== IndexedDB 自动存档 ==================== */
-  const AUTO_ARCHIVE_DB_NAME = 'skfe_auto_archive_v1';
-  const AUTO_ARCHIVE_STORE = 'projects';
-  const AUTO_ARCHIVE_KEY = 'current';
-  let autoArchiveDB = null;
-  let autoArchiveEnabled = true;
-  let autoArchiveTimer = null;
-  let autoArchivePeriodicTimer = null;
-  let autoArchiveSavePending = false;
 
-  function openAutoArchiveDB() {
-    return new Promise((resolve, reject) => {
-      try {
-        const req = indexedDB.open(AUTO_ARCHIVE_DB_NAME, 1);
-        req.onupgradeneeded = (e) => {
-          const db = e.target.result;
-          if (!db.objectStoreNames.contains(AUTO_ARCHIVE_STORE)) db.createObjectStore(AUTO_ARCHIVE_STORE);
-        };
-        req.onsuccess = (e) => { autoArchiveDB = e.target.result; resolve(autoArchiveDB); };
-        req.onerror = (e) => reject(e.target.error);
-      } catch (err) { reject(err); }
-    });
-  }
 
   function collectAutoArchiveData() {
     return {
@@ -697,8 +700,8 @@ function setGlobalPropForBound(obj, path, value) {
       timestamp: Date.now(),
       frames: serializeFrames(),
       tracks: serializeTracks(),
-      currentFrameIndex, uid, defaultFPS, viewOffset, viewScale,
-      canvasBounds, canvasBoundsEnabled, canvasBaseBounds,
+      currentFrameIndex: AppState.currentFrameIndex, uid, defaultFPS, viewOffset: AppState.viewOffset, viewScale: AppState.viewScale,
+      canvasBounds: AppState.canvasBounds, canvasBoundsEnabled: AppState.canvasBoundsEnabled, canvasBaseBounds,
       canvasMaskEnabled, canvasMaskAlpha,
       canvasMaskBgColor, canvasMaskGridColor, // 新增
       groundShadowEnabled, shadowColor, shadowAlpha,
@@ -709,64 +712,29 @@ function setGlobalPropForBound(obj, path, value) {
     };
   }
 
-  function saveToAutoArchive() {
-    if (!autoArchiveEnabled || !autoArchiveDB || autoArchiveSavePending) return;
-    autoArchiveSavePending = true;
-    try {
-      const data = collectAutoArchiveData();
-      const tx = autoArchiveDB.transaction(AUTO_ARCHIVE_STORE, 'readwrite');
-      const store = tx.objectStore(AUTO_ARCHIVE_STORE);
-      const req = store.put(data, AUTO_ARCHIVE_KEY);
-      req.onsuccess = () => { autoArchiveSavePending = false; };
-      req.onerror = (e) => { autoArchiveSavePending = false; };
-      tx.onerror = () => { autoArchiveSavePending = false; };
-    } catch (err) {
-      autoArchiveSavePending = false;
-      if (err.name === 'QuotaExceededError' || /quota/i.test(err.message)) {
-        autoArchiveEnabled = false;
-      }
-    }
-  }
 
-  function scheduleAutoArchiveSave() {
-    if (!autoArchiveEnabled) return;
-    if (autoArchiveTimer) clearTimeout(autoArchiveTimer);
-    autoArchiveTimer = setTimeout(saveToAutoArchive, 1200);
-  }
 
-  function loadFromAutoArchive() {
-    return new Promise((resolve, reject) => {
-      if (!autoArchiveDB) { reject('DB not open'); return; }
-      try {
-        const tx = autoArchiveDB.transaction(AUTO_ARCHIVE_STORE, 'readonly');
-        const store = tx.objectStore(AUTO_ARCHIVE_STORE);
-        const req = store.get(AUTO_ARCHIVE_KEY);
-        req.onsuccess = (e) => resolve(e.target.result || null);
-        req.onerror = (e) => reject(e.target.error);
-      } catch (err) { reject(err); }
-    });
-  }
 
   function restoreFromAutoArchive(data) {
     if (!data || !Array.isArray(data.frames)) return false;
     try {
       const { newFrames, newTracks, promises } = deserializeProject(data);
       Promise.all(promises).then(() => {
-        frames = newFrames;
-        tracks = newTracks;
+        AppState.frames = newFrames;
+        AppState.tracks = newTracks;
         syncMainLengthFromTracks();
-        currentFrameIndex = data.currentFrameIndex || 0;
-        if (currentFrameIndex >= frames.length) currentFrameIndex = 0;
-        if (currentFrameIndex < 0) currentFrameIndex = 0;
-        if (activeTrackId !== TRACK_ALL_ID && !tracks[activeTrackId]) activeTrackId = TRACK_ALL_ID;
-        objects = getCombinedObjectsForRender();
+        AppState.currentFrameIndex = data.currentFrameIndex || 0;
+        if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = 0;
+        if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
+        if (AppState.activeTrackId !== TRACK_ALL_ID && !AppState.tracks[AppState.activeTrackId]) AppState.activeTrackId = TRACK_ALL_ID;
+        AppState.objects = getCombinedObjectsForRender();
         uid = data.uid || uid;
         defaultFPS = data.defaultFPS || 12;
-        if (data.viewOffset) viewOffset = data.viewOffset;
-        if (data.viewScale) viewScale = data.viewScale;
-        if (data.canvasBounds) canvasBounds = data.canvasBounds;
-        if (!canvasBounds.rotation) canvasBounds.rotation = 0;
-        canvasBoundsEnabled = !!data.canvasBoundsEnabled;
+        if (data.viewOffset) AppState.viewOffset = data.viewOffset;
+        if (data.viewScale) AppState.viewScale = data.viewScale;
+        if (data.canvasBounds) AppState.canvasBounds = data.canvasBounds;
+        if (!AppState.canvasBounds.rotation) AppState.canvasBounds.rotation = 0;
+        AppState.canvasBoundsEnabled = !!data.canvasBoundsEnabled;
         if (data.canvasBaseBounds) canvasBaseBounds = data.canvasBaseBounds;
         canvasMaskEnabled = !!data.canvasMaskEnabled;
         if (data.canvasMaskAlpha !== undefined) canvasMaskAlpha = data.canvasMaskAlpha;
@@ -798,8 +766,8 @@ function setGlobalPropForBound(obj, path, value) {
           if (ftEl) ftEl.checked = frameThumbMode;
         }
         if (data.multiSelectMode !== undefined) multiSelectMode = !!data.multiSelectMode;
-        selected = null;
-        canvasSelected = false;
+        AppState.selected = null;
+        AppState.canvasSelected = false;
         trackThumbCache.clear();
         applyFPS(defaultFPS);
         updateFrameBar();
@@ -808,8 +776,8 @@ function setGlobalPropForBound(obj, path, value) {
         syncCanvasMaskUI();
         syncCanvasUI();
         syncAdvToggles();
-        syncUI();
-        render();
+        EventBus.emit('need:syncUI');
+        EventBus.emit('need:render');
         console.log('[AutoArchive] 已自动恢复存档');
       });
       return true;
@@ -818,37 +786,13 @@ function setGlobalPropForBound(obj, path, value) {
     }
   }
 
-  function clearAutoArchive() {
-    if (!autoArchiveDB) return;
-    try {
-      const tx = autoArchiveDB.transaction(AUTO_ARCHIVE_STORE, 'readwrite');
-      const store = tx.objectStore(AUTO_ARCHIVE_STORE);
-      store.delete(AUTO_ARCHIVE_KEY);
-      tx.oncomplete = () => alert('自动存档已清除');
-      tx.onerror = (e) => alert('清除失败: ' + e.target.error);
-    } catch (err) {
-      alert('清除失败: ' + err.message);
-    }
-  }
 
-  openAutoArchiveDB()
-    .then(() => loadFromAutoArchive())
-    .then(data => { if (data) restoreFromAutoArchive(data); })
-    .catch(err => { autoArchiveEnabled = false; });
-
-  const btnClearAutoArchive = document.getElementById('btnClearAutoArchive');
-  if (btnClearAutoArchive) {
-    btnClearAutoArchive.onclick = () => {
-      if (confirm('确定清除自动存档？此操作不可恢复。')) clearAutoArchive();
-    };
-  }
-
-  window.addEventListener('beforeunload', () => saveToAutoArchive());
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') saveToAutoArchive();
+  /* ==================== 自动存档（已迁移至 js/systems/autosave.js） ==================== */
+  SKFE.systems.autosave.init({
+    collectData: () => collectAutoArchiveData(),        // app.js 里的原函数
+    applyData: (data) => restoreFromAutoArchive(data),  // app.js 里的原函数
   });
-  window.addEventListener('pagehide', () => saveToAutoArchive());
-  autoArchivePeriodicTimer = setInterval(() => { if (autoArchiveEnabled) saveToAutoArchive(); }, 20000);
+  SKFE.systems.autosave.boot();
 
   /* ==================== 参考视频 ==================== */
   let refVideo = null;
@@ -879,7 +823,7 @@ function setGlobalPropForBound(obj, path, value) {
 
   function getFrameStartTime(idx) {
     let time = 0;
-    for (let i = 0; i < idx; i++) time += frames[i].duration;
+    for (let i = 0; i < idx; i++) time += AppState.frames[i].duration;
     return time / 1000;
   }
 
@@ -905,7 +849,7 @@ function setGlobalPropForBound(obj, path, value) {
       const onSeeked = () => {
         refVideo.removeEventListener('seeked', onSeeked);
         captureVideoFrame(idx);
-        if (currentFrameIndex === idx) render();
+        if (AppState.currentFrameIndex === idx) EventBus.emit('need:render');
       };
       refVideo.addEventListener('seeked', onSeeked);
     }, 30);
@@ -948,7 +892,7 @@ function setGlobalPropForBound(obj, path, value) {
       // 临时设为 100% 不透明并置顶
       videoObj.alpha = 1;
       videoObj.layer = 999999;
-      render();
+      EventBus.emit('need:render');
 
       // 松手逻辑（绑定到 window 防止手指滑出按钮捕获不到）
       const endHold = () => {
@@ -956,7 +900,7 @@ function setGlobalPropForBound(obj, path, value) {
         videoObj.alpha = refVideoTopHold.alpha;
         videoObj.layer = refVideoTopHold.layer;
         refVideoTopHold = null;
-        render();
+        EventBus.emit('need:render');
         window.removeEventListener('pointerup', endHold);
         window.removeEventListener('pointercancel', endHold);
       };
@@ -995,7 +939,7 @@ function setGlobalPropForBound(obj, path, value) {
     if (refVideoUrl) { URL.revokeObjectURL(refVideoUrl); refVideoUrl = null; }
     videoCache = {};
     refVideoPlaying = false;
-    if (videoObj) { if (selected === videoObj) selected = null; videoObj = null; }
+    if (videoObj) { if (AppState.selected === videoObj) AppState.selected = null; videoObj = null; }
     updateVideoUI();
     showVideoProgress(0);
 
@@ -1024,8 +968,8 @@ function setGlobalPropForBound(obj, path, value) {
           scale: 1, alpha: 0.55, layer: -9999, locked: false
         };
         updateVideoUI();
-        seekVideoToFrame(currentFrameIndex);
-        render();
+        seekVideoToFrame(AppState.currentFrameIndex);
+        EventBus.emit('need:render');
         setTimeout(() => { if (token === videoLoadToken) hideVideoProgress(); }, 250);
       });
       refVideo.addEventListener('error', () => {
@@ -1034,9 +978,9 @@ function setGlobalPropForBound(obj, path, value) {
       });
       refVideo.addEventListener('ended', () => {
         refVideoPlaying = false;
-        seekVideoToFrame(currentFrameIndex);
+        seekVideoToFrame(AppState.currentFrameIndex);
         updateVideoUI();
-        render();
+        EventBus.emit('need:render');
       });
       refVideo.load();
       updateVideoUI();
@@ -1048,13 +992,13 @@ function setGlobalPropForBound(obj, path, value) {
     if (!refVideo) return;
     refVideoVisible = !refVideoVisible;
     updateVideoUI();
-    render();
+    EventBus.emit('need:render');
   };
 
   document.getElementById('btnPlayVideo').onclick = () => {
     if (!refVideo) return;
     if (refVideo.paused) {
-      const startTime = getFrameStartTime(currentFrameIndex);
+      const startTime = getFrameStartTime(AppState.currentFrameIndex);
       refVideo.currentTime = Math.min(startTime, refVideo.duration - 0.1);
       refVideo.muted = false;
       refVideo.play().catch(() => {});
@@ -1069,35 +1013,6 @@ function setGlobalPropForBound(obj, path, value) {
   };
 
   /* ==================== 颜色工具 ==================== */
-  function darkenColor(hex, factor = 0.55) {
-    let c = hex.replace('#', '');
-    if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2];
-    let r = parseInt(c.substring(0, 2), 16);
-    let g = parseInt(c.substring(2, 4), 16);
-    let b = parseInt(c.substring(4, 6), 16);
-    r = Math.floor(r * factor);
-    g = Math.floor(g * factor);
-    b = Math.floor(b * factor);
-    return '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
-  }
-  function hexToRgb(hex) {
-    const c = hex.replace('#', '');
-    if (c.length === 3) return [parseInt(c[0] + c[0], 16), parseInt(c[1] + c[1], 16), parseInt(c[2] + c[2], 16)];
-    return [parseInt(c.substring(0, 2), 16), parseInt(c.substring(2, 4), 16), parseInt(c.substring(4, 6), 16)];
-  }
-  function rgbToHex(r, g, b) {
-    return '#' + [r, g, b].map(x => {
-      const hex = Math.round(x).toString(16);
-      return hex.length === 1 ? '0' + hex : hex;
-    }).join('');
-  }
-  function lerpColor(c1, c2, t) {
-    if (!c1 || !c2) return c1 || c2;
-    try {
-      const a = hexToRgb(c1), b = hexToRgb(c2);
-      return rgbToHex(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t);
-    } catch (e) { return c1; }
-  }
 
   /* ==================== 预设 ==================== */
   function loadPresetsFromStorage() {
@@ -1173,29 +1088,29 @@ function setGlobalPropForBound(obj, path, value) {
   }
 
   function savePreset() {
-    if (!selected || selected.type !== 'figure') return;
+    if (!AppState.selected || AppState.selected.type !== 'figure') return;
     const nameInput = document.getElementById('presetNameInput');
     const name = nameInput.value.trim() || ('预设' + (presets.length + 1));
     const data = {
-      color: selected.color, lw: selected.lw, alpha: selected.alpha, scale: selected.scale,
-      rot: selected.rot || 0, mirror: !!selected.mirror,
-      headFilled: selected.headFilled,
-      headFillCustom: !!selected.headFillCustom,
-      headFillColor: selected.headFillColor || '#111111',
-      bodyScale: JSON.parse(JSON.stringify(selected.bodyScale)),
-      headAngle: selected.headAngle,
-      light: JSON.parse(JSON.stringify(selected.light)),
-      glow: JSON.parse(JSON.stringify(selected.glow)),
-      joint: JSON.parse(JSON.stringify(selected.joint)),
-      extremity: JSON.parse(JSON.stringify(selected.extremity)),
-      layer: JSON.parse(JSON.stringify(selected.layer)),
-      a: JSON.parse(JSON.stringify(selected.a)),
-      depth: JSON.parse(JSON.stringify(selected.depth || { enabled: false, useCustom: false, customColor: '#555555' })),
-      ikEnabled: selected.ikEnabled,
-      shadowOffX: selected.shadowOffX || 0, shadowOffY: selected.shadowOffY || 0,
-      shadowScaleX: selected.shadowScaleX || 1, shadowScaleY: selected.shadowScaleY || 1
+      color: AppState.selected.color, lw: AppState.selected.lw, alpha: AppState.selected.alpha, scale: AppState.selected.scale,
+      rot: AppState.selected.rot || 0, mirror: !!AppState.selected.mirror,
+      headFilled: AppState.selected.headFilled,
+      headFillCustom: !!AppState.selected.headFillCustom,
+      headFillColor: AppState.selected.headFillColor || '#111111',
+      bodyScale: JSON.parse(JSON.stringify(AppState.selected.bodyScale)),
+      headAngle: AppState.selected.headAngle,
+      light: JSON.parse(JSON.stringify(AppState.selected.light)),
+      glow: JSON.parse(JSON.stringify(AppState.selected.glow)),
+      joint: JSON.parse(JSON.stringify(AppState.selected.joint)),
+      extremity: JSON.parse(JSON.stringify(AppState.selected.extremity)),
+      layer: JSON.parse(JSON.stringify(AppState.selected.layer)),
+      a: JSON.parse(JSON.stringify(AppState.selected.a)),
+      depth: JSON.parse(JSON.stringify(AppState.selected.depth || { enabled: false, useCustom: false, customColor: '#555555' })),
+      ikEnabled: AppState.selected.ikEnabled,
+      shadowOffX: AppState.selected.shadowOffX || 0, shadowOffY: AppState.selected.shadowOffY || 0,
+      shadowScaleX: AppState.selected.shadowScaleX || 1, shadowScaleY: AppState.selected.shadowScaleY || 1
     };
-    const boundAccs = objects.filter(o => o.type === 'acc' && o.targetId === selected.id);
+    const boundAccs = AppState.objects.filter(o => o.type === 'acc' && o.targetId === AppState.selected.id);
     const accessories = boundAccs.map(acc => ({
       imgSrc: acc.img.src, w: acc.w, h: acc.h, alpha: acc.alpha, scale: acc.scale,
       layer: acc.layer, bindTo: acc.bindTo, offX: acc.offX, offY: acc.offY, rot: acc.rot
@@ -1260,7 +1175,7 @@ function setGlobalPropForBound(obj, path, value) {
         }));
       });
     }
-    Promise.all(promises).then(() => { select(f); render(); saveHistory('加载预设'); });
+    Promise.all(promises).then(() => { select(f); EventBus.emit('need:render'); EventBus.emit('history:save', '加载预设'); });
   }
 
   /* ==================== 动作库 ==================== */
@@ -1401,15 +1316,15 @@ function setGlobalPropForBound(obj, path, value) {
   }
 
   function saveActionPreset() {
-    if (!selected || selected.type !== 'figure') return alert('请先选中一个火柴人');
+    if (!AppState.selected || AppState.selected.type !== 'figure') return alert('请先选中一个火柴人');
     const nameInput = document.getElementById('actionNameInput');
     const name = nameInput.value.trim() || ('动作 ' + (actionPresets.length + 1));
 
-    const targetId = String(selected.id);
+    const targetId = String(AppState.selected.id);
 
     /* 找到第一个非空帧作为基准（10A） */
     let baseFig = null;
-    for (let i = 0; i < frames.length; i++) {
+    for (let i = 0; i < AppState.frames.length; i++) {
       const fig = getTrackFrame(targetId, i);
       if (fig) { baseFig = fig; break; }
     }
@@ -1425,7 +1340,7 @@ function setGlobalPropForBound(obj, path, value) {
     let baseX = null, baseY = null;
     const extractedFrames = [];
 
-    for (let i = 0; i < frames.length; i++) {
+    for (let i = 0; i < AppState.frames.length; i++) {
       const fig = getTrackFrame(targetId, i);
       if (fig) {
         if (baseX === null) { baseX = fig.x; baseY = fig.y; }
@@ -1482,25 +1397,25 @@ function setGlobalPropForBound(obj, path, value) {
   }
 
   function applyActionPreset(preset) {
-    if (!selected || selected.type !== 'figure') return alert('请先选中一个火柴人');
-    const targetId = String(selected.id);
-    const targetX = selected.x;
-    const targetY = selected.y;
+    if (!AppState.selected || AppState.selected.type !== 'figure') return alert('请先选中一个火柴人');
+    const targetId = String(AppState.selected.id);
+    const targetX = AppState.selected.x;
+    const targetY = AppState.selected.y;
 
     /* 捕获目标基准（18A：当前帧状态） */
     const targetBase = {
-      scale: selected.scale || 1,
-      rot: selected.rot || 0,
-      bodyScale: JSON.parse(JSON.stringify(selected.bodyScale || {})),
-      hasIndep: hasIndepLimbs(selected.bodyScale)
+      scale: AppState.selected.scale || 1,
+      rot: AppState.selected.rot || 0,
+      bodyScale: JSON.parse(JSON.stringify(AppState.selected.bodyScale || {})),
+      hasIndep: hasIndepLimbs(AppState.selected.bodyScale)
     };
 
     const isV2 = preset.version === 2 && preset.savedBase;   /* 21A：老动作按无变化处理 */
     const savedBase = isV2 ? preset.savedBase : null;
 
-    const templateFig = cloneObjectKeepImg(selected);
-    const startIndex = currentFrameIndex;                     /* 17A */
-    const t = ensureTrack(targetId, selected.name);
+    const templateFig = cloneObjectKeepImg(AppState.selected);
+    const startIndex = AppState.currentFrameIndex;                     /* 17A */
+    const t = ensureTrack(targetId, AppState.selected.name);
 
     preset.frames.forEach((data, i) => {
       const frameIdx = startIndex + i;
@@ -1509,7 +1424,7 @@ function setGlobalPropForBound(obj, path, value) {
       let fig = null;
       if (data) {
         fig = cloneObjectKeepImg(templateFig);
-        fig.id = selected.id;
+        fig.id = AppState.selected.id;
         fig.x = targetX + data.dx;
         fig.y = targetY + data.dy;
         fig.a = JSON.parse(JSON.stringify(data.a));
@@ -1652,17 +1567,15 @@ function setGlobalPropForBound(obj, path, value) {
       t.frames[frameIdx] = fig;
 
       invalidateFrameThumb(frameIdx, targetId);
-      if (frames[frameIdx]) frames[frameIdx].isTween = false;
+      if (AppState.frames[frameIdx]) AppState.frames[frameIdx].isTween = false;
     });
 
     syncMainLengthFromTracks();
     trimTrailingEmptyFrames();
-    objects = getCombinedObjectsForRender();
-    selected = isSubTrackMode() ? getActiveTrackObject() : (objects.find(o => String(o.id) === targetId) || null);
+    AppState.objects = getCombinedObjectsForRender();
+    AppState.selected = isSubTrackMode() ? getActiveTrackObject() : (AppState.objects.find(o => String(o.id) === targetId) || null);
     updateFrameBar();
-    render();
-    syncUI();
-    saveHistory('应用动作');
+    EventBus.emit('app:update', '应用动作');
     alert('动作已应用');
   }
 
@@ -1717,12 +1630,12 @@ function importActionPresets() {
 
   /* ==================== 生成位置 ==================== */
   function getSpawnPoint() {
-    if (canvasBoundsEnabled) {
-      return { x: canvasBounds.x + canvasBounds.w / 2, y: canvasBounds.y + canvasBounds.h / 2 };
+    if (AppState.canvasBoundsEnabled) {
+      return { x: AppState.canvasBounds.x + AppState.canvasBounds.w / 2, y: AppState.canvasBounds.y + AppState.canvasBounds.h / 2 };
     }
     return {
-      x: (canvas.clientWidth / 2 - viewOffset.x) / viewScale,
-      y: (canvas.clientHeight / 2 - viewOffset.y) / viewScale
+      x: (canvas.clientWidth / 2 - AppState.viewOffset.x) / AppState.viewScale,
+      y: (canvas.clientHeight / 2 - AppState.viewOffset.y) / AppState.viewScale
     };
   }
 
@@ -2047,41 +1960,17 @@ function importActionPresets() {
     refreshTimelineDockOffsets();
     resize();
     /* 摄像机视角下，时间轴开关会改变可用区域 → 重新适配，保证取景框不被遮挡 */
-    if (isCameraTrackId(activeTrackId)) {
-      fitCameraViewToAvailableArea();
-      render();
+    if (isCameraTrackId(AppState.activeTrackId)) {
+      SKFE.systems.camera.fitCameraViewToAvailableArea();
+      EventBus.emit('need:render');
     }
   }
   document.getElementById('btnShowTimeline').onclick = () => toggleTimeline(true);
   document.getElementById('btnHideTimeline').onclick = () => toggleTimeline(false);
 
   /* ==================== 几何/工具 ==================== */
-  const along = (p, ang, len) => ({ x: p.x + Math.cos(ang) * len, y: p.y + Math.sin(ang) * len });
-  const norm = a => Math.atan2(Math.sin(a), Math.cos(a));
 
-  function distToSeg(p, a, b) {
-    const vx = b.x - a.x, vy = b.y - a.y;
-    const wx = p.x - a.x, wy = p.y - a.y;
-    const c1 = vx * wx + vy * wy;
-    if (c1 <= 0) return Math.hypot(p.x - a.x, p.y - a.y);
-    const c2 = vx * vx + vy * vy;
-    if (c2 <= c1) return Math.hypot(p.x - b.x, p.y - b.y);
-    const t = c1 / c2;
-    return Math.hypot(p.x - (a.x + vx * t), p.y - (a.y + vy * t));
-  }
 
-  function worldToFigureLocal(fig, p) {
-    let dx = p.x - fig.x, dy = p.y - fig.y;
-    const rot = (fig.rot || 0) * Math.PI / 180;
-    if (rot) {
-      const c = Math.cos(-rot), s = Math.sin(-rot);
-      const nx = dx * c - dy * s;
-      const ny = dx * s + dy * c;
-      dx = nx; dy = ny;
-    }
-    if (fig.mirror) dx = -dx;
-    return { x: fig.x + dx, y: fig.y + dy };
-  }
 
   /* ==================== 对象工厂 ==================== */
   function makeFigure(x, y, color, lw) {
@@ -2173,6 +2062,7 @@ function importActionPresets() {
       obj.name = map[obj.shape] + counts.shape;
     } else if (obj.type === 'bubble') { counts.bubble++; obj.name = 'Bubble' + counts.bubble; }
     else if (obj.type === 'camera') { counts.camera = (counts.camera || 0) + 1; obj.name = 'Camera' + counts.camera; }
+    else if (obj.type === 'ink') { counts.ink = (counts.ink || 0) + 1; obj.name = 'Ink' + counts.ink; } // brush-v5.1.0: §6.3.9
   }
 
   /* ==================== 末端样式 ==================== */
@@ -2424,7 +2314,7 @@ function importActionPresets() {
     if (obj.bindTo === 'none' || !obj.targetId) {
       return { x: obj.x, y: obj.y, angle: (obj.rot || 0) * Math.PI / 180, syncScale: 1 };
     }
-    const list = _renderList || objects;
+    const list = _renderList || AppState.objects;
     const fig = list.find(o => o.id === obj.targetId && o.type === 'figure');
     if (!fig) return { x: obj.x, y: obj.y, angle: (obj.rot || 0) * Math.PI / 180, syncScale: 1 };
     const j = jointData(fig);
@@ -2533,10 +2423,10 @@ function importActionPresets() {
   /* ==================== 绘制基础 ==================== */
   function drawGrid(w, h) {
     const s = Math.max(8, gridSize);
-    const x0 = -viewOffset.x / viewScale;
-    const y0 = -viewOffset.y / viewScale;
-    const x1 = (canvas.clientWidth - viewOffset.x) / viewScale;
-    const y1 = (canvas.clientHeight - viewOffset.y) / viewScale;
+    const x0 = -AppState.viewOffset.x / AppState.viewScale;
+    const y0 = -AppState.viewOffset.y / AppState.viewScale;
+    const x1 = (canvas.clientWidth - AppState.viewOffset.x) / AppState.viewScale;
+    const y1 = (canvas.clientHeight - AppState.viewOffset.y) / AppState.viewScale;
 
     if (gridEnabled) {
       ctx.fillStyle = 'rgba(120,140,170,0.40)';
@@ -2550,10 +2440,10 @@ function importActionPresets() {
     }
     ctx.save();
     ctx.strokeStyle = 'rgba(120,140,170,0.75)';
-    ctx.lineWidth = 1 / viewScale;
+    ctx.lineWidth = 1 / AppState.viewScale;
     ctx.beginPath();
-    ctx.moveTo(-8 / viewScale, 0); ctx.lineTo(8 / viewScale, 0);
-    ctx.moveTo(0, -8 / viewScale); ctx.lineTo(0, 8 / viewScale);
+    ctx.moveTo(-8 / AppState.viewScale, 0); ctx.lineTo(8 / AppState.viewScale, 0);
+    ctx.moveTo(0, -8 / AppState.viewScale); ctx.lineTo(0, 8 / AppState.viewScale);
     ctx.stroke();
     ctx.restore();
   }
@@ -2562,8 +2452,8 @@ function importActionPresets() {
     const y = groundLineY;
     ctx.save();
     ctx.strokeStyle = '#10b981';
-    ctx.lineWidth = 1.5 / viewScale;
-    ctx.setLineDash([10 / viewScale, 6 / viewScale]);
+    ctx.lineWidth = 1.5 / AppState.viewScale;
+    ctx.setLineDash([10 / AppState.viewScale, 6 / AppState.viewScale]);
     ctx.beginPath();
     ctx.moveTo(-100000, y);
     ctx.lineTo(100000, y);
@@ -2571,36 +2461,36 @@ function importActionPresets() {
     ctx.restore();
     ctx.save();
     ctx.fillStyle = '#10b981';
-    ctx.font = `bold ${12 / viewScale}px system-ui`;
+    ctx.font = `bold ${12 / AppState.viewScale}px system-ui`;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'bottom';
-    const screenLeftX = -viewOffset.x / viewScale + 10 / viewScale;
-    ctx.fillText(`Y: ${Math.round(displayY(y))}`, screenLeftX, y - 4 / viewScale);
+    const screenLeftX = -AppState.viewOffset.x / AppState.viewScale + 10 / AppState.viewScale;
+    ctx.fillText(`Y: ${Math.round(displayY(y))}`, screenLeftX, y - 4 / AppState.viewScale);
     ctx.restore();
   }
 
   function drawCanvasBounds() {
-    if (!canvasBoundsEnabled) return;
+    if (!AppState.canvasBoundsEnabled) return;
     if (canvasMaskEnabled && canvasMaskAlpha >= 0.99) return;
     ctx.save();
-    ctx.translate(canvasBounds.x + canvasBounds.w / 2, canvasBounds.y + canvasBounds.h / 2);
-    ctx.rotate(canvasBounds.rotation || 0);
-    ctx.strokeStyle = canvasSelected ? '#1f5fcc' : '#4a90ff';
-    ctx.lineWidth = (canvasSelected ? 3 : 2) / viewScale;
-    ctx.setLineDash([8 / viewScale, 8 / viewScale]);
-    if (canvasSelected) {
+    ctx.translate(AppState.canvasBounds.x + AppState.canvasBounds.w / 2, AppState.canvasBounds.y + AppState.canvasBounds.h / 2);
+    ctx.rotate(AppState.canvasBounds.rotation || 0);
+    ctx.strokeStyle = AppState.canvasSelected ? '#1f5fcc' : '#4a90ff';
+    ctx.lineWidth = (AppState.canvasSelected ? 3 : 2) / AppState.viewScale;
+    ctx.setLineDash([8 / AppState.viewScale, 8 / AppState.viewScale]);
+    if (AppState.canvasSelected) {
       ctx.fillStyle = 'rgba(74, 144, 255, 0.08)';
-      ctx.fillRect(-canvasBounds.w / 2, -canvasBounds.h / 2, canvasBounds.w, canvasBounds.h);
+      ctx.fillRect(-AppState.canvasBounds.w / 2, -AppState.canvasBounds.h / 2, AppState.canvasBounds.w, AppState.canvasBounds.h);
     }
-    ctx.strokeRect(-canvasBounds.w / 2, -canvasBounds.h / 2, canvasBounds.w, canvasBounds.h);
-    if (canvasSelected) {
+    ctx.strokeRect(-AppState.canvasBounds.w / 2, -AppState.canvasBounds.h / 2, AppState.canvasBounds.w, AppState.canvasBounds.h);
+    if (AppState.canvasSelected) {
       ctx.setLineDash([]);
-      ctx.font = `bold ${14 / viewScale}px system-ui, sans-serif`;
+      ctx.font = `bold ${14 / AppState.viewScale}px system-ui, sans-serif`;
       ctx.fillStyle = '#4a90ff';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('▲ 上', 0, -canvasBounds.h / 2 - 16 / viewScale);
-      ctx.fillText('▼ 下', 0, canvasBounds.h / 2 + 16 / viewScale);
+      ctx.fillText('▲ 上', 0, -AppState.canvasBounds.h / 2 - 16 / AppState.viewScale);
+      ctx.fillText('▼ 下', 0, AppState.canvasBounds.h / 2 + 16 / AppState.viewScale);
     }
     ctx.restore();
   }
@@ -3005,14 +2895,14 @@ function importActionPresets() {
         sctx.globalCompositeOperation = 'destination-out';
         sctx.lineCap = 'round'; sctx.lineJoin = 'round';
 
-        const segs = getLimbSegs(j, limbName);
+        const segs = SKFE.systems.eraser.getLimbSegs(j, limbName);
         for (const st of strokes) {
           const segIdx = (typeof st.seg === 'number' && st.seg >= 0 && st.seg < segs.length) ? st.seg : 0;
           const seg = segs[segIdx] || segs[0];
           if (!seg) continue;
           sctx.beginPath();
           for (let i = 0; i < st.points.length; i++) {
-            const P = segLocalToWorld(st.points[i], seg[0], seg[1]);
+            const P = SKFE.systems.eraser.segLocalToWorld(st.points[i], seg[0], seg[1]);
             if (i === 0) sctx.moveTo(P.x, P.y);
             else sctx.lineTo(P.x, P.y);
           }
@@ -3104,7 +2994,7 @@ function importActionPresets() {
           const seg = segs[segIdx] || segs[0];
           sctx.beginPath();
           for (let i = 0; i < st.points.length; i++) {
-            const P = segLocalToWorld(st.points[i], seg[0], seg[1]);
+            const P = SKFE.systems.eraser.segLocalToWorld(st.points[i], seg[0], seg[1]);
             if (i === 0) sctx.moveTo(P.x, P.y);
             else sctx.lineTo(P.x, P.y);
           }
@@ -3193,7 +3083,7 @@ function importActionPresets() {
 
   function getBoundFigureTransform(o) {
     if (!o || o.bindTo === 'none' || !o.targetId) return null;
-    const list = _renderList || objects;
+    const list = _renderList || AppState.objects;
     const fig = list.find(f => f.id === o.targetId && f.type === 'figure');
     if (!fig) return null;
     if (!fig.rot && !fig.mirror) return null;
@@ -3367,6 +3257,181 @@ function importActionPresets() {
     }});
   }
 
+  /* ==================== 画笔元件 ink：局部矩阵与渲染（brush-v5.1.0） ==================== */
+  /* ink 的局部坐标 → 世界坐标矩阵，必须与 queueInk 中的 ctx 变换顺序完全一致，
+     供 eraser.js / brush.js 复用（反算局部坐标、擦除遮罩定位）。 */
+  function getInkLocalMatrix(ink) {
+    const trans = getBindTransform(ink);
+    const figTr = getBoundFigureTransform(ink);
+    const finalScale = (ink.scale || 1) * (trans.syncScale || 1);
+    const { ax, ay } = getAnchorOffset(ink, finalScale);
+    let m = tboxMatIdentity();
+    if (figTr) {
+      m = tboxMatMul(m, tboxMatT(figTr.x, figTr.y));
+      if (figTr.rot) m = tboxMatMul(m, tboxMatR(figTr.rot * Math.PI / 180));
+      if (figTr.mirror) m = tboxMatMul(m, tboxMatS(-1, 1));
+      m = tboxMatMul(m, tboxMatT(-figTr.x, -figTr.y));
+    }
+    m = tboxMatMul(m, tboxMatT(trans.x + ax, trans.y + ay));
+    m = tboxMatMul(m, tboxMatR(trans.angle));
+    if (ink.mirror) m = tboxMatMul(m, tboxMatS(-1, 1));
+    m = tboxMatMul(m, tboxMatT(-ax, -ay));
+    m = tboxMatMul(m, tboxMatS(finalScale, finalScale));
+    return m;
+  }
+
+  /* 世界坐标 → 屏幕坐标（普通视图 / 摄像机子轨道视角） */
+  function worldToScreenPoint(p) {
+    const cam = SKFE.systems.camera.getCameraViewObject();
+    if (cam) {
+      const t = SKFE.systems.camera.getCameraViewTransform(cam);
+      const A = (p.x - cam.x) * t.fit;
+      const B = (p.y - cam.y) * t.fit;
+      const c = Math.cos(t.rot), s = Math.sin(t.rot);
+      return { x: t.cx + A * c + B * s, y: t.cy - A * s + B * c };
+    }
+    return {
+      x: p.x * AppState.viewScale + AppState.viewOffset.x,
+      y: p.y * AppState.viewScale + AppState.viewOffset.y
+    };
+  }
+
+  /* brush-v5.1.2: 在 ink 自己的坐标系里画一段擦除遮罩（destination-out）。
+     与 eraser.js 的 drawEraseMask 等价，区别是它可以和笔迹交替绘制，
+     从而支持"擦除之后又画上去"这种顺序关系。
+     此时 ctx 已套用 fig 旋转/镜像，坐标按 local * finalScale 给，线宽是世界单位。 */
+  function drawInkMaskLocal(c, er, fs) {
+    const pts = er && er.points;
+    if (!pts || !pts.length) return;
+    const width = Math.max(0.0001, er.size || 1);
+    c.save();
+    c.globalCompositeOperation = 'destination-out';
+    c.globalAlpha = 1;
+    c.lineCap = 'round';
+    c.lineJoin = 'round';
+    c.lineWidth = width;
+    c.strokeStyle = '#000';
+    c.fillStyle = '#000';
+    if (pts.length === 1) {
+      c.beginPath();
+      c.arc(pts[0].x * fs, pts[0].y * fs, width / 2, 0, TAU);
+      c.fill();
+    } else {
+      c.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        const x = pts[i].x * fs, y = pts[i].y * fs;
+        if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
+      }
+      c.stroke();
+    }
+    c.restore();
+  }
+
+  /* 6.3.2 画笔元件渲染（边先芯后：同一笔内"边被芯覆盖"） */
+  function queueInk(ink, isSel, isExporting, opts) {
+    opts = opts || {};
+    if (!ink || !ink.strokes || !ink.strokes.length) return;
+    /* 正在重绘编辑的元件由 overlay 实时绘制，主画布跳过它，避免重影 */
+    const brushMod = SKFE.systems.brush;
+    if (!isExporting && brushMod && brushMod.getEditingInk && brushMod.getEditingInk() === ink) return;
+
+    const alphaMul = resolveAlphaMul(opts, ink);
+    const trans = getBindTransform(ink);
+    const figTr = getBoundFigureTransform(ink);
+    const finalScale = (ink.scale || 1) * (trans.syncScale || 1);
+    const { ax, ay } = getAnchorOffset(ink, finalScale);
+    const halfW = ((ink.w || 0) * finalScale) / 2;
+    const halfH = ((ink.h || 0) * finalScale) / 2;
+    const alpha = (ink.alpha === undefined ? 1 : ink.alpha);
+
+    renderQueue.push({ level: ink.layer, draw: () => {
+      ctx.save();
+      applyFigTransformCtx(figTr);
+      ctx.globalAlpha = alpha * alphaMul;
+      ctx.translate(trans.x + ax, trans.y + ay);
+      ctx.rotate(trans.angle);
+      if (ink.mirror) ctx.scale(-1, 1);
+      ctx.translate(-ax, -ay);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      /* brush-v5.1.2: 笔迹与擦除遮罩按落笔顺序 z 交替绘制 —— 遮罩只吃掉它之前的笔迹。
+         以前是"先画完所有笔迹、再统一叠遮罩"，导致编辑时"先擦除再画上去"的新笔迹
+         在确定后又被旧遮罩擦掉（看起来像没保存）。 */
+      const inkErasers = ink.eraser || [];
+      let ordered = ink.strokes;
+      if (inkErasers.length) {
+        ordered = [];
+        for (const s of ink.strokes) ordered.push({ __inkMask: false, z: (typeof s.z === 'number' ? s.z : 0), s });
+        for (const er of inkErasers) ordered.push({ __inkMask: true, z: (typeof er.z === 'number' ? er.z : 1e9), er });
+        ordered.sort((a, b) => a.z - b.z);   /* 稳定排序：同 z 时笔迹先于遮罩 */
+      }
+
+      for (const item of ordered) {
+        if (item.__inkMask) { drawInkMaskLocal(ctx, item.er, finalScale); continue; }
+        const s = item.__inkMask === false ? item.s : item;
+        const pts = s.points;
+        if (!pts || !pts.length) continue;
+
+        /* ---- 边（同一笔先画边，再画笔芯，保证边被芯覆盖） ---- */
+        if (s.borderWidth > 0 && s.borderColor) {
+          ctx.strokeStyle = s.borderColor;
+          ctx.fillStyle = s.borderColor;
+          if (pts.length === 1) {
+            const p = pts[0];
+            ctx.beginPath();
+            ctx.arc(p.x * finalScale, p.y * finalScale,
+              Math.max(p.w * finalScale / 2, 0.4) + s.borderWidth * finalScale, 0, TAU);
+            ctx.fill();
+          } else {
+            for (let i = 1; i < pts.length; i++) {
+              const a = pts[i - 1], b = pts[i];
+              ctx.lineWidth = Math.max(0.5,
+                ((a.w + b.w) / 2) * finalScale + s.borderWidth * 2 * finalScale);
+              ctx.beginPath();
+              ctx.moveTo(a.x * finalScale, a.y * finalScale);
+              ctx.lineTo(b.x * finalScale, b.y * finalScale);
+              ctx.stroke();
+            }
+          }
+        }
+
+        /* ---- 芯 ---- */
+        ctx.strokeStyle = s.color;
+        ctx.fillStyle = s.color;
+        if (pts.length === 1) {
+          const p = pts[0];
+          ctx.beginPath();
+          ctx.arc(p.x * finalScale, p.y * finalScale, Math.max(p.w * finalScale / 2, 0.4), 0, TAU);
+          ctx.fill();
+        } else {
+          for (let i = 1; i < pts.length; i++) {
+            const a = pts[i - 1], b = pts[i];
+            ctx.lineWidth = Math.max(0.4, ((a.w + b.w) / 2) * finalScale);
+            ctx.beginPath();
+            ctx.moveTo(a.x * finalScale, a.y * finalScale);
+            ctx.lineTo(b.x * finalScale, b.y * finalScale);
+            ctx.stroke();
+          }
+        }
+      }
+      ctx.restore();
+
+      /* ---- 选中虚线框（与其它元件一致；变换框开启时由变换框代替） ---- */
+      if (isSel && !isExporting && !transformBoxOn) {
+        ctx.save();
+        applyFigTransformCtx(figTr);
+        ctx.strokeStyle = ink.locked ? 'rgba(239, 68, 68, 0.95)' : 'rgba(255,165,0,.95)';
+        ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+        ctx.translate(trans.x + ax, trans.y + ay);
+        ctx.rotate(trans.angle);
+        if (ink.mirror) ctx.scale(-1, 1);
+        ctx.strokeRect(-halfW - ax, -halfH - ay, halfW * 2, halfH * 2);
+        ctx.restore();
+      }
+    }});
+  }
+
   function queueVideo(v, isSel, isExporting, opts) {
     if (isExporting) return;
     opts = opts || {};
@@ -3377,8 +3442,8 @@ function importActionPresets() {
       const dw = v.w * sc, dh = v.h * sc;
       ctx.save();
       ctx.globalAlpha = v.alpha * alphaMul;
-      if (!refVideoPlaying && videoCache[currentFrameIndex]) {
-        ctx.drawImage(videoCache[currentFrameIndex], v.x - dw / 2, v.y - dh / 2, dw, dh);
+      if (!refVideoPlaying && videoCache[AppState.currentFrameIndex]) {
+        ctx.drawImage(videoCache[AppState.currentFrameIndex], v.x - dw / 2, v.y - dh / 2, dw, dh);
       } else {
         ctx.drawImage(refVideo, v.x - dw / 2, v.y - dh / 2, dw, dh);
       }
@@ -3407,11 +3472,11 @@ function importActionPresets() {
     renderQueue = [];
 
     for (const o of list) {
-      const isSel = !isExporting && !opts.isGhost && o === selected;
-      if (o.type === 'camera') { queueCamera(o, isSel, isExporting, opts); continue; }
+      const isSel = !isExporting && !opts.isGhost && o === AppState.selected;
+      if (o.type === 'camera') { SKFE.systems.camera.queueCamera(o, isSel, isExporting, opts); continue; }
       // figure 的橡皮擦走 queueFigure 内部的肢体局部遮罩（drawMaskedLimb 等），
       // 只有图片/图形/对话框这类整体对象才走 drawErasedObjectGroup。
-      if (o.type !== 'figure' && hasEraserStrokes(o)) {
+      if (o.type !== 'figure' && SKFE.systems.eraser.hasStrokes(o)) {
         const before = renderQueue.length;
         queueObjectByType(o, isSel, isExporting, opts);
         const produced = renderQueue.splice(before);
@@ -3489,8 +3554,8 @@ function importActionPresets() {
 
   /* 变换框目标：优先画布边界，其次当前选中对象 */
   function getTransformBoxTarget() {
-    if (canvasSelected && canvasBoundsEnabled) return CANVAS_BOUNDS_TARGET;
-    if (selected && selected.type !== 'video') return selected;
+    if (AppState.canvasSelected && AppState.canvasBoundsEnabled) return CANVAS_BOUNDS_TARGET;
+    if (AppState.selected && AppState.selected.type !== 'video') return AppState.selected;
     return null;
   }
 
@@ -3498,9 +3563,9 @@ function importActionPresets() {
   function getObjectOBB(o) {
     if (!o) return null;
     if (o === CANVAS_BOUNDS_TARGET) {
-      const w = canvasBounds.w, h = canvasBounds.h;
-      const cx = canvasBounds.x + w / 2, cy = canvasBounds.y + h / 2;
-      const m = tboxMatMul(tboxMatT(cx, cy), tboxMatR(canvasBounds.rotation || 0));
+      const w = AppState.canvasBounds.w, h = AppState.canvasBounds.h;
+      const cx = AppState.canvasBounds.x + w / 2, cy = AppState.canvasBounds.y + h / 2;
+      const m = tboxMatMul(tboxMatT(cx, cy), tboxMatR(AppState.canvasBounds.rotation || 0));
       return tboxObbFromCorners(tboxQuadFromMatrix(m, -w / 2, -h / 2, w / 2, h / 2));
     }
     if (o.type === 'figure') {
@@ -3543,6 +3608,24 @@ function importActionPresets() {
       }
       return tboxObbFromCorners(tboxQuadFromMatrix(m, -w / 2, -h / 2, w / 2, h / 2));
     }
+    if (o.type === 'ink') { // brush-v5.1.0: §6.3.3
+      const trans = getBindTransform(o);
+      const figTr = getBoundFigureTransform(o);
+      const finalScale = (o.scale || 1) * (trans.syncScale || 1);
+      let m = tboxMatIdentity();
+      if (figTr) {
+        m = tboxMatMul(tboxMatT(figTr.x, figTr.y), tboxMatR(figTr.rot * Math.PI / 180));
+        if (figTr.mirror) m = tboxMatMul(m, tboxMatS(-1, 1));
+        m = tboxMatMul(m, tboxMatT(-figTr.x, -figTr.y));
+      }
+      const w = (o.w || 0) * finalScale, h = (o.h || 0) * finalScale;
+      const { ax, ay } = getAnchorOffset(o, finalScale);
+      m = tboxMatMul(m, tboxMatT(trans.x + ax, trans.y + ay));
+      m = tboxMatMul(m, tboxMatR(trans.angle));
+      if (o.mirror) m = tboxMatMul(m, tboxMatS(-1, 1));
+      m = tboxMatMul(m, tboxMatT(-ax, -ay));
+      return tboxObbFromCorners(tboxQuadFromMatrix(m, -w / 2, -h / 2, w / 2, h / 2));
+    }
     if (o.type === 'camera') {
       const w = o.w * (o.scale || 1), h = o.h * (o.scale || 1);
       const m = tboxMatMul(tboxMatT(o.x, o.y), tboxMatR((o.rot || 0) * Math.PI / 180));
@@ -3553,9 +3636,9 @@ function importActionPresets() {
 
   /* ---------- 世界坐标 → 屏幕坐标（普通视图 / 摄像机子轨道视角） ---------- */
   function tboxWorldToScreen(p) {
-    const cam = getCameraViewObject();
+    const cam = SKFE.systems.camera.getCameraViewObject();
     if (cam) {
-      const t = getCameraViewTransform(cam);
+      const t = SKFE.systems.camera.getCameraViewTransform(cam);
       const dx = p.x - cam.x, dy = p.y - cam.y;
       const c = Math.cos(-t.rot), s = Math.sin(-t.rot);
       return {
@@ -3563,12 +3646,12 @@ function importActionPresets() {
         y: t.cy + (dx * s + dy * c) * t.fit
       };
     }
-    return { x: p.x * viewScale + viewOffset.x, y: p.y * viewScale + viewOffset.y };
+    return { x: p.x * AppState.viewScale + AppState.viewOffset.x, y: p.y * AppState.viewScale + AppState.viewOffset.y };
   }
 
   /* 屏幕坐标 → 绑定空间（绑定对象在火柴人旋转/镜像后仍能正确移动） */
   function tboxWorldToBindSpace(o, p) {
-    if (!o || (o.type !== 'acc' && o.type !== 'shape' && o.type !== 'bubble')) return { x: p.x, y: p.y };
+    if (!o || (o.type !== 'acc' && o.type !== 'shape' && o.type !== 'bubble' && o.type !== 'ink')) return { x: p.x, y: p.y };
     const tr = getBoundFigureTransform(o);
     if (!tr) return { x: p.x, y: p.y };
     const dx = p.x - tr.x, dy = p.y - tr.y;
@@ -3664,7 +3747,7 @@ function importActionPresets() {
     place('tbBtnRotate', g.corners[3]);
     const mirrorBtn = document.getElementById('tbBtnMirror');
     const target = g.target;
-    const canMirror = target !== CANVAS_BOUNDS_TARGET && ['figure', 'image', 'acc', 'shape'].includes(target.type);
+    const canMirror = target !== CANVAS_BOUNDS_TARGET && ['figure', 'image', 'acc', 'shape', 'ink'].includes(target.type); // brush-v5.1.0: §6.3.4
     if (canMirror) place('tbBtnMirror', g.corners[0]);
     else if (mirrorBtn) mirrorBtn.style.display = 'none';
 
@@ -3682,7 +3765,7 @@ function importActionPresets() {
     if (!target) return false;
     if (target !== CANVAS_BOUNDS_TARGET && target.locked) return false;
     if (mode === 'mirror') {
-      return target !== CANVAS_BOUNDS_TARGET && ['figure', 'image', 'acc', 'shape'].includes(target.type);
+      return target !== CANVAS_BOUNDS_TARGET && ['figure', 'image', 'acc', 'shape', 'ink'].includes(target.type); // brush-v5.1.0: §6.3.4
     }
     if (target !== CANVAS_BOUNDS_TARGET && target.type === 'figure' && (mode === 'move' || mode === 'rotate')) {
       if (hasAnyPinInAllFrames(target)) {
@@ -3721,9 +3804,9 @@ function importActionPresets() {
       d.startLocal = { x: dx * c - dy * s, y: dx * s + dy * c };
     }
     if (target === CANVAS_BOUNDS_TARGET) {
-      d.canvas0 = { x: canvasBounds.x, y: canvasBounds.y, w: canvasBounds.w, h: canvasBounds.h };
-      d.centerWorld = { x: canvasBounds.x + canvasBounds.w / 2, y: canvasBounds.y + canvasBounds.h / 2 };
-      d.startRotDeg = d.accumRot = (canvasBounds.rotation || 0) * 180 / Math.PI;
+      d.canvas0 = { x: AppState.canvasBounds.x, y: AppState.canvasBounds.y, w: AppState.canvasBounds.w, h: AppState.canvasBounds.h };
+      d.centerWorld = { x: AppState.canvasBounds.x + AppState.canvasBounds.w / 2, y: AppState.canvasBounds.y + AppState.canvasBounds.h / 2 };
+      d.startRotDeg = d.accumRot = (AppState.canvasBounds.rotation || 0) * 180 / Math.PI;
       d.lastAngle = Math.atan2(world.y - d.centerWorld.y, world.x - d.centerWorld.x);
     } else {
       d.startX = target.x; d.startY = target.y;
@@ -3751,8 +3834,8 @@ function importActionPresets() {
     if (target === CANVAS_BOUNDS_TARGET) {
       const dx = world.x - d.worldStart.x, dy = world.y - d.worldStart.y;
       const cx = d.centerWorld.x + dx, cy = d.centerWorld.y + dy;
-      canvasBounds.x = cx - canvasBounds.w / 2;
-      canvasBounds.y = cy - canvasBounds.h / 2;
+      AppState.canvasBounds.x = cx - AppState.canvasBounds.w / 2;
+      AppState.canvasBounds.y = cy - AppState.canvasBounds.h / 2;
       syncCanvasUI();
       return;
     }
@@ -3783,7 +3866,7 @@ function importActionPresets() {
       const raw = ang - d.lastAngle;
       d.accumRot += Math.atan2(Math.sin(raw), Math.cos(raw)) * 180 / Math.PI;
       d.lastAngle = ang;
-      canvasBounds.rotation = d.accumRot * Math.PI / 180;
+      AppState.canvasBounds.rotation = d.accumRot * Math.PI / 180;
       // 同步更新基础属性面板里的旋转输入框
       if (objRotationInput && document.activeElement !== objRotationInput) {
         const deg = Math.round(d.accumRot);
@@ -3821,10 +3904,10 @@ function importActionPresets() {
       const ky = tboxClamp(ly / by, 0.05, 10);
       if (target === CANVAS_BOUNDS_TARGET) {
         const cx = d.centerWorld.x, cy = d.centerWorld.y;
-        canvasBounds.w = Math.max(10, d.canvas0.w * kx);
-        canvasBounds.h = Math.max(10, d.canvas0.h * ky);
-        canvasBounds.x = cx - canvasBounds.w / 2;
-        canvasBounds.y = cy - canvasBounds.h / 2;
+        AppState.canvasBounds.w = Math.max(10, d.canvas0.w * kx);
+        AppState.canvasBounds.h = Math.max(10, d.canvas0.h * ky);
+        AppState.canvasBounds.x = cx - AppState.canvasBounds.w / 2;
+        AppState.canvasBounds.y = cy - AppState.canvasBounds.h / 2;
         syncCanvasUI();
       } else {
         target.w = Math.max(1, (d.startW || 1) * kx);
@@ -3845,10 +3928,10 @@ function importActionPresets() {
     let k = tboxClamp(dist / d.startDist, 0.05, 10);
     if (target === CANVAS_BOUNDS_TARGET) {
       const cx = d.centerWorld.x, cy = d.centerWorld.y;
-      canvasBounds.w = Math.max(10, d.canvas0.w * k);
-      canvasBounds.h = Math.max(10, d.canvas0.h * k);
-      canvasBounds.x = cx - canvasBounds.w / 2;
-      canvasBounds.y = cy - canvasBounds.h / 2;
+      AppState.canvasBounds.w = Math.max(10, d.canvas0.w * k);
+      AppState.canvasBounds.h = Math.max(10, d.canvas0.h * k);
+      AppState.canvasBounds.x = cx - AppState.canvasBounds.w / 2;
+      AppState.canvasBounds.y = cy - AppState.canvasBounds.h / 2;
       syncCanvasUI();
       return;
     }
@@ -3872,8 +3955,8 @@ function importActionPresets() {
     e.stopPropagation();
     if (isPlaying) { cancelTransformBoxDrag(); return; }
     if (d.target === CANVAS_BOUNDS_TARGET) {
-      if (!canvasSelected || !canvasBoundsEnabled) { cancelTransformBoxDrag(); return; }
-    } else if (selected !== d.target) {
+      if (!AppState.canvasSelected || !AppState.canvasBoundsEnabled) { cancelTransformBoxDrag(); return; }
+    } else if (AppState.selected !== d.target) {
       cancelTransformBoxDrag(); return;
     }
     const screen = tboxScreenFromEvent(e);
@@ -3882,7 +3965,7 @@ function importActionPresets() {
     if (d.mode === 'move') applyTBoxMove(d, world);
     else if (d.mode === 'rotate') applyTBoxRotate(d, world);
     else if (d.mode === 'scale') applyTBoxScale(d, screen);
-    render();
+    EventBus.emit('need:render');
   }
 
   function removeTBoxDragListeners() {
@@ -3908,7 +3991,7 @@ function importActionPresets() {
       pointers.delete(e.pointerId);
     }
     snapLines = { x: null, y: null };
-    if (!d.moved) { render(); return; }
+    if (!d.moved) { EventBus.emit('need:render'); return; }
     if (d.mode === 'move' && d.target !== CANVAS_BOUNDS_TARGET && !d.bound) {
       applyGlobalPositionDeltaForObject(d.target, d.startPos);
     }
@@ -3920,8 +4003,8 @@ function importActionPresets() {
     markCurrentFrameModified();
     invalidateAllFrameThumbs();
     updateFrameBar();
-    syncUI();
-    render();
+    EventBus.emit('need:syncUI');
+    EventBus.emit('need:render');
   }
 
   /* 移动后把世界位移同步到该元件的其他帧 */
@@ -3930,13 +4013,16 @@ function importActionPresets() {
     if (o.type === 'figure') { applyGlobalPositionDelta(o, prev); return; }
     if (o.type === 'camera') { /* 摄像机也按位移同步 */ }
     if (o.type === 'video') return;
+    /* global-v5.1.1: 绑定元件的位置由 offX/offY 表达（拖动过程中已全局同步），这里跳过，
+       否则会拿世界坐标差去改 x/y，造成个别帧跑位 */
+    if (isBoundObj(o)) return;
     const dx = o.x - prev.x, dy = o.y - prev.y;
     if (!dx && !dy) return;
     const tid = String(o.id);
-    const t = tracks[tid];
+    const t = AppState.tracks[tid];
     if (!t || !t.frames) return;
     for (let i = 0; i < t.frames.length; i++) {
-      if (i === currentFrameIndex) continue;
+      if (i === AppState.currentFrameIndex) continue;
       const data = t.frames[i];
       if (data && String(data.id) === tid) { data.x += dx; data.y += dy; }
     }
@@ -3946,15 +4032,15 @@ function importActionPresets() {
   /* 单击镜像 */
   function toggleTransformBoxMirror(target) {
     if (!target || target === CANVAS_BOUNDS_TARGET) return;
-    if (!['figure', 'image', 'acc', 'shape'].includes(target.type) || target.locked) return;
+    if (!['figure', 'image', 'acc', 'shape', 'ink'].includes(target.type) || target.locked) return; // brush-v5.1.0: §6.3.4
     target.mirror = !target.mirror;
     if (isBoundObj(target)) setGlobalPropForBound(target, 'mirror', target.mirror);
     else setGlobalProp(target, 'mirror', target.mirror);
     markCurrentFrameModified();
     invalidateAllFrameThumbs();
     updateFrameBar();
-    render();
-    saveHistory('镜像对象');
+    EventBus.emit('need:render');
+    EventBus.emit('history:save', '镜像对象');
   }
 
   /* 绑定四角按钮 */
@@ -3986,8 +4072,8 @@ function importActionPresets() {
         transformBoxOn = !transformBoxOn;
         try { localStorage.setItem('skfe_transform_box_v1', transformBoxOn ? '1' : '0'); } catch (_) {}
         if (!transformBoxOn) cancelTransformBoxDrag();
-        syncUI();
-        render();
+        EventBus.emit('need:syncUI');
+        EventBus.emit('need:render');
       });
     }
     const btnFree = document.getElementById('btnFreeStretch');
@@ -3997,8 +4083,8 @@ function importActionPresets() {
         if (btnFree.disabled) return;
         freeStretchOn = !freeStretchOn;
         try { localStorage.setItem('skfe_free_stretch_v1', freeStretchOn ? '1' : '0'); } catch (_) {}
-        syncUI();
-        render();
+        EventBus.emit('need:syncUI');
+        EventBus.emit('need:render');
       });
     }
   })();
@@ -4006,20 +4092,20 @@ function importActionPresets() {
   /* ==================== 锚点标记 ==================== */
 
   function drawAnchorMarker() {
-    if (!selected || selected.locked) return;
-    const a = getRotatePivot(selected);
+    if (!AppState.selected || AppState.selected.locked) return;
+    const a = getRotatePivot(AppState.selected);
     if (!a) return;
     ctx.save();
     ctx.strokeStyle = 'rgba(239,68,68,0.95)';
-    ctx.lineWidth = 2 / viewScale;
-    ctx.setLineDash([5 / viewScale, 4 / viewScale]);
-    ctx.beginPath(); ctx.arc(a.x, a.y, 11 / viewScale, 0, TAU); ctx.stroke();
+    ctx.lineWidth = 2 / AppState.viewScale;
+    ctx.setLineDash([5 / AppState.viewScale, 4 / AppState.viewScale]);
+    ctx.beginPath(); ctx.arc(a.x, a.y, 11 / AppState.viewScale, 0, TAU); ctx.stroke();
     ctx.setLineDash([]);
     ctx.beginPath();
-    ctx.moveTo(a.x - 15 / viewScale, a.y); ctx.lineTo(a.x + 15 / viewScale, a.y);
-    ctx.moveTo(a.x, a.y - 15 / viewScale); ctx.lineTo(a.x, a.y + 15 / viewScale);
+    ctx.moveTo(a.x - 15 / AppState.viewScale, a.y); ctx.lineTo(a.x + 15 / AppState.viewScale, a.y);
+    ctx.moveTo(a.x, a.y - 15 / AppState.viewScale); ctx.lineTo(a.x, a.y + 15 / AppState.viewScale);
     ctx.stroke();
-    ctx.beginPath(); ctx.arc(a.x, a.y, 4 / viewScale, 0, TAU);
+    ctx.beginPath(); ctx.arc(a.x, a.y, 4 / AppState.viewScale, 0, TAU);
     ctx.fillStyle = 'rgba(239,68,68,0.95)'; ctx.fill();
     ctx.restore();
   }
@@ -4030,7 +4116,7 @@ function importActionPresets() {
     if (o.type === 'image') {
       return { x: o.x + (o.ax || 0) * o.scale, y: o.y + (o.ay || 0) * o.scale };
     }
-    if (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble') {
+    if (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble' || o.type === 'ink') {
       if (o.bindTo === 'none' || !o.targetId) {
         return { x: o.x + (o.ax || 0) * o.scale, y: o.y + (o.ay || 0) * o.scale };
       }
@@ -4068,25 +4154,25 @@ function importActionPresets() {
     const el = document.getElementById('coordDisplay');
     if (!el) return;
     
-    if (canvasSelected && canvasBoundsEnabled && !isPlaying) {
+    if (AppState.canvasSelected && AppState.canvasBoundsEnabled && !isPlaying) {
       document.getElementById('coordType').textContent = '🖼 画布';
       document.getElementById('coordXY').textContent =
-        `X: ${Math.round(canvasBounds.x + canvasBounds.w / 2)}  Y: ${Math.round(displayY(canvasBounds.y + canvasBounds.h / 2))}`;
-    } else if (selected && !isPlaying) {
+        `X: ${Math.round(AppState.canvasBounds.x + AppState.canvasBounds.w / 2)}  Y: ${Math.round(displayY(AppState.canvasBounds.y + AppState.canvasBounds.h / 2))}`;
+    } else if (AppState.selected && !isPlaying) {
       let x, y, typeIcon, typeName;
-      if (selected.type === 'figure' || selected.type === 'image' || selected.type === 'video') {
-        x = selected.x; y = selected.y;
-        typeIcon = selected.type === 'figure' ? '🖤' : selected.type === 'image' ? '🌇' : '🎥';
-        typeName = selected.name;
-      } else if (selected.type === 'camera') {
-        x = selected.x; y = selected.y;
+      if (AppState.selected.type === 'figure' || AppState.selected.type === 'image' || AppState.selected.type === 'video') {
+        x = AppState.selected.x; y = AppState.selected.y;
+        typeIcon = AppState.selected.type === 'figure' ? '🖤' : AppState.selected.type === 'image' ? '🌇' : '🎥';
+        typeName = AppState.selected.name;
+      } else if (AppState.selected.type === 'camera') {
+        x = AppState.selected.x; y = AppState.selected.y;
         typeIcon = '🎥';
-        typeName = selected.name;
+        typeName = AppState.selected.name;
       } else {
-        const tr = getBindTransform(selected);
+        const tr = getBindTransform(AppState.selected);
         x = tr.x; y = tr.y;
-        typeIcon = selected.type === 'acc' ? '👑' : selected.type === 'shape' ? '🔷' : '💬';
-        typeName = selected.name;
+        typeIcon = AppState.selected.type === 'acc' ? '👑' : AppState.selected.type === 'shape' ? '🔷' : '💬';
+        typeName = AppState.selected.name;
       }
       document.getElementById('coordType').textContent = typeIcon + ' ' + typeName;
       document.getElementById('coordXY').textContent = `X: ${Math.round(x)}  Y: ${Math.round(displayY(y))}`;
@@ -4100,7 +4186,7 @@ function importActionPresets() {
       return;
     }
     
-    if (tboxDrag && (selected || canvasSelected)) {
+    if (tboxDrag && (AppState.selected || AppState.canvasSelected)) {
       el.style.display = 'block';
       el.style.opacity = '1';
     } else if (!coordFlashTimer && el.style.opacity !== '0' && el.style.display !== 'none') {
@@ -4113,7 +4199,7 @@ function importActionPresets() {
 
   function getObjectWorldPos(o) {
     if (!o) return { x: 0, y: 0 };
-    if (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble') {
+    if (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble' || o.type === 'ink') { // brush-v5.1.0: ink 走绑定坐标
       const tr = getBindTransform(o);
       return { x: tr.x, y: tr.y };
     }
@@ -4196,34 +4282,34 @@ function importActionPresets() {
   function updatePosInputs() {
     if (!objXInput || !objYInput) return;
     
-    if (canvasSelected && canvasBoundsEnabled) { 
-      objXInput.value = Math.round(canvasBounds.x + canvasBounds.w / 2); 
-      objYInput.value = Math.round(displayY(canvasBounds.y + canvasBounds.h / 2)); 
+    if (AppState.canvasSelected && AppState.canvasBoundsEnabled) { 
+      objXInput.value = Math.round(AppState.canvasBounds.x + AppState.canvasBounds.w / 2); 
+      objYInput.value = Math.round(displayY(AppState.canvasBounds.y + AppState.canvasBounds.h / 2)); 
       if (objSizeInput) {
-        objSizeInput.value = (canvasBaseBounds ? (canvasBounds.w / canvasBaseBounds.w) : 1).toFixed(2);
+        objSizeInput.value = (canvasBaseBounds ? (AppState.canvasBounds.w / canvasBaseBounds.w) : 1).toFixed(2);
       }
       return; 
     }
     
-    if (!selected) { 
+    if (!AppState.selected) { 
       objXInput.value = ''; 
       objYInput.value = ''; 
       if (objSizeInput) objSizeInput.value = ''; 
       return; 
     }
     
-    const p = getObjectWorldPos(selected);
+    const p = getObjectWorldPos(AppState.selected);
     if (document.activeElement !== objXInput) objXInput.value = Math.round(p.x);
     if (document.activeElement !== objYInput) objYInput.value = Math.round(displayY(p.y));
     
     if (objSizeInput && document.activeElement !== objSizeInput) {
-      objSizeInput.value = (selected.scale || 1).toFixed(2);
+      objSizeInput.value = (AppState.selected.scale || 1).toFixed(2);
     }
   }
 
   function getBindBase(o) {
     if (!o || o.bindTo === 'none' || !o.targetId) return null;
-    const list = _renderList || objects;
+    const list = _renderList || AppState.objects;
     const fig = list.find(f => f.id === o.targetId && f.type === 'figure');
     if (!fig) return null;
     const j = jointData(fig);
@@ -4302,6 +4388,89 @@ function importActionPresets() {
     }
     if (o.type === 'figure') enforcePins(o);
   }
+  /* 绑定前坐标系 → 真实世界坐标（把火柴人自身的旋转/镜像算回去，顺序与 applyFigTransformCtx 一致） */
+  function figTrForward(ftr, p) {
+    if (!ftr) return { x: p.x, y: p.y };
+    let dx = p.x - ftr.x, dy = p.y - ftr.y;
+    if (ftr.mirror) dx = -dx;
+    if (ftr.rot) {
+      const r = ftr.rot * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+      const nx = dx * c - dy * s, ny = dx * s + dy * c;
+      dx = nx; dy = ny;
+    }
+    return { x: ftr.x + dx, y: ftr.y + dy };
+  }
+  /* 真实世界坐标 → 绑定前坐标系（上式的逆） */
+  function figTrInverse(ftr, p) {
+    if (!ftr) return { x: p.x, y: p.y };
+    let dx = p.x - ftr.x, dy = p.y - ftr.y;
+    if (ftr.rot) {
+      const r = -ftr.rot * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+      const nx = dx * c - dy * s, ny = dx * s + dy * c;
+      dx = nx; dy = ny;
+    }
+    if (ftr.mirror) dx = -dx;
+    return { x: ftr.x + dx, y: ftr.y + dy };
+  }
+
+  /* bind-keep-v5.1.2: 切换「挂载点 / 绑定目标」时保持元件当前的大小、位置、旋转不变。
+     只重算"依附于挂载点"的相对量（offX/offY/rot），绝不把 offX/offY/rot 归零，
+     也不改动 scale / w / h / alpha —— 用户自己会微调对齐，绑定动作不该再改他的属性。
+     mutate: 只改 bindTo / targetId 的回调。 */
+  function rebindKeepPlacement(o, mutate) {
+    if (!o) { if (mutate) mutate(); return; }
+    const trBefore = getBindTransform(o);
+    const ftrBefore = getBoundFigureTransform(o);
+    /* 视觉大小：绑定元件会跟随火柴人缩放（syncScale），所以"看到的尺寸"要乘一次 */
+    const syncBefore = trBefore.syncScale || 1;
+    const visScale = (o.scale || 1) * syncBefore;
+    /* 先折算成"真实世界"位置与角度：绑定/解绑时火柴人自身的旋转镜像会加进来或去掉 */
+    const worldPos = figTrForward(ftrBefore, { x: trBefore.x, y: trBefore.y });
+    let worldAng = trBefore.angle;
+    if (ftrBefore) {
+      const f = ftrBefore.rot * Math.PI / 180;
+      worldAng = f + (ftrBefore.mirror ? -worldAng : worldAng);
+    }
+    if (mutate) mutate();
+
+    const base = getBindBase(o);
+    const ftrAfter = getBoundFigureTransform(o);
+    /* 换挂载点/绑定目标时火柴人缩放会变，用元件自身 scale 抵一次，保证"看到的尺寸"不变 */
+    const syncAfter = base ? (base.scale || 1) : 1;
+    if (Math.abs(syncAfter - syncBefore) > 1e-9) o.scale = visScale / syncAfter;
+    o.x = worldPos.x;
+    o.y = worldPos.y;
+    if (base) {
+      const p = figTrInverse(ftrAfter, worldPos);
+      const dx = p.x - base.x, dy = p.y - base.y;
+      const c = Math.cos(base.angle), s = Math.sin(base.angle);
+      const sc = base.scale || 1;
+      o.offX = (dx * c + dy * s) / sc;              /* 世界差 → 挂载点局部（逆旋转 + 除缩放） */
+      o.offY = (-dx * s + dy * c) / sc;
+      /* 世界角 → 绑定前坐标系角（去掉火柴人旋转镜像）→ 减掉挂载角 = rot */
+      let bindAng = worldAng;
+      if (ftrAfter) bindAng = (ftrAfter.mirror ? -1 : 1) * (worldAng - ftrAfter.rot * Math.PI / 180);
+      o.rot = (bindAng - base.angle) * 180 / Math.PI;
+      /* 位置角度反算后，x/y 作为兜底缓存改回真实世界位置 */
+      o.x = worldPos.x;
+      o.y = worldPos.y;
+    } else {
+      o.offX = 0; o.offY = 0;                       /* 解绑：位置直接落在世界坐标上 */
+      o.rot = worldAng * 180 / Math.PI;
+    }
+  }
+
+  /* 把绑定相关的相对量同步到该元件的所有帧（全局属性修改关闭时只写当前帧） */
+  function syncBindingPlacement(o) {
+    if (!o) return;
+    setGlobalPropForBound(o, 'x', o.x);
+    setGlobalPropForBound(o, 'y', o.y);
+    setGlobalPropForBound(o, 'offX', o.offX);
+    setGlobalPropForBound(o, 'offY', o.offY);
+    setGlobalPropForBound(o, 'rot', o.rot);
+    setGlobalPropForBound(o, 'scale', o.scale);
+  }
+
   function applyGlobalPositionDelta(fig, prevPos) {
     if (!globalEditEnabled) return;
     if (!fig || fig.type !== 'figure' || !prevPos) return;
@@ -4309,10 +4478,10 @@ function importActionPresets() {
     const dy = fig.y - prevPos.y;
     if (dx === 0 && dy === 0) return;
     const tid = String(fig.id);
-    const t = tracks[tid];
+    const t = AppState.tracks[tid];
     if (!t || !t.frames) return;
     for (let i = 0; i < t.frames.length; i++) {
-      if (i === currentFrameIndex) continue;
+      if (i === AppState.currentFrameIndex) continue;
       const data = t.frames[i];
       if (data && String(data.id) === tid) {
         data.x += dx;
@@ -4325,7 +4494,7 @@ function importActionPresets() {
   function hasAnyPinInAllFrames(fig) {
     if (!fig || fig.type !== 'figure') return false;
     const tid = String(fig.id);
-    const t = tracks[tid];
+    const t = AppState.tracks[tid];
     if (!t || !t.frames) return false;
     for (let i = 0; i < t.frames.length; i++) {
       const data = t.frames[i];
@@ -4342,21 +4511,21 @@ function importActionPresets() {
 
   function updateAnchorHandle() {
     if (!anchorHandleEl) return;
-    if (!anchorModeOn || !selected || isPlaying || selected.locked) { 
+    if (!anchorModeOn || !AppState.selected || isPlaying || AppState.selected.locked) { 
       anchorHandleEl.style.display = 'none'; 
       return; 
     }
-    if (!(selected.type === 'image' || selected.type === 'acc' || selected.type === 'shape' || selected.type === 'bubble')) {
+    if (!(AppState.selected.type === 'image' || AppState.selected.type === 'acc' || AppState.selected.type === 'shape' || AppState.selected.type === 'bubble')) {
       anchorHandleEl.style.display = 'none';
       return;
     }
     
-    const ap = getRotatePivot(selected);
+    const ap = getRotatePivot(AppState.selected);
     if (!ap) { anchorHandleEl.style.display = 'none'; return; }
     
     // 显示在锚点右侧
-    const leftScreen = ap.x * viewScale + viewOffset.x;
-    const midY = ap.y * viewScale + viewOffset.y;
+    const leftScreen = ap.x * AppState.viewScale + AppState.viewOffset.x;
+    const midY = ap.y * AppState.viewScale + AppState.viewOffset.y;
     
     const margin = 56;
     let x = leftScreen + margin; 
@@ -4373,16 +4542,16 @@ function importActionPresets() {
   function updateHeadMoveHandle() {
     const el = document.getElementById('headMoveHandle');
     if (!el) return;
-    if (!headHandleOn || !selected || selected.type !== 'figure' || isPlaying || selected.locked) {
+    if (!headHandleOn || !AppState.selected || AppState.selected.type !== 'figure' || isPlaying || AppState.selected.locked) {
       el.style.display = 'none';
       return;
     }
-    const j = jointData(selected);
-    const b = getObjectBounds(selected);
+    const j = jointData(AppState.selected);
+    const b = getObjectBounds(AppState.selected);
     
     // 将世界坐标转换到屏幕坐标
-    let x = j.headC.x * viewScale + viewOffset.x;
-    let y = j.headC.y * viewScale + viewOffset.y;
+    let x = j.headC.x * AppState.viewScale + AppState.viewOffset.x;
+    let y = j.headC.y * AppState.viewScale + AppState.viewOffset.y;
     
     // 如果头部超出屏幕边缘，做一点限制（可选）
     x = Math.max(44, Math.min(window.innerWidth - 44, x));
@@ -4396,7 +4565,7 @@ function importActionPresets() {
 
   function getTrackObjectsAt(idx) {
     const list = [];
-    for (const id in tracks) {
+    for (const id in AppState.tracks) {
       const data = getTrackFrame(id, idx);
       if (data) list.push(data);
     }
@@ -4406,7 +4575,7 @@ function importActionPresets() {
   function getCombinedObjectsForRenderAt(idx) {
     const list = [];
     if (videoObj) list.push(videoObj);
-    for (const id in tracks) {
+    for (const id in AppState.tracks) {
       const data = getTrackFrame(id, idx);
       if (data) list.push(data);
     }
@@ -4423,7 +4592,7 @@ function importActionPresets() {
   }
 
   function getCombinedObjectsForRender() {
-    return getCombinedObjectsForRenderAt(currentFrameIndex);
+    return getCombinedObjectsForRenderAt(AppState.currentFrameIndex);
   }
 
   function renderCanvas(isExporting) {
@@ -4441,9 +4610,9 @@ function importActionPresets() {
     }
 
     /* 摄像机子轨道：整块画布切换为摄像机取景视角 */
-    const camView = !isExporting ? getCameraViewObject() : null;
+    const camView = !isExporting ? SKFE.systems.camera.getCameraViewObject() : null;
     if (camView) {
-      renderCameraViewScene(camView, trackAlphaOpts);
+      SKFE.systems.camera.renderCameraViewScene(camView, trackAlphaOpts);
       drawLayerNumbers();
       drawTransformBox();
       return;
@@ -4451,22 +4620,22 @@ function importActionPresets() {
 
     if (!isExporting) {
       ctx.save();
-      ctx.translate(viewOffset.x, viewOffset.y);
-      ctx.scale(viewScale, viewScale);
-      drawGrid(w / viewScale, h / viewScale);
+      ctx.translate(AppState.viewOffset.x, AppState.viewOffset.y);
+      ctx.scale(AppState.viewScale, AppState.viewScale);
+      drawGrid(w / AppState.viewScale, h / AppState.viewScale);
       if (groundLineEnabled) drawGroundLine();
     }
 
     if (!isExporting && onionEnabled && !isPlaying) {
       for (let d = onionBefore; d >= 1; d--) {
-        const idx = currentFrameIndex - d;
-        if (idx < 0 || idx >= frames.length) continue;
+        const idx = AppState.currentFrameIndex - d;
+        if (idx < 0 || idx >= AppState.frames.length) continue;
         const a = ONION_ALPHA * Math.pow(0.85, d - 1);
         renderScene(getTrackObjectsAt(idx), Object.assign({ alphaMul: a, tint: ONION_COLOR_BEFORE, isGhost: true }, trackAlphaOpts));
       }
       for (let d = onionAfter; d >= 1; d--) {
-        const idx = currentFrameIndex + d;
-        if (idx < 0 || idx >= frames.length) continue;
+        const idx = AppState.currentFrameIndex + d;
+        if (idx < 0 || idx >= AppState.frames.length) continue;
         const a = ONION_ALPHA * Math.pow(0.85, d - 1);
         renderScene(getTrackObjectsAt(idx), Object.assign({ alphaMul: a, tint: ONION_COLOR_AFTER, isGhost: true }, trackAlphaOpts));
       }
@@ -4478,46 +4647,46 @@ function importActionPresets() {
     if (!isExporting) {
       ctx.restore();
 
-      if (canvasMaskEnabled && canvasBoundsEnabled) {
+      if (canvasMaskEnabled && AppState.canvasBoundsEnabled) {
         ctx.save();
         // 1. 遮罩背景颜色
         const rgbBg = hexToRgb(canvasMaskBgColor);
         ctx.fillStyle = `rgba(${rgbBg[0]}, ${rgbBg[1]}, ${rgbBg[2]}, ${canvasMaskAlpha})`;
         ctx.beginPath();
         ctx.rect(0, 0, canvas.clientWidth, canvas.clientHeight);
-        ctx.translate(viewOffset.x, viewOffset.y);
-        ctx.scale(viewScale, viewScale);
-        ctx.translate(canvasBounds.x + canvasBounds.w / 2, canvasBounds.y + canvasBounds.h / 2);
-        ctx.rotate(canvasBounds.rotation || 0);
-        ctx.rect(-canvasBounds.w / 2, -canvasBounds.h / 2, canvasBounds.w, canvasBounds.h);
+        ctx.translate(AppState.viewOffset.x, AppState.viewOffset.y);
+        ctx.scale(AppState.viewScale, AppState.viewScale);
+        ctx.translate(AppState.canvasBounds.x + AppState.canvasBounds.w / 2, AppState.canvasBounds.y + AppState.canvasBounds.h / 2);
+        ctx.rotate(AppState.canvasBounds.rotation || 0);
+        ctx.rect(-AppState.canvasBounds.w / 2, -AppState.canvasBounds.h / 2, AppState.canvasBounds.w, AppState.canvasBounds.h);
         ctx.fill('evenodd'); 
 
         // 2. 在遮罩区域内绘制固定大小的网格
         if (canvasMaskAlpha > 0.05) {
           ctx.clip('evenodd'); 
-          ctx.rotate(-(canvasBounds.rotation || 0));
-          ctx.translate(-(canvasBounds.x + canvasBounds.w / 2), -(canvasBounds.y + canvasBounds.h / 2));
+          ctx.rotate(-(AppState.canvasBounds.rotation || 0));
+          ctx.translate(-(AppState.canvasBounds.x + AppState.canvasBounds.w / 2), -(AppState.canvasBounds.y + AppState.canvasBounds.h / 2));
 
           // 核心：把固定的屏幕像素大小（gridSize）除以当前的缩放比例，使其不跟随视图缩放
-          const s = Math.max(8, gridSize) / viewScale; 
-          const x0 = -viewOffset.x / viewScale;
-          const y0 = -viewOffset.y / viewScale;
-          const x1 = (canvas.clientWidth - viewOffset.x) / viewScale;
-          const y1 = (canvas.clientHeight - viewOffset.y) / viewScale;
+          const s = Math.max(8, gridSize) / AppState.viewScale; 
+          const x0 = -AppState.viewOffset.x / AppState.viewScale;
+          const y0 = -AppState.viewOffset.y / AppState.viewScale;
+          const x1 = (canvas.clientWidth - AppState.viewOffset.x) / AppState.viewScale;
+          const y1 = (canvas.clientHeight - AppState.viewOffset.y) / AppState.viewScale;
 
           const rgbGrid = hexToRgb(canvasMaskGridColor);
           ctx.strokeStyle = `rgba(${rgbGrid[0]}, ${rgbGrid[1]}, ${rgbGrid[2]}, ${0.15 * canvasMaskAlpha})`; 
-          ctx.lineWidth = 1 / viewScale;
+          ctx.lineWidth = 1 / AppState.viewScale;
           ctx.beginPath();
 
           // 让网格线完美对齐画布的左上角边缘
-          const startX = canvasBounds.x + Math.floor((x0 - canvasBounds.x) / s) * s;
+          const startX = AppState.canvasBounds.x + Math.floor((x0 - AppState.canvasBounds.x) / s) * s;
           for (let x = startX; x <= x1; x += s) {
             ctx.moveTo(x, y0);
             ctx.lineTo(x, y1);
           }
           
-          const startY = canvasBounds.y + Math.floor((y0 - canvasBounds.y) / s) * s;
+          const startY = AppState.canvasBounds.y + Math.floor((y0 - AppState.canvasBounds.y) / s) * s;
           for (let y = startY; y <= y1; y += s) {
             ctx.moveTo(x0, y);
             ctx.lineTo(x1, y);
@@ -4527,11 +4696,11 @@ function importActionPresets() {
         ctx.restore();
       }
       ctx.save();
-      ctx.translate(viewOffset.x, viewOffset.y);
-      ctx.scale(viewScale, viewScale);
+      ctx.translate(AppState.viewOffset.x, AppState.viewOffset.y);
+      ctx.scale(AppState.viewScale, AppState.viewScale);
       drawCanvasBounds();
-      if (anchorModeOn && selected && !selected.locked &&
-          (selected.type === 'image' || selected.type === 'acc' || selected.type === 'shape' || selected.type === 'bubble')) {
+      if (anchorModeOn && AppState.selected && !AppState.selected.locked &&
+          (AppState.selected.type === 'image' || AppState.selected.type === 'acc' || AppState.selected.type === 'shape' || AppState.selected.type === 'bubble')) {
         drawAnchorMarker();
       }
       ctx.restore();
@@ -4545,11 +4714,11 @@ function importActionPresets() {
         ctx.lineWidth = 1;
         ctx.setLineDash([5, 5]);
         if (snapLines.x !== null) {
-          const sx = snapLines.x * viewScale + viewOffset.x;
+          const sx = snapLines.x * AppState.viewScale + AppState.viewOffset.x;
           ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, window.innerHeight); ctx.stroke();
         }
         if (snapLines.y !== null) {
-          const sy = snapLines.y * viewScale + viewOffset.y;
+          const sy = snapLines.y * AppState.viewScale + AppState.viewOffset.y;
           ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(window.innerWidth, sy); ctx.stroke();
         }
         ctx.restore();
@@ -4588,19 +4757,19 @@ function importActionPresets() {
     const scrubber = document.getElementById('timelineScrubber');
     if (!wrap || !nowEl || !totalEl || !scrubber) return;
 
-    const show = frames.length > 1;
+    const show = AppState.frames.length > 1;
     wrap.classList.toggle('visible', show);
     if (!show) { scrubberSide = null; return; }
 
-    const totalMs = frames.reduce((s, f) => s + (f.duration || 0), 0);
-    const idx = Math.max(0, Math.min(currentFrameIndex, frames.length - 1));
+    const totalMs = AppState.frames.reduce((s, f) => s + (f.duration || 0), 0);
+    const idx = Math.max(0, Math.min(AppState.currentFrameIndex, AppState.frames.length - 1));
     let nowMs = 0;
-    for (let i = 0; i < idx; i++) nowMs += frames[i].duration || 0;
+    for (let i = 0; i < idx; i++) nowMs += AppState.frames[i].duration || 0;
 
     nowEl.textContent = formatTimeMs(nowMs);
     totalEl.textContent = formatTimeMs(totalMs);
 
-    const max = frames.length - 1;
+    const max = AppState.frames.length - 1;
     const ratio = max > 0 ? idx / max : 0;
     const useLeft = ratio >= 0.5;   /* true: 当前时刻在 thumb 左侧，总时长在左端 */
 
@@ -4635,12 +4804,12 @@ function importActionPresets() {
     if (!bar) return;
     const chips = bar.querySelectorAll('.frame-chip');
     chips.forEach((chip, i) => {
-      if (i === currentFrameIndex) chip.classList.add('active');
+      if (i === AppState.currentFrameIndex) chip.classList.add('active');
       else chip.classList.remove('active');
     });
     const scrubber = document.getElementById('timelineScrubber');
-    if (scrubber && +scrubber.value !== currentFrameIndex) {
-      scrubber.value = currentFrameIndex;
+    if (scrubber && +scrubber.value !== AppState.currentFrameIndex) {
+      scrubber.value = AppState.currentFrameIndex;
     }
     updateScrubberTime();
   }
@@ -4685,8 +4854,8 @@ function importActionPresets() {
       const text = formatL(num);
       if (!text) return;
 
-      const sx = wx * viewScale + viewOffset.x;
-      const sy = wy * viewScale + viewOffset.y;
+      const sx = wx * AppState.viewScale + AppState.viewOffset.x;
+      const sy = wy * AppState.viewScale + AppState.viewOffset.y;
 
       ctx.shadowColor = 'rgba(0, 0, 0, 0.75)';
       ctx.shadowBlur = 3;
@@ -4704,10 +4873,10 @@ function importActionPresets() {
     const isSub = isSubTrackMode();
     const hideOthers = otherTracksVisibility === 'hide';
 
-    for (const o of objects) {
+    for (const o of AppState.objects) {
       if (o.type === 'video') continue;
 
-      if (isSub && hideOthers && String(o.id) !== activeTrackId) {
+      if (isSub && hideOthers && String(o.id) !== AppState.activeTrackId) {
         continue;
       }
 
@@ -4752,7 +4921,7 @@ function importActionPresets() {
         // 摄像机：局部左上角，位置跟随 cam.rot
         const w = o.w * (o.scale || 1);
         const h = o.h * (o.scale || 1);
-        const offsetDist = 12 / viewScale;
+        const offsetDist = 12 / AppState.viewScale;
         let dx = -w / 2 + offsetDist, dy = -h / 2 + offsetDist;
         if (o.rot) {
           const r = o.rot * Math.PI / 180;
@@ -4775,7 +4944,7 @@ function importActionPresets() {
   function render() {
     refreshSubTrackOptions();
     syncSubTrackSelection();
-    for (const o of objects) {
+    for (const o of AppState.objects) {
       if (o.type === 'figure' && o.ikEnabled) {
         applyIK(o);
         enforcePins(o);
@@ -4788,41 +4957,57 @@ function importActionPresets() {
     updateTransformBoxDOM();
     updateAnchorHandle();
     updatePosInputs();
-    updateCameraPreview();
+    SKFE.systems.camera.updateCameraPreview();
   }
 
   /* ==================== 图层列表 ==================== */
+  /* name-v5.1.1: 图层按钮上的元件名称（安全文本节点，兼容图片/配饰等所有类型） */
+  function attachLayerName(btn, o) {
+    const raw = (o && typeof o.name === 'string') ? o.name.trim() : '';
+    if (!raw) return;
+    const label = document.createElement('span');
+    label.className = 'layer-name';
+    label.textContent = raw;
+    btn.title = raw;
+    const last = btn.lastElementChild;
+    if (last) btn.insertBefore(label, last);
+    else btn.appendChild(label);
+  }
+
   function updateLayerList() {
     layerListEl.innerHTML = '';
     let idx = 1;
     if (videoObj) {
       if (videoObj.locked === undefined) videoObj.locked = false;
       const btn = document.createElement('div');
-      btn.className = 'layer-btn' + (videoObj === selected ? ' active' : '') + (videoObj.locked ? ' locked' : '');
+      btn.className = 'layer-btn' + (videoObj === AppState.selected ? ' active' : '') + (videoObj.locked ? ' locked' : '');
       btn.innerHTML = `<span>🎥</span><span class="idx">${idx++}</span>`;
-      btn.onclick = () => { select(videoObj); render(); };
+      attachLayerName(btn, videoObj);
+      btn.onclick = () => { select(videoObj); EventBus.emit('need:render'); };
       layerListEl.appendChild(btn);
     }
-    const sorted = [...objects].sort((a, b) => (b.layer.body || b.layer) - (a.layer.body || a.layer));
+    const sorted = [...AppState.objects].sort((a, b) => (b.layer.body || b.layer) - (a.layer.body || a.layer));
     sorted.forEach(o => {
       if (o.locked === undefined) o.locked = false;
       const btn = document.createElement('div');
-      btn.className = 'layer-btn' + (o === selected ? ' active' : '') + (o.locked ? ' locked' : '');
+      btn.className = 'layer-btn' + (o === AppState.selected ? ' active' : '') + (o.locked ? ' locked' : '');
       let icon = '❓';
       if (o.type === 'figure') icon = '🖤';
       else if (o.type === 'image') icon = '🌇';
       else if (o.type === 'acc') icon = '👑';
       else if (o.type === 'shape') icon = '🔷';
       else if (o.type === 'bubble') icon = '💬';
+      else if (o.type === 'ink') icon = '🖌'; // brush-v5.1.0: §6.3.9
       else if (o.type === 'camera') icon = '🎥';
       btn.innerHTML = `<span>${icon}</span><span class="idx">${idx++}</span>`;
-      btn.onclick = () => { select(o); render(); };
+      attachLayerName(btn, o);
+      btn.onclick = () => { select(o); EventBus.emit('need:render'); };
       layerListEl.appendChild(btn);
     });
 
-    if (selected) {
+    if (AppState.selected) {
       btnToggleLock.style.display = 'block';
-      if (selected.locked) {
+      if (AppState.selected.locked) {
         btnToggleLock.textContent = '🔒 解锁';
         btnToggleLock.classList.add('danger');
       } else {
@@ -4835,11 +5020,11 @@ function importActionPresets() {
   }
 
   btnToggleLock.onclick = () => {
-    if (selected) {
-      selected.locked = !selected.locked;
-      syncUI();
-      render();
-      saveHistory('锁定/解锁对象');
+    if (AppState.selected) {
+      AppState.selected.locked = !AppState.selected.locked;
+      EventBus.emit('need:syncUI');
+      EventBus.emit('need:render');
+      EventBus.emit('history:save', '锁定/解锁对象');
     }
   };
 
@@ -4894,7 +5079,7 @@ function importActionPresets() {
 
   /* ==================== 多轨道：轨道选择 / 数据隔离 ==================== */
   function isSubTrackMode() {
-    return activeTrackId !== TRACK_ALL_ID;
+    return AppState.activeTrackId !== TRACK_ALL_ID;
   }
 
   /* ---------- 数据层访问器（所有轨道读写统一入口） ---------- */
@@ -4920,22 +5105,22 @@ function importActionPresets() {
 
   function getMainLength() {
     let max = 1;
-    for (const id in tracks) {
-      const t = tracks[id];
+    for (const id in AppState.tracks) {
+      const t = AppState.tracks[id];
       if (t && t.frames && t.frames.length > max) max = t.frames.length;
     }
     return max;
   }
 
   function getTrackFrame(trackId, idx) {
-    const t = tracks[trackId];
+    const t = AppState.tracks[trackId];
     if (!t || !t.frames) return null;
     if (idx < 0 || idx >= t.frames.length) return null;
     return t.frames[idx] || null;
   }
 
   function setTrackFrame(trackId, idx, data) {
-    const t = tracks[trackId];
+    const t = AppState.tracks[trackId];
     if (!t) return;
     if (!t.frames) t.frames = [];
     while (t.frames.length <= idx) t.frames.push(null);
@@ -4944,16 +5129,16 @@ function importActionPresets() {
   }
 
   function getTrackLength(trackId) {
-    const t = tracks[trackId];
+    const t = AppState.tracks[trackId];
     return (t && t.frames) ? t.frames.length : 0;
   }
 
   function syncMainLengthFromTracks() {
     const target = Math.max(1, getMainLength());
-    while (frames.length < target) {
-      const last = frames[frames.length - 1];
-      frames.push({
-        id: ((last && last.id) || frames.length) + 1,
+    while (AppState.frames.length < target) {
+      const last = AppState.frames[AppState.frames.length - 1];
+      AppState.frames.push({
+        id: ((last && last.id) || AppState.frames.length) + 1,
         duration: (last && last.duration) || Math.round(1000 / defaultFPS),
         isTween: false
       });
@@ -4962,10 +5147,10 @@ function importActionPresets() {
 
   function ensureTrack(id, name) {
     const key = String(id);
-    if (!tracks[key]) tracks[key] = { name: name || key, frames: [] };
-    else if (name) tracks[key].name = name;
-    if (!tracks[key].frames) tracks[key].frames = [];
-    return tracks[key];
+    if (!AppState.tracks[key]) AppState.tracks[key] = { name: name || key, frames: [] };
+    else if (name) AppState.tracks[key].name = name;
+    if (!AppState.tracks[key].frames) AppState.tracks[key].frames = [];
+    return AppState.tracks[key];
   }
 
   function getFrameTrackObject(fr, idx) {
@@ -4973,18 +5158,18 @@ function importActionPresets() {
     let i = idx;
     if (i === undefined || i === null) {
       if (typeof fr === 'number') i = fr;
-      else i = frames.indexOf(fr);
+      else i = AppState.frames.indexOf(fr);
     }
     if (!(i >= 0)) return null;
-    return getTrackFrame(activeTrackId, i);
+    return getTrackFrame(AppState.activeTrackId, i);
   }
 
   function getActiveTrackObject() {
-    return getTrackFrame(activeTrackId, currentFrameIndex);
+    return getTrackFrame(AppState.activeTrackId, AppState.currentFrameIndex);
   }
 
   function collectTrackEntries() {
-    return Object.keys(tracks).map(id => ({ id, name: tracks[id].name || id }));
+    return Object.keys(AppState.tracks).map(id => ({ id, name: AppState.tracks[id].name || id }));
   }
 
   function updateOtherTracksVisibilityUI() {
@@ -5003,10 +5188,10 @@ function importActionPresets() {
     if (!sel) return;
     const entries = collectTrackEntries();
     const sig = entries.map(e => e.id + '\u0001' + e.name).join('\u0002');
-    const exists = entries.some(e => e.id === activeTrackId);
-    if (activeTrackId !== TRACK_ALL_ID && !exists) {
-      activeTrackId = TRACK_ALL_ID;
-      if (selected && !objects.includes(selected)) selected = null;
+    const exists = entries.some(e => e.id === AppState.activeTrackId);
+    if (AppState.activeTrackId !== TRACK_ALL_ID && !exists) {
+      AppState.activeTrackId = TRACK_ALL_ID;
+      if (AppState.selected && !AppState.objects.includes(AppState.selected)) AppState.selected = null;
     }
     if (sig !== subTrackOptionSignature) {
       subTrackOptionSignature = sig;
@@ -5022,7 +5207,7 @@ function importActionPresets() {
         sel.appendChild(opt);
       });
     }
-    sel.value = exists ? activeTrackId : TRACK_ALL_ID;
+    sel.value = exists ? AppState.activeTrackId : TRACK_ALL_ID;
     sel.classList.toggle('sub-track-active', isSubTrackMode());
     updateOtherTracksVisibilityUI();
   }
@@ -5030,14 +5215,14 @@ function importActionPresets() {
   function syncSubTrackSelection() {
     if (!isSubTrackMode() || isPlaying) return;
     const obj = getActiveTrackObject();
-    if (selected !== obj) selected = obj;
+    if (AppState.selected !== obj) AppState.selected = obj;
   }
 
   function getTrackRenderAlpha(o) {
     if (!isSubTrackMode() || !o || o.type === 'video') return 1;
-    if (String(o.id) === activeTrackId) return 1;
+    if (String(o.id) === AppState.activeTrackId) return 1;
     // 【新增】：如果它是绑定在当前元件上的配件/形状/气泡，也视为自身的一部分
-    if ((o.type === 'acc' || o.type === 'shape' || o.type === 'bubble') && String(o.targetId) === activeTrackId) {
+    if ((o.type === 'acc' || o.type === 'shape' || o.type === 'bubble' || o.type === 'ink') && String(o.targetId) === AppState.activeTrackId) {
       return 1;
     }
     if (otherTracksVisibility === 'hide') return 0;
@@ -5046,23 +5231,22 @@ function importActionPresets() {
   }
 
   function setActiveTrack(id) {
-    activeTrackId = (id == null) ? TRACK_ALL_ID : String(id);
+    AppState.activeTrackId = (id == null) ? TRACK_ALL_ID : String(id);
     /* 切换轨道时重置摄像机视角的缩放/偏移 */
     camViewZoom = 1;
     camViewOffset = { x: 0, y: 0 };
     refreshSubTrackOptions();
-    canvasSelected = false;
+    AppState.canvasSelected = false;
     drag = null;
     isPanning = false;
     cancelTransformBoxDrag();
     anchorModeOn = false;
-    selected = isSubTrackMode() ? getActiveTrackObject() : selected;
+    AppState.selected = isSubTrackMode() ? getActiveTrackObject() : AppState.selected;
     /* 进入摄像机轨道 → 自动适配可用区域，避免被 UI 面板 / 时间轴遮挡 */
-    if (isCameraTrackId(activeTrackId)) {
-      fitCameraViewToAvailableArea();
+    if (isCameraTrackId(AppState.activeTrackId)) {
+      SKFE.systems.camera.fitCameraViewToAvailableArea();
     }
-    render();
-    syncUI();
+    EventBus.emit('app:update');
   }
 
   document.getElementById('trackSelector').addEventListener('change', e => {
@@ -5071,7 +5255,7 @@ function importActionPresets() {
   document.getElementById('otherTracksVisibility').addEventListener('change', e => {
     otherTracksVisibility = e.target.value;
     updateOtherTracksVisibilityUI();
-    render();
+    EventBus.emit('need:render');
   });
 
   /* ==================== 轨道同步 ==================== */
@@ -5084,14 +5268,14 @@ function importActionPresets() {
   }
 
   function updateTargetFigureOptions() {
-    const figures = objects.filter(o => o.type === 'figure');
+    const figures = AppState.objects.filter(o => o.type === 'figure');
     targetFigureSelect.innerHTML = '<option value="">-- 请选择 --</option>';
     figures.forEach(f => {
       const opt = document.createElement('option');
       opt.value = f.id; opt.textContent = f.name;
       targetFigureSelect.appendChild(opt);
     });
-    if (selected && selected.targetId) targetFigureSelect.value = selected.targetId;
+    if (AppState.selected && AppState.selected.targetId) targetFigureSelect.value = AppState.selected.targetId;
     else targetFigureSelect.value = '';
   }
 
@@ -5114,7 +5298,7 @@ function importActionPresets() {
     refreshTimelineDockOffsets();
     if (uiResizable && uiCustomSize) applyCustomSize(); // 防冲突新增
     updateResizeHandlePos();
-    render();
+    EventBus.emit('need:render');
   }
 
   function deepCloneObjects(list) {
@@ -5127,12 +5311,12 @@ function importActionPresets() {
   }
 
   function syncFrameRef() {
-    const idx = currentFrameIndex;
+    const idx = AppState.currentFrameIndex;
     if (isSubTrackMode()) {
-      const t = tracks[activeTrackId];
+      const t = AppState.tracks[AppState.activeTrackId];
       if (!t) return;
       if (!t.frames) t.frames = [];
-      const mine = objects.find(o => o && o.type !== 'video' && String(o.id) === String(activeTrackId)) || null;
+      const mine = AppState.objects.find(o => o && o.type !== 'video' && String(o.id) === String(AppState.activeTrackId)) || null;
       while (t.frames.length <= idx) t.frames.push(null);
       t.frames[idx] = mine;
       syncMainLengthFromTracks();
@@ -5140,7 +5324,7 @@ function importActionPresets() {
     }
     /* 全局模式：把当前帧合并视图按 id 分发回各 track */
     const present = new Set();
-    for (const o of objects) {
+    for (const o of AppState.objects) {
       if (!o || o.type === 'video') continue;
       const id = String(o.id);
       present.add(id);
@@ -5148,37 +5332,37 @@ function importActionPresets() {
       while (t.frames.length <= idx) t.frames.push(null);
       t.frames[idx] = o;
     }
-    for (const id in tracks) {
+    for (const id in AppState.tracks) {
       if (present.has(id)) continue;
-      const arr = tracks[id].frames;
+      const arr = AppState.tracks[id].frames;
       if (arr && idx < arr.length) arr[idx] = null;
     }
     syncMainLengthFromTracks();
   }
 
   function goToFrame(i) {
-    if (i < 0 || i >= frames.length) return;
+    if (i < 0 || i >= AppState.frames.length) return;
     if (isPlaying) pause();
     syncFrameRef();
-    currentFrameIndex = i;
-    objects = getCombinedObjectsForRender();
-    selected = isSubTrackMode() ? getActiveTrackObject() : null;
-    drag = null; isPanning = false; canvasSelected = false;
+    AppState.currentFrameIndex = i;
+    AppState.objects = getCombinedObjectsForRender();
+    AppState.selected = isSubTrackMode() ? getActiveTrackObject() : null;
+    drag = null; isPanning = false; AppState.canvasSelected = false;
     cancelTransformBoxDrag(); anchorModeOn = false;
-    seekVideoToFrame(currentFrameIndex);
-    render(); syncUI();
+    seekVideoToFrame(AppState.currentFrameIndex);
+    EventBus.emit('need:render'); EventBus.emit('need:syncUI');
   }
 
   let pressTimer = null;
   let dragStartX = 0, dragStartY = 0;
 
   function invalidateFrameThumb(idx, trackId) {
-    if (frames[idx]) delete frames[idx]._thumb;
+    if (AppState.frames[idx]) delete AppState.frames[idx]._thumb;
     if (trackId != null) trackThumbCache.delete(String(trackId) + '|' + idx);
   }
 
   function invalidateAllFrameThumbs() {
-    frames.forEach(fr => delete fr._thumb);
+    AppState.frames.forEach(fr => delete fr._thumb);
     trackThumbCache.clear();
   }
 
@@ -5190,12 +5374,12 @@ function importActionPresets() {
     if (!bar) return;
     bar.classList.toggle('thumb-mode', frameThumbMode);
 
-    if (currentFrameIndex >= frames.length) currentFrameIndex = Math.max(0, frames.length - 1);
-    if (currentFrameIndex < 0) currentFrameIndex = 0;
+    if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = Math.max(0, AppState.frames.length - 1);
+    if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
 
     if (scrubber) {
-      scrubber.max = frames.length - 1;
-      scrubber.value = currentFrameIndex;
+      scrubber.max = AppState.frames.length - 1;
+      scrubber.value = AppState.currentFrameIndex;
     }
     updateScrubberTime();
 
@@ -5209,7 +5393,7 @@ function importActionPresets() {
     const chips = bar.querySelectorAll('.frame-chip');
     chips.forEach(c => c.remove());
 
-    frames.forEach((fr, i) => {
+    AppState.frames.forEach((fr, i) => {
       const chip = document.createElement('div');
       chip.className = 'frame-chip';
       if (fr.isTween) chip.classList.add('tween-frame');
@@ -5226,17 +5410,17 @@ function importActionPresets() {
           let url = null;
           
           // 新增：判断是否是摄像机轨道。如果是，就显示摄像机画面；如果不是，就忽略摄像机显示自身画面。
-          const isCamTrack = isSubTrackMode() && isCameraTrackId(activeTrackId);
+          const isCamTrack = isSubTrackMode() && isCameraTrackId(AppState.activeTrackId);
           const ignoreCamera = !isCamTrack;
 
           if (isSubTrackMode()) {
-            const key = activeTrackId + '|' + i;
+            const key = AppState.activeTrackId + '|' + i;
             const hit = trackThumbCache.get(key);
             if (hit && hit.v === thumbVersion) {
               url = hit.url;
             } else {
               try {
-                const off = renderFrameToDataURL(fr, 96, 96, { transparent: true, ignoreCamera }, activeTrackId);
+                const off = renderFrameToDataURL(fr, 96, 96, { transparent: true, ignoreCamera }, AppState.activeTrackId);
                 url = off.toDataURL('image/png');
               } catch (_) { url = null; }
               if (url) trackThumbCache.set(key, { v: thumbVersion, url });
@@ -5361,7 +5545,7 @@ function importActionPresets() {
             if (targetIndex !== dragStartIndex) {
               if (isSubTrackMode()) {
                 /* 子轨道：只在当前 track 内移动，覆盖目标帧，绝不碰其他 track */
-                const t = tracks[activeTrackId];
+                const t = AppState.tracks[AppState.activeTrackId];
                 if (t && t.frames && t.frames.length) {
                   const arr = t.frames;
                   const from = Math.min(dragStartIndex, arr.length - 1);
@@ -5373,18 +5557,18 @@ function importActionPresets() {
                     syncMainLengthFromTracks();
                     trimTrailingEmptyFrames();
                   }
-                  currentFrameIndex = Math.max(0, Math.min(targetIndex, frames.length - 1));
+                  AppState.currentFrameIndex = Math.max(0, Math.min(targetIndex, AppState.frames.length - 1));
                   invalidateAllFrameThumbs();
-                  objects = getCombinedObjectsForRender();
-                  selected = getActiveTrackObject();
-                  saveHistory('调整帧顺序');
+                  AppState.objects = getCombinedObjectsForRender();
+                  AppState.selected = getActiveTrackObject();
+                  EventBus.emit('history:save', '调整帧顺序');
                 }
               } else {
                 /* 全局模式：帧元信息与所有 track 同步重排 */
-                const [moved] = frames.splice(dragStartIndex, 1);
-                frames.splice(targetIndex, 0, moved);
-                for (const id in tracks) {
-                  const t = tracks[id];
+                const [moved] = AppState.frames.splice(dragStartIndex, 1);
+                AppState.frames.splice(targetIndex, 0, moved);
+                for (const id in AppState.tracks) {
+                  const t = AppState.tracks[id];
                   if (!t) continue;
                   if (!t.frames) t.frames = [];
                   const arr = t.frames;
@@ -5395,13 +5579,13 @@ function importActionPresets() {
                   arr.splice(insertAt, 0, movedData);
                 }
                 syncMainLengthFromTracks();
-                currentFrameIndex = targetIndex;
+                AppState.currentFrameIndex = targetIndex;
                 invalidateAllFrameThumbs();
-                objects = getCombinedObjectsForRender();
-                selected = null;
-                saveHistory('调整帧顺序');
+                AppState.objects = getCombinedObjectsForRender();
+                AppState.selected = null;
+                EventBus.emit('history:save', '调整帧顺序');
               }
-              render(); syncUI();
+              EventBus.emit('need:render'); EventBus.emit('need:syncUI');
             } else {
               // 鼠标拖拽了但位置没有变化，当作点击处理
               if (isMouse && !hasMoved) goToFrame(dragStartIndex);
@@ -5420,10 +5604,10 @@ function importActionPresets() {
     });
 
     const newChips = bar.querySelectorAll('.frame-chip');
-    const totalFrames = frames.length; // 获取总帧数
+    const totalFrames = AppState.frames.length; // 获取总帧数
     
     newChips.forEach((chip, i) => {
-      const isActive = (i === currentFrameIndex);
+      const isActive = (i === AppState.currentFrameIndex);
       
       if (isActive) {
         chip.classList.add('active');
@@ -5453,11 +5637,11 @@ function importActionPresets() {
     if (isPlaying) pause();
     syncFrameRef();
     if (isSubTrackMode()) {
-      const t = ensureTrack(activeTrackId, (selected && selected.name) || activeTrackId);
-      const srcObj = getFrameTrackObject(null, currentFrameIndex);
+      const t = ensureTrack(AppState.activeTrackId, (AppState.selected && AppState.selected.name) || AppState.activeTrackId);
+      const srcObj = getFrameTrackObject(null, AppState.currentFrameIndex);
       const clone = srcObj ? cloneObjectKeepImg(srcObj) : null;
       if (clone && srcObj) clone.id = srcObj.id;
-      const nextIdx = currentFrameIndex + 1;
+      const nextIdx = AppState.currentFrameIndex + 1;
       if (nextIdx < t.frames.length && t.frames[nextIdx] == null) {
         /* 下一帧对当前轨道是空白帧：直接占用该槽位，不把后面的帧挤开 */
         t.frames[nextIdx] = clone;
@@ -5465,117 +5649,117 @@ function importActionPresets() {
         while (t.frames.length < nextIdx) t.frames.push(null);
         t.frames.splice(nextIdx, 0, clone);
       }
-      currentFrameIndex = nextIdx;
+      AppState.currentFrameIndex = nextIdx;
       syncMainLengthFromTracks();
       trimTrailingEmptyFrames();
       invalidateAllFrameThumbs();
-      objects = getCombinedObjectsForRender();
-      selected = getActiveTrackObject();
-      canvasSelected = false;
+      AppState.objects = getCombinedObjectsForRender();
+      AppState.selected = getActiveTrackObject();
+      AppState.canvasSelected = false;
       cancelTransformBoxDrag(); anchorModeOn = false;
-      seekVideoToFrame(currentFrameIndex);
+      seekVideoToFrame(AppState.currentFrameIndex);
       updateFrameBar();
-      render(); syncUI();
-      saveHistory('添加帧');
+      EventBus.emit('need:render'); EventBus.emit('need:syncUI');
+      EventBus.emit('history:save', '添加帧');
       return;
     }
-    const insertAt = currentFrameIndex + 1;
-    const last = frames[frames.length - 1];
+    const insertAt = AppState.currentFrameIndex + 1;
+    const last = AppState.frames[AppState.frames.length - 1];
     const newFrame = {
-      id: ((last && last.id) || frames.length) + 1,
+      id: ((last && last.id) || AppState.frames.length) + 1,
       duration: Math.round(1000 / defaultFPS),
       isTween: false
     };
-    frames.splice(insertAt, 0, newFrame);
+    AppState.frames.splice(insertAt, 0, newFrame);
     /* 全局模式：所有 track 同步插入，并克隆各自在当前帧的内容 */
-    for (const id in tracks) {
-      const t = tracks[id];
+    for (const id in AppState.tracks) {
+      const t = AppState.tracks[id];
       if (!t) continue;
       if (!t.frames) t.frames = [];
       while (t.frames.length < insertAt) t.frames.push(null);
-      const src = t.frames[currentFrameIndex];
+      const src = t.frames[AppState.currentFrameIndex];
       const clone = src ? cloneObjectKeepImg(src) : null;
       if (clone && src) clone.id = src.id;
       t.frames.splice(insertAt, 0, clone);
     }
     syncMainLengthFromTracks();
-    currentFrameIndex = insertAt;
+    AppState.currentFrameIndex = insertAt;
     invalidateAllFrameThumbs();
-    objects = getCombinedObjectsForRender();
-    selected = null; canvasSelected = false;
+    AppState.objects = getCombinedObjectsForRender();
+    AppState.selected = null; AppState.canvasSelected = false;
     cancelTransformBoxDrag(); anchorModeOn = false;
-    seekVideoToFrame(currentFrameIndex);
+    seekVideoToFrame(AppState.currentFrameIndex);
     updateFrameBar();
-    render(); syncUI();
-    saveHistory('添加帧');
+    EventBus.emit('need:render'); EventBus.emit('need:syncUI');
+    EventBus.emit('history:save', '添加帧');
   }
 
   function deleteFrame() {
     if (isPlaying) pause();
     if (isSubTrackMode()) {
       syncFrameRef();
-      const t = tracks[activeTrackId];
-      const target = getFrameTrackObject(null, currentFrameIndex);
+      const t = AppState.tracks[AppState.activeTrackId];
+      const target = getFrameTrackObject(null, AppState.currentFrameIndex);
       if (!t) return;
-      if (currentFrameIndex < 0 || currentFrameIndex >= t.frames.length) return;
-      t.frames.splice(currentFrameIndex, 1);
+      if (AppState.currentFrameIndex < 0 || AppState.currentFrameIndex >= t.frames.length) return;
+      t.frames.splice(AppState.currentFrameIndex, 1);
       if (t.frames.length === 0) t.frames.push(null);
       trimTrailingEmptyFrames();
-      if (currentFrameIndex >= frames.length) currentFrameIndex = frames.length - 1;
-      if (currentFrameIndex < 0) currentFrameIndex = 0;
+      if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = AppState.frames.length - 1;
+      if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
       invalidateAllFrameThumbs();
-      objects = getCombinedObjectsForRender();
-      selected = getActiveTrackObject();
-      canvasSelected = false;
+      AppState.objects = getCombinedObjectsForRender();
+      AppState.selected = getActiveTrackObject();
+      AppState.canvasSelected = false;
       cancelTransformBoxDrag(); anchorModeOn = false;
-      seekVideoToFrame(currentFrameIndex);
+      seekVideoToFrame(AppState.currentFrameIndex);
       updateFrameBar();
-      render(); syncUI();
-      saveHistory('删除元件帧');
+      EventBus.emit('need:render'); EventBus.emit('need:syncUI');
+      EventBus.emit('history:save', '删除元件帧');
       return;
     }
-    if (frames.length <= 1) { alert('至少保留一帧'); return; }
-    frames.splice(currentFrameIndex, 1);
-    for (const id in tracks) {
-      const t = tracks[id];
+    if (AppState.frames.length <= 1) { alert('至少保留一帧'); return; }
+    AppState.frames.splice(AppState.currentFrameIndex, 1);
+    for (const id in AppState.tracks) {
+      const t = AppState.tracks[id];
       if (!t || !t.frames) continue;
-      if (currentFrameIndex < t.frames.length) t.frames.splice(currentFrameIndex, 1);
+      if (AppState.currentFrameIndex < t.frames.length) t.frames.splice(AppState.currentFrameIndex, 1);
     }
     trimTrailingEmptyFrames();
-    if (currentFrameIndex >= frames.length) currentFrameIndex = frames.length - 1;
-    if (currentFrameIndex < 0) currentFrameIndex = 0;
+    if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = AppState.frames.length - 1;
+    if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
     invalidateAllFrameThumbs();
-    objects = getCombinedObjectsForRender();
-    selected = null; canvasSelected = false;
+    AppState.objects = getCombinedObjectsForRender();
+    AppState.selected = null; AppState.canvasSelected = false;
     cancelTransformBoxDrag(); anchorModeOn = false;
-    seekVideoToFrame(currentFrameIndex);
+    seekVideoToFrame(AppState.currentFrameIndex);
     updateFrameBar();
-    render(); syncUI();
-    saveHistory('删除帧');
+    EventBus.emit('need:render'); EventBus.emit('need:syncUI');
+    EventBus.emit('history:save', '删除帧');
   }
 
   function applyFPS(fps) {
     defaultFPS = fps;
     const dur = Math.round(1000 / fps);
-    frames.forEach(fr => fr.duration = dur);
+    AppState.frames.forEach(fr => fr.duration = dur);
     document.getElementById('fpsVal').textContent = fps;
     document.getElementById('fpsSlider').value = fps;
-    seekVideoToFrame(currentFrameIndex);
+    seekVideoToFrame(AppState.currentFrameIndex);
   }
 
   /* ==================== 播放 ==================== */
   function play() {
-    if (isPlaying || frames.length < 2) return;
+    if (isPlaying || AppState.frames.length < 2) return;
     syncFrameRef();
     isPlaying = true;
-    selected = null; drag = null; canvasSelected = false;
+    AppState.selected = null; drag = null; AppState.canvasSelected = false;
     cancelTransformBoxDrag(); anchorModeOn = false;
     document.getElementById('btnPlay').textContent = '⏸ 暂停';
     document.getElementById('playBadge').style.display = 'block';
-    let idx = currentFrameIndex;
+    let idx = AppState.currentFrameIndex;
     playState = { idx, acc: 0, last: performance.now() };
-    objects = getCombinedObjectsForRenderAt(idx);
-    currentFrameIndex = idx;
+    AppState.objects = getCombinedObjectsForRenderAt(idx);
+    AppState.currentFrameIndex = idx;
     seekVideoToFrame(idx);
 
     if (refVideo) {
@@ -5586,7 +5770,7 @@ function importActionPresets() {
       startVideoRaf();
     }
 
-    render();
+    EventBus.emit('need:render');
     playTimer = requestAnimationFrame(playTick);
   }
 
@@ -5603,7 +5787,7 @@ function importActionPresets() {
       if (refVideoRaf) { cancelAnimationFrame(refVideoRaf); refVideoRaf = null; }
       updateVideoUI();
     }
-    render();
+    EventBus.emit('need:render');
   }
 
   function togglePlay() { if (isPlaying) pause(); else play(); }
@@ -5615,33 +5799,39 @@ function importActionPresets() {
     st.last = now;
     let changed = false;
     let guard = 0;
-    while (st.acc >= frames[st.idx].duration && guard++ < 100) {
-      st.acc -= frames[st.idx].duration;
-      st.idx = (st.idx + 1) % frames.length;
+    while (st.acc >= AppState.frames[st.idx].duration && guard++ < 100) {
+      st.acc -= AppState.frames[st.idx].duration;
+      st.idx = (st.idx + 1) % AppState.frames.length;
       changed = true;
     }
     if (changed) {
-      objects = getCombinedObjectsForRenderAt(st.idx);
-      currentFrameIndex = st.idx;
-      if (!refVideoPlaying) seekVideoToFrame(currentFrameIndex);
+      AppState.objects = getCombinedObjectsForRenderAt(st.idx);
+      AppState.currentFrameIndex = st.idx;
+      if (!refVideoPlaying) seekVideoToFrame(AppState.currentFrameIndex);
       renderCanvas(false);
       updateFrameBarHighlight();
+      SKFE.systems.camera.updateCameraPreview(); // ⬅️ 新增这一行！让预览窗口跟着刷新
     }
     playTimer = requestAnimationFrame(playTick);
   }
 
   /* ==================== 缓动曲线 ==================== */
-  const TWEEN_EASE_PRESETS = {
-    linear: { label: '匀速', bezier: [0, 0, 1, 1] },
-    easeIn: { label: '缓入', bezier: [0.42, 0, 1, 1] },
-    easeOut: { label: '缓出', bezier: [0, 0, 0.58, 1] },
-    easeInOut: { label: '缓入缓出', bezier: [0.42, 0, 0.58, 1] }
-  };
   let tweenEaseKey = 'linear';
   let tweenCustomBezier = [0.42, 0, 0.58, 1];
 
   const CUSTOM_EASE_KEY = 'skfe_ease_presets_v1';
   let customEasePresets = [];
+
+  /* ==================== 缓动核心（已迁移至 js/features/ease.js） ==================== */
+  const { TWEEN_EASE_PRESETS, bezierAxis, cubicBezierEase, easeElastic1, easeElastic2, easeThumbPath } = SKFE.features.ease;
+  function getEaseBezier(key) {
+    return SKFE.features.ease.getEaseBezier(key, { customEasePresets, tweenCustomBezier });
+  }
+  function getEaseFunction(key) {
+    return SKFE.features.ease.getEaseFunction(key, {
+      customEasePresets, elastic1Params, elastic2Params, tweenCustomBezier,
+    });
+  }
 
   function loadCustomEasePresets() {
     try {
@@ -5681,83 +5871,14 @@ function importActionPresets() {
   let easeCanvasW = 300;
   let easeCanvasH = 180;
 
-  function bezierAxis(t, p1, p2) {
-    const mt = 1 - t;
-    return 3 * mt * mt * t * p1 + 3 * mt * t * t * p2 + t * t * t;
-  }
-  function cubicBezierEase(x, x1, y1, x2, y2) {
-    if (x <= 0) return 0;
-    if (x >= 1) return 1;
-    let lo = 0, hi = 1, t = x;
-    for (let i = 0; i < 24; i++) {
-      const cx = bezierAxis(t, x1, x2);
-      if (Math.abs(cx - x) < 1e-6) break;
-      if (cx < x) lo = t; else hi = t;
-      t = (lo + hi) / 2;
-    }
-    return bezierAxis(t, y1, y2);
-  }
-  function getEaseBezier(key) {
-    if (key && key.startsWith('preset:')) {
-      const id = key.slice(7);
-      const p = customEasePresets.find(x => x.id === id);
-      if (p) return p.bezier;
-      return TWEEN_EASE_PRESETS.linear.bezier;
-    }
-    if (key === 'custom') return tweenCustomBezier;
-    return (TWEEN_EASE_PRESETS[key] || TWEEN_EASE_PRESETS.linear).bezier;
-  }
   function tweenEaseProgress(u) {
     return getEaseFunction(tweenEaseKey)(u);
   }
   let elastic1Params = { damping: 0.6, period: 0.8 };
   let elastic2Params = { period: 0.5, skew: 0 };
 
-  function easeElastic1(t, damping, period) {
-    if (t <= 0) return 0;
-    if (t >= 1) return 1;
-    const d = Math.max(0.1, damping);
-    const p = Math.max(0.1, period);
-    return 1 - Math.pow(2, -10 * d * t) * Math.cos(t * Math.PI * 2 / p);
-  }
 
-  function easeElastic2(t, period, skew) {
-    if (t <= 0) return 0;
-    const p = Math.max(0.05, period);
-    const s = Math.max(-0.4, Math.min(0.4, skew)); 
-    const peakPos = 0.5 + s; // 波峰在这个周期内的位置 (0到1之间)
-    
-    const phase = t / p; 
-    const frac = phase - Math.floor(phase); // 获取当前是在单个波内的进度 (0~1)
-    
-    // 核心：将单周期内的进度扭曲，实现前陡后缓/前缓后陡，且每个波绝对一致
-    let warpedFrac;
-    if (frac < peakPos) {
-        warpedFrac = (frac / peakPos) * 0.5;
-    } else {
-        warpedFrac = 0.5 + ((frac - peakPos) / (1 - peakPos)) * 0.5;
-    }
-    
-    return (1 - Math.cos(warpedFrac * Math.PI * 2)) * 0.5;
-  }
 
-  function getEaseFunction(key) {
-    if (key && key.startsWith('preset:')) {
-      const id = key.slice(7);
-      const p = customEasePresets.find(x => x.id === id);
-      if (p) {
-        if (p.type === 'elastic1') return u => easeElastic1(u, p.params.damping, p.params.period);
-        if (p.type === 'elastic2') return u => easeElastic2(u, p.params.period, p.params.skew);
-        const b = p.bezier || TWEEN_EASE_PRESETS.linear.bezier;
-        return u => cubicBezierEase(u, b[0], b[1], b[2], b[3]);
-      }
-      return u => u;
-    }
-    if (key === 'elastic1') return u => easeElastic1(u, elastic1Params.damping, elastic1Params.period);
-    if (key === 'elastic2') return u => easeElastic2(u, elastic2Params.period, elastic2Params.skew);
-    const b = getEaseBezier(key);
-    return u => cubicBezierEase(u, b[0], b[1], b[2], b[3]);
-  }
   function updateTweenEaseLabel() {
     let label;
     if (tweenEaseKey && tweenEaseKey.startsWith('preset:')) {
@@ -5777,34 +5898,6 @@ function importActionPresets() {
     tweenEaseBtn.title = '补间设置 · ' + label;
   }
 
-  function easeThumbPath(input) {
-    let fn;
-    if (typeof input === 'function') {
-      fn = input;
-    } else if (Array.isArray(input)) {
-      fn = u => cubicBezierEase(u, input[0], input[1], input[2], input[3]);
-    } else {
-      fn = u => u;
-    }
-    const N = 32;
-    let minY = 0, maxY = 1;
-    const ys = [];
-    for (let i = 0; i <= N; i++) {
-      const y = fn(i / N);
-      ys.push(y);
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-    }
-    const range = Math.max(0.0001, maxY - minY);
-    const pts = [];
-    for (let i = 0; i <= N; i++) {
-      const u = i / N;
-      const nx = 2 + u * 36;
-      const ny = 26 - ((ys[i] - minY) / range) * 24;
-      pts.push(nx.toFixed(1) + ',' + ny.toFixed(1));
-    }
-    return 'M' + pts.join(' L');
-  }
   function renderTweenEaseMenu() {
     const builtins = ['linear', 'easeIn', 'easeOut', 'easeInOut', 'custom'];
     let html = '';
@@ -6372,10 +6465,10 @@ function importActionPresets() {
   }
 
   function getJointChanges() {
-    if (frames.length < 2 || currentFrameIndex >= frames.length - 1) return [];
-    const easeTrackId = isSubTrackMode() ? activeTrackId : null;
-    const f1Objs = getObjectsForFrameAt(currentFrameIndex, easeTrackId);
-    const f2Objs = getObjectsForFrameAt(currentFrameIndex + 1, easeTrackId);
+    if (AppState.frames.length < 2 || AppState.currentFrameIndex >= AppState.frames.length - 1) return [];
+    const easeTrackId = isSubTrackMode() ? AppState.activeTrackId : null;
+    const f1Objs = getObjectsForFrameAt(AppState.currentFrameIndex, easeTrackId);
+    const f2Objs = getObjectsForFrameAt(AppState.currentFrameIndex + 1, easeTrackId);
     const changes = [];
     const add = (o, joint, v1, v2, angle) => {
       const eps = angle ? 0.005 : 0.5;
@@ -6516,12 +6609,12 @@ function importActionPresets() {
 
   function buildTweenFrames(f1, f2, count, trackId, i1, i2) {
     const targetTrackId = (trackId != null && trackId !== TRACK_ALL_ID) ? String(trackId) : null;
-    const idx1 = (i1 != null) ? i1 : (typeof f1 === 'number' ? f1 : frames.indexOf(f1));
-    const idx2 = (i2 != null) ? i2 : (typeof f2 === 'number' ? f2 : frames.indexOf(f2));
-    const sf1 = frames[idx1] || frames[currentFrameIndex] || {};
-    const sf2 = frames[idx2] || frames[currentFrameIndex] || {};
-    const objList1 = getObjectsForFrameAt(idx1 >= 0 ? idx1 : currentFrameIndex, targetTrackId);
-    const objList2 = getObjectsForFrameAt(idx2 >= 0 ? idx2 : currentFrameIndex, targetTrackId);
+    const idx1 = (i1 != null) ? i1 : (typeof f1 === 'number' ? f1 : AppState.frames.indexOf(f1));
+    const idx2 = (i2 != null) ? i2 : (typeof f2 === 'number' ? f2 : AppState.frames.indexOf(f2));
+    const sf1 = AppState.frames[idx1] || AppState.frames[AppState.currentFrameIndex] || {};
+    const sf2 = AppState.frames[idx2] || AppState.frames[AppState.currentFrameIndex] || {};
+    const objList1 = getObjectsForFrameAt(idx1 >= 0 ? idx1 : AppState.currentFrameIndex, targetTrackId);
+    const objList2 = getObjectsForFrameAt(idx2 >= 0 ? idx2 : AppState.currentFrameIndex, targetTrackId);
     const dur1 = sf1.duration || Math.round(1000 / defaultFPS);
     const dur2 = sf2.duration || Math.round(1000 / defaultFPS);
     const cloneTweenObject = (src) => {
@@ -6693,7 +6786,7 @@ function importActionPresets() {
     if (isPlaying) pause();
     syncFrameRef();
     if (isSubTrackMode()) {
-      const t = tracks[activeTrackId];
+      const t = AppState.tracks[AppState.activeTrackId];
       if (!t) return;
       if (t.frames.length - multiSelectedFrames.size < 1) { alert('至少保留一帧'); return; }
       const indices = Array.from(multiSelectedFrames).sort((a, b) => b - a);
@@ -6701,37 +6794,37 @@ function importActionPresets() {
       if (t.frames.length === 0) t.frames.push(null);
       multiSelectedFrames.clear();
       trimTrailingEmptyFrames();
-      if (currentFrameIndex >= frames.length) currentFrameIndex = frames.length - 1;
-      if (currentFrameIndex < 0) currentFrameIndex = 0;
+      if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = AppState.frames.length - 1;
+      if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
       invalidateAllFrameThumbs();
-      objects = getCombinedObjectsForRender();
-      selected = getActiveTrackObject();
-      canvasSelected = false;
+      AppState.objects = getCombinedObjectsForRender();
+      AppState.selected = getActiveTrackObject();
+      AppState.canvasSelected = false;
       updateFrameBar();
-      render(); syncUI();
-      saveHistory('删除选中帧');
+      EventBus.emit('need:render'); EventBus.emit('need:syncUI');
+      EventBus.emit('history:save', '删除选中帧');
       return;
     }
-    if (frames.length - multiSelectedFrames.size < 1) { alert('至少保留一帧'); return; }
+    if (AppState.frames.length - multiSelectedFrames.size < 1) { alert('至少保留一帧'); return; }
     const indices = Array.from(multiSelectedFrames).sort((a, b) => b - a);
     indices.forEach(i => {
-      if (i < 0 || i >= frames.length) return;
-      frames.splice(i, 1);
-      for (const id in tracks) {
-        const t = tracks[id];
+      if (i < 0 || i >= AppState.frames.length) return;
+      AppState.frames.splice(i, 1);
+      for (const id in AppState.tracks) {
+        const t = AppState.tracks[id];
         if (t && t.frames && i < t.frames.length) t.frames.splice(i, 1);
       }
     });
     multiSelectedFrames.clear();
     trimTrailingEmptyFrames();
-    if (currentFrameIndex >= frames.length) currentFrameIndex = frames.length - 1;
-    if (currentFrameIndex < 0) currentFrameIndex = 0;
+    if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = AppState.frames.length - 1;
+    if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
     invalidateAllFrameThumbs();
-    objects = getCombinedObjectsForRender();
-    selected = null; canvasSelected = false;
+    AppState.objects = getCombinedObjectsForRender();
+    AppState.selected = null; AppState.canvasSelected = false;
     updateFrameBar();
-    render(); syncUI();
-    saveHistory('删除选中帧');
+    EventBus.emit('need:render'); EventBus.emit('need:syncUI');
+    EventBus.emit('history:save', '删除选中帧');
   }
 
   function tweenSelectedFrames() {
@@ -6747,14 +6840,14 @@ function importActionPresets() {
       const i1 = indices[k - 1];
       const i2 = indices[k];
       if (i2 !== i1 + 1) continue;
-      if (i1 < 0 || i2 >= frames.length) continue;
+      if (i1 < 0 || i2 >= AppState.frames.length) continue;
       if (subMode) {
-        const t = tracks[activeTrackId];
+        const t = AppState.tracks[AppState.activeTrackId];
         if (!t) continue;
         if (!getFrameTrackObject(null, i1) || !getFrameTrackObject(null, i2)) continue;
-        const tweenFrames = buildTweenFrames(frames[i1], frames[i2], count, activeTrackId, i1, i2);
+        const tweenFrames = buildTweenFrames(AppState.frames[i1], AppState.frames[i2], count, AppState.activeTrackId, i1, i2);
         const copies = tweenFrames.map(tw => {
-          const src = tw && tw.objects ? (tw.objects.find(o => String(o.id) === String(activeTrackId)) || tw.objects[0] || null) : null;
+          const src = tw && tw.objects ? (tw.objects.find(o => String(o.id) === String(AppState.activeTrackId)) || tw.objects[0] || null) : null;
           const c = src ? cloneObjectKeepImg(src) : null;
           if (c && src) c.id = src.id;
           return c;
@@ -6762,12 +6855,12 @@ function importActionPresets() {
         t.frames.splice(i1 + 1, 0, ...copies);
         pairs++;
       } else {
-        const tweenFrames = buildTweenFrames(frames[i1], frames[i2], count, null, i1, i2);
+        const tweenFrames = buildTweenFrames(AppState.frames[i1], AppState.frames[i2], count, null, i1, i2);
         let insertPos = i1 + 1;
         for (const nf of tweenFrames) {
-          frames.splice(insertPos, 0, { id: nf.id, duration: nf.duration, isTween: true });
-          for (const id in tracks) {
-            const t = tracks[id];
+          AppState.frames.splice(insertPos, 0, { id: nf.id, duration: nf.duration, isTween: true });
+          for (const id in AppState.tracks) {
+            const t = AppState.tracks[id];
             if (!t) continue;
             if (!t.frames) t.frames = [];
             while (t.frames.length < insertPos) t.frames.push(null);
@@ -6787,91 +6880,41 @@ function importActionPresets() {
     syncMainLengthFromTracks();
     multiSelectedFrames.clear();
     invalidateAllFrameThumbs();
-    objects = getCombinedObjectsForRender();
-    if (subMode) selected = getActiveTrackObject();
+    AppState.objects = getCombinedObjectsForRender();
+    if (subMode) AppState.selected = getActiveTrackObject();
     updateFrameBar();
-    render(); syncUI();
-    saveHistory('批量补间');
+    EventBus.emit('need:render'); EventBus.emit('need:syncUI');
+    EventBus.emit('history:save', '批量补间');
     alert(`已在 ${pairs} 对相邻帧之间生成补间帧。`);
   }
 
-  /* ==================== ZIP 打包工具 ==================== */
-  let jszipLoading = null;
-  function getJSZip() {
-    if (window.JSZip) return Promise.resolve(window.JSZip);
-    if (jszipLoading) return jszipLoading;
-    jszipLoading = new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
-      script.onload = () => resolve(window.JSZip);
-      script.onerror = () => { jszipLoading = null; reject(new Error('JSZip load failed')); };
-      document.head.appendChild(script);
-    });
-    return jszipLoading;
-  }
-
-  async function exportPNGsAsZip(frameList, trackId, options) {
-    if (!frameList || !frameList.length) return;
-    const btn = document.getElementById('btnExportPNGSeq');
-    const oldText = btn ? btn.textContent : '';
-    if (btn) { btn.disabled = true; btn.textContent = '准备打包...'; }
-    
-    try {
-      const JSZip = await getJSZip();
-      const zip = new JSZip();
-      const outW = options.outW;
-      const outH = options.outH;
-      const crop = options.crop;
-      const transparent = options.transparent;
-
-      for (let i = 0; i < frameList.length; i++) {
-        if (btn) btn.textContent = `打包中 ${i + 1}/${frameList.length}`;
-        const fr = frameList[i];
-        const idx = frames.indexOf(fr);
-        const safeIdx = idx >= 0 ? idx : 0;
-        
-        const off = renderFrameToDataURL(fr, outW, outH, { transparent, crop }, trackId);
-        const dataUrl = off.toDataURL('image/png');
-        const base64Data = dataUrl.split(',')[1];
-        
-        const fileName = `frame_${String(safeIdx + 1).padStart(3, '0')}.png`;
-        zip.file(fileName, base64Data, { base64: true });
-        
-        if (i % 5 === 4) await new Promise(r => setTimeout(r, 0)); // 防卡顿
-      }
-
-      if (btn) btn.textContent = '生成 ZIP...';
-      const blob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'stickman_frames_' + Date.now() + '.zip';
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
-      
-    } catch (err) {
-      console.warn('ZIP打包失败，降级为逐个下载', err);
-      alert('ZIP 库加载失败，将自动降级为逐个下载（若浏览器拦截请在地址栏允许）。');
-      // 降级逻辑
-      const urls = frameList.map(fr => {
-        const idx = frames.indexOf(fr);
-        const safeIdx = idx >= 0 ? idx : 0;
-        const off = renderFrameToDataURL(fr, options.outW, options.outH, { transparent: options.transparent, crop: options.crop }, trackId);
-        return { url: off.toDataURL('image/png'), label: safeIdx + 1 };
-      });
-      urls.forEach((u, i) => {
-        setTimeout(() => {
-          const a = document.createElement('a');
-          a.href = u.url;
-          a.download = `frame_${String(u.label).padStart(3, '0')}.png`;
-          document.body.appendChild(a); a.click(); a.remove();
-        }, i * 150);
-      });
-    } finally {
-      if (btn) { btn.disabled = false; btn.textContent = oldText; }
-      render();
-    }
-  }
+  /* ==================== 离屏渲染导出（已迁移至 js/features/export.js） ==================== */
+  SKFE.features.export.init({
+    AppState,
+    EventBus,
+    TRACK_ALL_ID,
+    isSubTrackMode,
+    syncFrameRef,
+    renderFrameToDataURL,
+    getExportSize,
+    getCropForFrames,
+    getExportCrop,
+    cameraToCrop,
+    getCurrentCameraObject,
+    getCameraAtFrame,
+    shouldSkipCameraForExport,
+    getPageBgColor: () => pageBgColor,
+    getDefaultFPS: () => defaultFPS,
+    getCtx: () => ctx,
+    setCtx: (c) => { ctx = c; },
+    renderScene,
+    getObjectsForFrameAt,
+    invalidateAllFrameThumbs,
+    updateFrameBar,
+    // 播放状态（导出前需暂停）
+    getIsPlaying: () => isPlaying,
+    pause: () => pause(),
+  });
 
   function exportSelectedPNGs() {
     if (!multiSelectMode || multiSelectedFrames.size === 0) return;
@@ -6879,15 +6922,15 @@ function importActionPresets() {
     syncFrameRef();
     const _sz = getExportSize();
     const transparent = document.getElementById('gifTransparent').checked;
-    const trackId = isSubTrackMode() ? activeTrackId : null;
+    const trackId = isSubTrackMode() ? AppState.activeTrackId : null;
     const indices = Array.from(multiSelectedFrames).sort((a, b) => a - b);
-    const list = indices.map(i => frames[i]).filter(Boolean);
+    const list = indices.map(i => AppState.frames[i]).filter(Boolean);
     if (!list.length) return;
     
     const cam = shouldSkipCameraForExport() ? null : (getCurrentCameraObject() || getCameraAtFrame(0));
     const crop = cam ? null : getCropForFrames(list, _sz.w, _sz.h, trackId);
     
-    exportPNGsAsZip(list, trackId, {
+    SKFE.features.export.exportPNGsAsZip(list, trackId, {
       outW: _sz.w,
       outH: _sz.h,
       crop,
@@ -6900,9 +6943,9 @@ function importActionPresets() {
     if (isPlaying) pause();
     syncFrameRef();
     const _sz = getExportSize();
-    const trackId = isSubTrackMode() ? activeTrackId : null;
+    const trackId = isSubTrackMode() ? AppState.activeTrackId : null;
     const indices = Array.from(multiSelectedFrames).sort((a, b) => a - b);
-    const list = indices.map(i => frames[i]).filter(Boolean);
+    const list = indices.map(i => AppState.frames[i]).filter(Boolean);
     if (!list.length) return;
 
     const cam = shouldSkipCameraForExport() ? null : (getCurrentCameraObject() || getCameraAtFrame(0));
@@ -6910,7 +6953,7 @@ function importActionPresets() {
 
     // 逐个下载 JPG
     list.forEach((fr, index) => {
-      const idx = frames.indexOf(fr);
+      const idx = AppState.frames.indexOf(fr);
       const safeIdx = idx >= 0 ? idx : 0;
       
       // 使用不透明背景（JPG没有透明通道）
@@ -6932,9 +6975,9 @@ function importActionPresets() {
   function exportSelectedGIF() {
     if (!multiSelectMode || multiSelectedFrames.size === 0) return;
     const indices = Array.from(multiSelectedFrames).sort((a, b) => a - b);
-    const list = indices.map(i => frames[i]).filter(Boolean);
+    const list = indices.map(i => AppState.frames[i]).filter(Boolean);
     if (!list.length) return;
-    exportGIF(list, isSubTrackMode() ? activeTrackId : null);
+    SKFE.features.export.exportGIF(list, isSubTrackMode() ? AppState.activeTrackId : null);
   }
 
   const btnMultiTween = document.getElementById('btnMultiTween');
@@ -6943,32 +6986,32 @@ function importActionPresets() {
   /* ==================== 多轨道空白帧辅助 ==================== */
   function findNextTrackFrameIndex(startIdx) {
     if (isSubTrackMode()) {
-      const len = getTrackLength(activeTrackId);
-      for (let i = startIdx + 1; i < Math.max(frames.length, len); i++) {
-        if (getTrackFrame(activeTrackId, i)) return i;
+      const len = getTrackLength(AppState.activeTrackId);
+      for (let i = startIdx + 1; i < Math.max(AppState.frames.length, len); i++) {
+        if (getTrackFrame(AppState.activeTrackId, i)) return i;
       }
       return -1;
     }
-    for (let i = startIdx + 1; i < frames.length; i++) {
+    for (let i = startIdx + 1; i < AppState.frames.length; i++) {
       if (getTrackObjectsAt(i).length > 0) return i;
     }
     return -1;
   }
 
   function insertTweenFrames(startIdx, count) {
-    if (!(startIdx >= 0) || startIdx >= frames.length) return { ok: false, reason: 'last' };
+    if (!(startIdx >= 0) || startIdx >= AppState.frames.length) return { ok: false, reason: 'last' };
     if (isSubTrackMode()) {
-      const t = tracks[activeTrackId];
+      const t = AppState.tracks[AppState.activeTrackId];
       if (!t) return { ok: false, reason: 'no-current' };
       if (!getFrameTrackObject(null, startIdx)) return { ok: false, reason: 'no-current' };
       const f2Idx = findNextTrackFrameIndex(startIdx);
       if (f2Idx < 0) return { ok: false, reason: 'no-target' };
-      const tweenFrames = buildTweenFrames(frames[startIdx], frames[f2Idx], count, activeTrackId, startIdx, f2Idx);
-      const trackKey = String(activeTrackId);
+      const tweenFrames = buildTweenFrames(AppState.frames[startIdx], AppState.frames[f2Idx], count, AppState.activeTrackId, startIdx, f2Idx);
+      const trackKey = String(AppState.activeTrackId);
       /* 连续空白段：从 startIdx+1 开始，遇到内容帧立即停止 */
       const slots = [];
       for (let i = startIdx + 1; i < f2Idx; i++) {
-        if (getTrackFrame(activeTrackId, i)) break;
+        if (getTrackFrame(AppState.activeTrackId, i)) break;
         slots.push(i);
       }
       let used = 0;
@@ -6977,7 +7020,7 @@ function importActionPresets() {
         const src = tw && tw.objects ? (tw.objects.find(o => String(o.id) === trackKey) || tw.objects[0] || null) : null;
         const c = src ? cloneObjectKeepImg(src) : null;
         if (c) c.id = src.id;
-        setTrackFrame(activeTrackId, slots[used], c);
+        setTrackFrame(AppState.activeTrackId, slots[used], c);
       }
       if (used < tweenFrames.length) {
         const rest = tweenFrames.slice(used).map(tw => {
@@ -6992,13 +7035,13 @@ function importActionPresets() {
       }
       return { ok: true };
     }
-    if (startIdx >= frames.length - 1) return { ok: false, reason: 'last' };
-    const newFrames = buildTweenFrames(frames[startIdx], frames[startIdx + 1], count, null, startIdx, startIdx + 1);
+    if (startIdx >= AppState.frames.length - 1) return { ok: false, reason: 'last' };
+    const newFrames = buildTweenFrames(AppState.frames[startIdx], AppState.frames[startIdx + 1], count, null, startIdx, startIdx + 1);
     let insertPos = startIdx + 1;
     for (const nf of newFrames) {
-      frames.splice(insertPos, 0, { id: nf.id, duration: nf.duration, isTween: true });
-      for (const id in tracks) {
-        const t = tracks[id];
+      AppState.frames.splice(insertPos, 0, { id: nf.id, duration: nf.duration, isTween: true });
+      for (const id in AppState.tracks) {
+        const t = AppState.tracks[id];
         if (!t) continue;
         if (!t.frames) t.frames = [];
         while (t.frames.length < insertPos) t.frames.push(null);
@@ -7013,43 +7056,43 @@ function importActionPresets() {
 
   function trimTrailingEmptyFrames() {
     /* 每条 track 从尾部弹出连续空白帧，至少保留 1 帧 */
-    for (const id in tracks) {
-      const t = tracks[id];
+    for (const id in AppState.tracks) {
+      const t = AppState.tracks[id];
       if (!t || !t.frames) continue;
       while (t.frames.length > 1 && t.frames[t.frames.length - 1] == null) t.frames.pop();
       if (t.frames.length === 0) t.frames.push(null);
     }
     const target = Math.max(1, getMainLength());
-    if (frames.length > target) frames.length = target;
+    if (AppState.frames.length > target) AppState.frames.length = target;
     else syncMainLengthFromTracks();
-    if (currentFrameIndex >= frames.length) currentFrameIndex = frames.length - 1;
-    if (currentFrameIndex < 0) currentFrameIndex = 0;
-    objects = getCombinedObjectsForRender();
-    if (isSubTrackMode()) selected = getActiveTrackObject();
+    if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = AppState.frames.length - 1;
+    if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
+    AppState.objects = getCombinedObjectsForRender();
+    if (isSubTrackMode()) AppState.selected = getActiveTrackObject();
   }
 
   /* ==================== 单对补间执行 ==================== */
   document.getElementById('btnTween').onclick = () => {
-    if (frames.length < 2) { alert('至少需要两帧才能补间'); return; }
+    if (AppState.frames.length < 2) { alert('至少需要两帧才能补间'); return; }
     const subMode = isSubTrackMode();
-    if (!subMode && currentFrameIndex >= frames.length - 1) { alert('当前是最后一帧，无法向后补间'); return; }
+    if (!subMode && AppState.currentFrameIndex >= AppState.frames.length - 1) { alert('当前是最后一帧，无法向后补间'); return; }
     const count = parseInt(document.getElementById('tweenCount').value) || 5;
     if (count < 1 || count > 60) { alert('补间帧数需在 1-60 之间'); return; }
     if (isPlaying) pause();
     syncFrameRef();
-    const res = insertTweenFrames(currentFrameIndex, count);
+    const res = insertTweenFrames(AppState.currentFrameIndex, count);
     if (!res.ok) {
       if (res.reason === 'no-current') { alert('当前帧对当前轨道是空白帧，无法补间'); return; }
       if (res.reason === 'no-target') { alert('当前帧之后没有该元件的下一个关键帧，无法补间'); return; }
       alert('当前是最后一帧，无法向后补间');
       return;
     }
-    if (subMode) selected = getActiveTrackObject();
-    objects = getCombinedObjectsForRender();
+    if (subMode) AppState.selected = getActiveTrackObject();
+    AppState.objects = getCombinedObjectsForRender();
     invalidateAllFrameThumbs();
     updateFrameBar();
-    render(); syncUI();
-    saveHistory('生成补间帧');
+    EventBus.emit('need:render'); EventBus.emit('need:syncUI');
+    EventBus.emit('history:save', '生成补间帧');
     alert(subMode ? `已在当前帧和下一个关键帧之间生成 ${count} 个补间帧` : `已在当前帧和下一帧之间生成 ${count} 个补间帧`);
   };
 
@@ -7069,7 +7112,7 @@ function importActionPresets() {
       const indices = Array.from(multiSelectedFrames).sort((a, b) => a - b);
       const insertPos = indices[indices.length - 1] + 1;
       if (subMode) {
-        const t = ensureTrack(activeTrackId, (selected && selected.name) || activeTrackId);
+        const t = ensureTrack(AppState.activeTrackId, (AppState.selected && AppState.selected.name) || AppState.activeTrackId);
         const copies = indices.map(idx => {
           const src = getFrameTrackObject(null, idx);
           const c = src ? cloneObjectKeepImg(src) : null;
@@ -7078,19 +7121,19 @@ function importActionPresets() {
         });
         while (t.frames.length < insertPos) t.frames.push(null);
         t.frames.splice(insertPos, 0, ...copies);
-        currentFrameIndex = insertPos + copies.length - 1;
+        AppState.currentFrameIndex = insertPos + copies.length - 1;
         syncMainLengthFromTracks();
-        objects = getCombinedObjectsForRender();
-        selected = getActiveTrackObject();
+        AppState.objects = getCombinedObjectsForRender();
+        AppState.selected = getActiveTrackObject();
       } else {
         const metas = indices.map(idx => ({
           id: ++uid,
-          duration: (frames[idx] && frames[idx].duration) || Math.round(1000 / defaultFPS),
+          duration: (AppState.frames[idx] && AppState.frames[idx].duration) || Math.round(1000 / defaultFPS),
           isTween: false
         }));
-        frames.splice(insertPos, 0, ...metas);
-        for (const id in tracks) {
-          const t = tracks[id];
+        AppState.frames.splice(insertPos, 0, ...metas);
+        for (const id in AppState.tracks) {
+          const t = AppState.tracks[id];
           if (!t) continue;
           if (!t.frames) t.frames = [];
           const copies = indices.map(idx => {
@@ -7103,24 +7146,24 @@ function importActionPresets() {
           t.frames.splice(insertPos, 0, ...copies);
         }
         syncMainLengthFromTracks();
-        currentFrameIndex = insertPos + metas.length - 1;
-        objects = getCombinedObjectsForRender();
-        selected = null;
+        AppState.currentFrameIndex = insertPos + metas.length - 1;
+        AppState.objects = getCombinedObjectsForRender();
+        AppState.selected = null;
       }
-      canvasSelected = false;
+      AppState.canvasSelected = false;
       multiSelectedFrames.clear();
       invalidateAllFrameThumbs();
       updateFrameBar();
-      render(); syncUI();
-      saveHistory('复制帧');
+      EventBus.emit('need:render'); EventBus.emit('need:syncUI');
+      EventBus.emit('history:save', '复制帧');
       return;
     }
     if (subMode) {
-      const t = ensureTrack(activeTrackId, (selected && selected.name) || activeTrackId);
-      const srcObj = getFrameTrackObject(null, currentFrameIndex);
+      const t = ensureTrack(AppState.activeTrackId, (AppState.selected && AppState.selected.name) || AppState.activeTrackId);
+      const srcObj = getFrameTrackObject(null, AppState.currentFrameIndex);
       const clone = srcObj ? cloneObjectKeepImg(srcObj) : null;
       if (clone && srcObj) clone.id = srcObj.id;
-      const nextIdx = currentFrameIndex + 1;
+      const nextIdx = AppState.currentFrameIndex + 1;
       if (nextIdx < t.frames.length && t.frames[nextIdx] == null) {
         /* 下一帧对当前轨道是空白帧：直接占用该槽位，不把后面的帧挤开 */
         t.frames[nextIdx] = clone;
@@ -7128,47 +7171,47 @@ function importActionPresets() {
         while (t.frames.length < nextIdx) t.frames.push(null);
         t.frames.splice(nextIdx, 0, clone);
       }
-      currentFrameIndex = nextIdx;
+      AppState.currentFrameIndex = nextIdx;
       syncMainLengthFromTracks();
       trimTrailingEmptyFrames();
       invalidateAllFrameThumbs();
-      objects = getCombinedObjectsForRender();
-      selected = getActiveTrackObject();
-      canvasSelected = false;
+      AppState.objects = getCombinedObjectsForRender();
+      AppState.selected = getActiveTrackObject();
+      AppState.canvasSelected = false;
       cancelTransformBoxDrag(); anchorModeOn = false;
-      seekVideoToFrame(currentFrameIndex);
+      seekVideoToFrame(AppState.currentFrameIndex);
       updateFrameBar();
-      render(); syncUI();
-      saveHistory('复制帧');
+      EventBus.emit('need:render'); EventBus.emit('need:syncUI');
+      EventBus.emit('history:save', '复制帧');
       return;
     }
-    const insertAt = currentFrameIndex + 1;
-    const last = frames[frames.length - 1];
+    const insertAt = AppState.currentFrameIndex + 1;
+    const last = AppState.frames[AppState.frames.length - 1];
     const newFrame = {
-      id: ((last && last.id) || frames.length) + 1,
+      id: ((last && last.id) || AppState.frames.length) + 1,
       duration: Math.round(1000 / defaultFPS),
       isTween: false
     };
-    frames.splice(insertAt, 0, newFrame);
-    for (const id in tracks) {
-      const t = tracks[id];
+    AppState.frames.splice(insertAt, 0, newFrame);
+    for (const id in AppState.tracks) {
+      const t = AppState.tracks[id];
       if (!t) continue;
       if (!t.frames) t.frames = [];
       while (t.frames.length < insertAt) t.frames.push(null);
-      const src = t.frames[currentFrameIndex];
+      const src = t.frames[AppState.currentFrameIndex];
       const clone = src ? cloneObjectKeepImg(src) : null;
       if (clone && src) clone.id = src.id;
       t.frames.splice(insertAt, 0, clone);
     }
     syncMainLengthFromTracks();
-    currentFrameIndex = insertAt;
+    AppState.currentFrameIndex = insertAt;
     invalidateAllFrameThumbs();
-    objects = getCombinedObjectsForRender();
-    selected = null; canvasSelected = false;
-    seekVideoToFrame(currentFrameIndex);
+    AppState.objects = getCombinedObjectsForRender();
+    AppState.selected = null; AppState.canvasSelected = false;
+    seekVideoToFrame(AppState.currentFrameIndex);
     updateFrameBar();
-    render(); syncUI();
-    saveHistory('复制帧');
+    EventBus.emit('need:render'); EventBus.emit('need:syncUI');
+    EventBus.emit('history:save', '复制帧');
   };
 
   /* ==================== 导出尺寸 & 裁剪 ==================== */
@@ -7187,8 +7230,8 @@ function importActionPresets() {
       const a = cam.w / cam.h;
       if (a >= 1) { w = base; h = Math.round(base / a); }
       else { h = base; w = Math.round(base * a); }
-    } else if (is1080 && canvasBoundsEnabled && canvasBounds.h > 0) {
-      const a = canvasBounds.w / canvasBounds.h;
+    } else if (is1080 && AppState.canvasBoundsEnabled && AppState.canvasBounds.h > 0) {
+      const a = AppState.canvasBounds.w / AppState.canvasBounds.h;
       if (a >= 1) { w = 1920; h = Math.round(1920 / a); }
       else { w = Math.round(1920 * a); h = 1920; }
     }
@@ -7196,7 +7239,7 @@ function importActionPresets() {
   }
 
   function computeContentBounds(list) {
-    list = list || objects;
+    list = list || AppState.objects;
     const prevList = _renderList;
     _renderList = list;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -7235,7 +7278,7 @@ function importActionPresets() {
   function computeAllFramesBounds(trackId) {
     const tid = (trackId != null && trackId !== TRACK_ALL_ID) ? String(trackId) : null;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (let i = 0; i < frames.length; i++) {
+    for (let i = 0; i < AppState.frames.length; i++) {
       const b = computeContentBounds(getObjectsForFrameAt(i, tid));
       if (b) {
         if (b.minX < minX) minX = b.minX;
@@ -7264,15 +7307,15 @@ function importActionPresets() {
   function getExportCrop(outW, outH, trackId) {
     const cam = shouldSkipCameraForExport() ? null : (getCurrentCameraObject() || getCameraAtFrame(0));
     if (cam) return cameraToCrop(cam, outW, outH);
-    if (canvasBoundsEnabled) {
-      const rad = canvasBounds.rotation || 0;
+    if (AppState.canvasBoundsEnabled) {
+      const rad = AppState.canvasBounds.rotation || 0;
       const absCos = Math.abs(Math.cos(rad));
       const absSin = Math.abs(Math.sin(rad));
-      const w_rot = canvasBounds.w * absCos + canvasBounds.h * absSin;
-      const h_rot = canvasBounds.w * absSin + canvasBounds.h * absCos;
+      const w_rot = AppState.canvasBounds.w * absCos + AppState.canvasBounds.h * absSin;
+      const h_rot = AppState.canvasBounds.w * absSin + AppState.canvasBounds.h * absCos;
       return {
-        cx: canvasBounds.x + canvasBounds.w / 2,
-        cy: canvasBounds.y + canvasBounds.h / 2,
+        cx: AppState.canvasBounds.x + AppState.canvasBounds.w / 2,
+        cy: AppState.canvasBounds.y + AppState.canvasBounds.h / 2,
         scale: Math.min(outW / w_rot, outH / h_rot),
         rotation: rad
       };
@@ -7283,26 +7326,26 @@ function importActionPresets() {
   function getCropForFrames(frameList, outW, outH, trackId) {
     const tid = (trackId != null && trackId !== TRACK_ALL_ID) ? String(trackId) : null;
     if (!frameList || !frameList.length) return getExportCrop(outW, outH, tid);
-    const firstIdx = frames.indexOf(frameList[0]);
+    const firstIdx = AppState.frames.indexOf(frameList[0]);
     const cam = shouldSkipCameraForExport() ? null :
-      (getCameraAtFrame(firstIdx >= 0 ? firstIdx : currentFrameIndex) || getCurrentCameraObject() || getCameraAtFrame(0));
+      (getCameraAtFrame(firstIdx >= 0 ? firstIdx : AppState.currentFrameIndex) || getCurrentCameraObject() || getCameraAtFrame(0));
     if (cam) return cameraToCrop(cam, outW, outH);
-    if (canvasBoundsEnabled) {
-      const rad = canvasBounds.rotation || 0;
+    if (AppState.canvasBoundsEnabled) {
+      const rad = AppState.canvasBounds.rotation || 0;
       const absCos = Math.abs(Math.cos(rad));
       const absSin = Math.abs(Math.sin(rad));
-      const w_rot = canvasBounds.w * absCos + canvasBounds.h * absSin;
-      const h_rot = canvasBounds.w * absSin + canvasBounds.h * absCos;
+      const w_rot = AppState.canvasBounds.w * absCos + AppState.canvasBounds.h * absSin;
+      const h_rot = AppState.canvasBounds.w * absSin + AppState.canvasBounds.h * absCos;
       return {
-        cx: canvasBounds.x + canvasBounds.w / 2,
-        cy: canvasBounds.y + canvasBounds.h / 2,
+        cx: AppState.canvasBounds.x + AppState.canvasBounds.w / 2,
+        cy: AppState.canvasBounds.y + AppState.canvasBounds.h / 2,
         scale: Math.min(outW / w_rot, outH / h_rot),
         rotation: rad
       };
     }
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const fr of frameList) {
-      const idx = frames.indexOf(fr);
+      const idx = AppState.frames.indexOf(fr);
       const b = computeContentBounds(getObjectsForFrameAt(idx >= 0 ? idx : 0, tid));
       if (b) {
         if (b.minX < minX) minX = b.minX;
@@ -7318,8 +7361,8 @@ function importActionPresets() {
   function renderFrameToDataURL(frame, outW, outH, options, trackId) {
     options = options || {};
     const transparent = !!options.transparent;
-    const idx = (typeof frame === 'number') ? frame : frames.indexOf(frame);
-    const safeIdx = idx >= 0 ? idx : currentFrameIndex;
+    const idx = (typeof frame === 'number') ? frame : AppState.frames.indexOf(frame);
+    const safeIdx = idx >= 0 ? idx : AppState.currentFrameIndex;
     const tid = (trackId != null && trackId !== TRACK_ALL_ID)
       ? String(trackId)
       : ((options.trackId != null && options.trackId !== TRACK_ALL_ID) ? String(options.trackId) : null);
@@ -7336,15 +7379,15 @@ function importActionPresets() {
     } else if (camAt) {
       const cc = cameraToCrop(camAt, outW, outH);
       scale = cc.scale; cx = cc.cx; cy = cc.cy; rotation = cc.rotation;
-    } else if (canvasBoundsEnabled) {
-      const rad = canvasBounds.rotation || 0;
+    } else if (AppState.canvasBoundsEnabled) {
+      const rad = AppState.canvasBounds.rotation || 0;
       const absCos = Math.abs(Math.cos(rad));
       const absSin = Math.abs(Math.sin(rad));
-      const w_rot = canvasBounds.w * absCos + canvasBounds.h * absSin;
-      const h_rot = canvasBounds.w * absSin + canvasBounds.h * absCos;
+      const w_rot = AppState.canvasBounds.w * absCos + AppState.canvasBounds.h * absSin;
+      const h_rot = AppState.canvasBounds.w * absSin + AppState.canvasBounds.h * absCos;
       scale = Math.min(outW / w_rot, outH / h_rot);
-      cx = canvasBounds.x + canvasBounds.w / 2;
-      cy = canvasBounds.y + canvasBounds.h / 2;
+      cx = AppState.canvasBounds.x + AppState.canvasBounds.w / 2;
+      cy = AppState.canvasBounds.y + AppState.canvasBounds.h / 2;
       rotation = rad;
     } else {
       const c = bboxToCrop(computeContentBounds(objList), outW, outH, 1.15);
@@ -7360,12 +7403,12 @@ function importActionPresets() {
     window.__isExporting = true;
     try {
       octx.save();
-      if (canvasBoundsEnabled) {
+      if (AppState.canvasBoundsEnabled) {
         octx.save();
         octx.translate(cx, cy);
         octx.rotate(rotation);
         octx.beginPath();
-        octx.rect(-canvasBounds.w / 2, -canvasBounds.h / 2, canvasBounds.w, canvasBounds.h);
+        octx.rect(-AppState.canvasBounds.w / 2, -AppState.canvasBounds.h / 2, AppState.canvasBounds.w, AppState.canvasBounds.h);
         octx.clip();
         octx.restore();
       }
@@ -7376,382 +7419,17 @@ function importActionPresets() {
   }
 
   function renderSingleTrackFrameToDataURL(trackId, idx, outW, outH, options) {
-    const off = renderFrameToDataURL(frames[idx] || idx, outW, outH, options || { transparent: true }, trackId);
+    const off = renderFrameToDataURL(AppState.frames[idx] || idx, outW, outH, options || { transparent: true }, trackId);
     return off.toDataURL('image/png');
-  }
-
-  /* ==================== GIF ==================== */
-  let gifencLib = null;
-  async function getGifenc() {
-    if (gifencLib) return gifencLib;
-    const mod = await import('https://cdn.jsdelivr.net/npm/gifenc@1.0.3/dist/gifenc.esm.js');
-    gifencLib = mod;
-    return mod;
-  }
-
-  async function exportGIF(frameList, trackId) {
-    let tid = (trackId != null && trackId !== TRACK_ALL_ID) ? String(trackId) : null;
-    if (trackId === undefined && isSubTrackMode()) tid = String(activeTrackId);
-    const list = (frameList && frameList.length) ? frameList : frames;
-    if (list.length === 0) return;
-    if (isPlaying) pause();
-    syncFrameRef();
-    const transparent = document.getElementById('gifTransparent').checked;
-    const _sz = getExportSize();
-    const outW = _sz.w, outH = _sz.h;
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-    let gifenc;
-    try { gifenc = await getGifenc(); }
-    catch (e) {
-      if (confirm('GIF 编码库加载失败（可能没有网络）。\n是否改为导出 PNG 序列？')) exportPNGSeq();
-      return;
-    }
-    const { GIFEncoder, quantize, applyPalette } = gifenc;
-    const gif = GIFEncoder();
-    const btn = document.getElementById('btnExportGIF');
-    const oldText = btn.textContent;
-    btn.disabled = true;
-    
-    const cam = shouldSkipCameraForExport() ? null : (getCurrentCameraObject() || getCameraAtFrame(0));
-    const crop = cam ? null : getCropForFrames(list, outW, outH, tid);
-    try {
-      /* ---------- 步骤 1：渲染并二值化 alpha ---------- */
-      const renderedFrames = [];
-      for (let i = 0; i < list.length; i++) {
-        btn.textContent = `GIF ${i + 1}/${list.length}`;
-        const off = renderFrameToDataURL(list[i], outW, outH, { transparent, crop }, tid);
-        const imgData = off.getContext('2d').getImageData(0, 0, outW, outH);
-        if (transparent) {
-          const data = imgData.data;
-          for (let p = 3; p < data.length; p += 4) data[p] = data[p] >= 128 ? 255 : 0;
-        }
-        renderedFrames.push(imgData);
-        if (i % 2 === 1) await new Promise(r => setTimeout(r, 0));
-      }
-
-      /* ---------- 步骤 2：采样不透明像素 ----------
-         - 采样密度：每 2 像素（之前 16 像素太稀疏 → 调色板缺色 → 闪烁）
-         - 跳过透明像素（避免透明色占不透明色槽位） */
-      btn.textContent = '量化...';
-      const samplePixels = [];
-      for (let i = 0; i < renderedFrames.length; i++) {
-        const data = renderedFrames[i].data;
-        for (let j = 0; j < data.length; j += 4 * 2) {
-          if (transparent && data[j + 3] < 128) continue;
-          samplePixels.push(data[j], data[j + 1], data[j + 2], 255);
-        }
-      }
-      if (samplePixels.length === 0) {
-        alert('当前所有帧都是空白，无法导出 GIF');
-        return;
-      }
-      const sampleArr = new Uint8ClampedArray(samplePixels);
-
-      /* ---------- 步骤 3：构建稳定调色板 ----------
-         透明模式用 rgb565（5/6/5 bit 精度，比 rgba4444 高 4 倍）
-         索引 0 手动占位给透明，其余 255 槽给不透明色
-         相同颜色每帧都映射到同一索引 → 不会闪烁 */
-      let globalPalette;
-      let opaquePalette = null;
-      let useFormat = 'rgb565';
-
-      if (transparent) {
-        try {
-          opaquePalette = quantize(sampleArr, 255, { format: 'rgb565' });
-          useFormat = 'rgb565';
-        } catch (err) {
-          /* 兜底：极老版本 gifenc 可能不认 rgb565 */
-          opaquePalette = quantize(sampleArr, 255, { format: 'rgba4444' });
-          useFormat = 'rgba4444';
-        }
-        /* 统一为 4 分量，索引 0 = 纯透明 */
-        globalPalette = [[0, 0, 0, 0]].concat(
-          opaquePalette.map(c => [c[0], c[1], c[2], 255])
-        );
-      } else {
-        globalPalette = quantize(sampleArr, 256, { format: 'rgb565' });
-      }
-
-      /* ---------- 步骤 4：逐帧写 GIF ---------- */
-      for (let i = 0; i < renderedFrames.length; i++) {
-        btn.textContent = `GIF ${i + 1}/${renderedFrames.length}`;
-        const imgData = renderedFrames[i];
-        const data = imgData.data;
-        const delay = Math.max(10, list[i].duration | 0);
-
-        let index;
-        if (transparent) {
-          /* rgb565 格式忽略 alpha 做最近邻匹配，再手工覆盖透明像素 */
-          index = applyPalette(data, opaquePalette, useFormat);
-          for (let k = 0; k < data.length; k += 4) {
-            if (data[k + 3] < 128) {
-              index[k >> 2] = 0;                                /* 透明 → 索引 0 */
-            } else {
-              index[k >> 2] = Math.min(255, index[k >> 2] + 1); /* 不透明 → 偏移 +1 */
-            }
-          }
-        } else {
-          index = applyPalette(data, globalPalette, 'rgb565');
-        }
-
-        gif.writeFrame(index, outW, outH, {
-          palette: globalPalette,
-          delay,
-          transparent,
-          transparentIndex: transparent ? 0 : undefined
-        });
-        await new Promise(r => setTimeout(r, 0));
-      }
-
-      gif.finish();
-      const bytes = gif.bytes();
-      const blob = new Blob([bytes], { type: 'image/gif' });
-      if (isIOS) {
-        const reader = new FileReader();
-        reader.onload = function (e) {
-          const dataUrl = e.target.result;
-          const overlay = document.createElement('div');
-          overlay.className = 'ios-save-overlay';
-          overlay.innerHTML = `
-            <div class="ios-save-title">请长按下方图片，选择“存储到照片”</div>
-            <img src="${dataUrl}" class="ios-save-img">
-            <button class="btn-primary ios-save-btn" onclick="this.parentElement.remove()">完成 / 关闭</button>
-          `;
-          document.body.appendChild(overlay);
-        };
-        reader.readAsDataURL(blob);
-      } else {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'stickman_anim_' + Date.now() + (transparent ? '_transparent' : '') + '.gif';
-        document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 2000);
-      }
-    } catch (e) {
-      alert('GIF 导出失败：' + e.message);
-    } finally {
-      btn.textContent = oldText;
-      btn.disabled = false;
-      render();
-    }
-  }
-
-  /* ==================== WebM 视频 ==================== */
-  async function exportVideo() {
-    if (frames.length === 0) return;
-    if (isPlaying) pause();
-    syncFrameRef();
-    const tid = isSubTrackMode() ? String(activeTrackId) : null;
-    const outW = 800, outH = 800;
-    const crop = getExportCrop(outW, outH, tid);
-    const recCanvas = document.createElement('canvas');
-    recCanvas.width = outW; recCanvas.height = outH;
-    const recCtx = recCanvas.getContext('2d', { alpha: true });
-    const stream = recCanvas.captureStream(0);
-    const track = stream.getVideoTracks()[0];
-    let mimeType = 'video/webm';
-    if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) mimeType = 'video/webm;codecs=vp9';
-    else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) mimeType = 'video/webm;codecs=vp8';
-    const recorder = new MediaRecorder(stream, { mimeType });
-    const chunks = [];
-    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-    const blobPromise = new Promise(resolve => { recorder.onstop = () => resolve(new Blob(chunks, { type: 'video/webm' })); });
-    recorder.start();
-    const savedCtx = ctx;
-    ctx = recCtx;
-    try {
-      for (let i = 0; i < frames.length; i++) {
-        recCtx.save();
-        recCtx.setTransform(1, 0, 0, 1, 0, 0);
-        recCtx.clearRect(0, 0, outW, outH);
-        recCtx.fillStyle = pageBgColor;
-        recCtx.fillRect(0, 0, outW, outH);
-        recCtx.translate(outW / 2, outH / 2);
-        if (crop.rotation) recCtx.rotate(-crop.rotation);
-        recCtx.scale(crop.scale, crop.scale);
-        recCtx.translate(-crop.cx, -crop.cy);
-        if (canvasBoundsEnabled) {
-          recCtx.save();
-          recCtx.translate(canvasBounds.x + canvasBounds.w / 2, canvasBounds.y + canvasBounds.h / 2);
-          recCtx.rotate(canvasBounds.rotation || 0);
-          recCtx.beginPath();
-          recCtx.rect(-canvasBounds.w / 2, -canvasBounds.h / 2, canvasBounds.w, canvasBounds.h);
-          recCtx.clip();
-          recCtx.restore();
-        }
-        renderScene(getObjectsForFrameAt(i, tid), { isExporting: true });
-        recCtx.restore();
-        if (track.requestFrame) track.requestFrame();
-        await new Promise(r => setTimeout(r, frames[i].duration));
-      }
-    } catch (e) {
-      alert('导出失败：' + e.message);
-    } finally {
-      ctx = savedCtx;
-      recorder.stop();
-      render();
-    }
-    const blob = await blobPromise;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'stickman_video_' + Date.now() + '.webm';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-  }
-
-  /* ==================== MP4 ==================== */
-  function getMP4MimeType() {
-    if (typeof MediaRecorder === 'undefined') return null;
-    const candidates = ['video/mp4;codecs=avc1.42E01E', 'video/mp4;codecs=avc1', 'video/mp4;codecs=h264', 'video/mp4'];
-    for (const m of candidates) {
-      try { if (MediaRecorder.isTypeSupported(m)) return m; } catch (_) {}
-    }
-    return null;
-  }
-
-  async function exportMP4() {
-    if (frames.length === 0) return;
-    if (isPlaying) pause();
-    syncFrameRef();
-    const tid = isSubTrackMode() ? String(activeTrackId) : null;
-    const mimeType = getMP4MimeType();
-    if (!mimeType) {
-      alert('当前浏览器不支持 MP4 录制。\n请使用较新版本的 Chrome / Edge。');
-      return;
-    }
-    const isHD = document.getElementById('gifHD3x').checked;
-    const is1080 = !!(document.getElementById('hd1080p') && document.getElementById('hd1080p').checked);
-    const bgColor = document.getElementById('mp4BgColor').value || pageBgColor;
-    let outW, outH, baseCrop;
-    
-    const cam = shouldSkipCameraForExport() ? null : (getCurrentCameraObject() || getCameraAtFrame(0));
-    const baseSize = is1080 ? 1920 : (isHD ? 1200 : 800);
-    
-    if (cam && cam.w > 0 && cam.h > 0) {
-      /* 有摄像机 → 优先按摄像机比例 */
-      const a = cam.w / cam.h;
-      if (a >= 1) { outW = baseSize; outH = Math.round(baseSize / a); }
-      else { outH = baseSize; outW = Math.round(baseSize * a); }
-      baseCrop = null; // 关键：不锁死视角，留空让循环内逐帧计算
-    } else if (canvasBoundsEnabled) {
-      const sz = getExportSize();
-      outW = sz.w; outH = sz.h;
-      baseCrop = {
-        cx: canvasBounds.x + canvasBounds.w / 2,
-        cy: canvasBounds.y + canvasBounds.h / 2,
-        scale: Math.min(outW / canvasBounds.w, outH / canvasBounds.h),
-        rotation: canvasBounds.rotation || 0
-      };
-    } else {
-      outW = baseSize; outH = baseSize;
-      const ec = getExportCrop(outW, outH, tid);
-      baseCrop = { cx: ec.cx, cy: ec.cy, scale: ec.scale, rotation: ec.rotation || 0 };
-    }
-    
-    outW = Math.max(2, outW - (outW % 2));
-    outH = Math.max(2, outH - (outH % 2));
-    const recCanvas = document.createElement('canvas');
-    recCanvas.width = outW; recCanvas.height = outH;
-    const recCtx = recCanvas.getContext('2d', { alpha: false });
-    const stream = recCanvas.captureStream(30);
-    const track = stream.getVideoTracks()[0];
-    let recorder;
-    try { recorder = new MediaRecorder(stream, { mimeType }); }
-    catch (e) { alert('创建 MP4 录制器失败：' + e.message); return; }
-    const chunks = [];
-    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-    const blobPromise = new Promise(resolve => { recorder.onstop = () => resolve(new Blob(chunks, { type: 'video/mp4' })); });
-    const btn = document.getElementById('btnExportMP4');
-    const oldText = btn.textContent;
-    btn.disabled = true;
-    recorder.start();
-    const savedCtx = ctx;
-    ctx = recCtx;
-    try {
-      for (let i = 0; i < frames.length; i++) {
-        btn.textContent = `MP4 ${i + 1}/${frames.length}`;
-        
-        // 逐帧获取当前帧对应的摄像机视角
-        let curCrop = baseCrop;
-        if (cam) {
-           const frameCam = getCameraAtFrame(i) || cam;
-           const cc = cameraToCrop(frameCam, outW, outH);
-           curCrop = { cx: cc.cx, cy: cc.cy, scale: cc.scale, rotation: cc.rotation || 0 };
-        }
-
-        recCtx.save();
-        recCtx.setTransform(1, 0, 0, 1, 0, 0);
-        recCtx.fillStyle = bgColor;
-        recCtx.fillRect(0, 0, outW, outH);
-        recCtx.translate(outW / 2, outH / 2);
-        
-        if (curCrop) {
-          if (curCrop.rotation) recCtx.rotate(-curCrop.rotation);
-          recCtx.scale(curCrop.scale, curCrop.scale);
-          recCtx.translate(-curCrop.cx, -curCrop.cy);
-        }
-
-        if (canvasBoundsEnabled) {
-          recCtx.save();
-          recCtx.translate(canvasBounds.x + canvasBounds.w / 2, canvasBounds.y + canvasBounds.h / 2);
-          recCtx.rotate(canvasBounds.rotation || 0);
-          recCtx.beginPath();
-          recCtx.rect(-canvasBounds.w / 2, -canvasBounds.h / 2, canvasBounds.w, canvasBounds.h);
-          recCtx.clip();
-          recCtx.restore();
-        }
-        renderScene(getObjectsForFrameAt(i, tid), { isExporting: true });
-        recCtx.restore();
-        if (track.requestFrame) track.requestFrame();
-        await new Promise(r => setTimeout(r, frames[i].duration));
-      }
-    } catch (e) {
-      alert('MP4 导出失败：' + e.message);
-    } finally {
-      ctx = savedCtx;
-      recorder.stop();
-      btn.textContent = oldText;
-      btn.disabled = false;
-      render();
-    }
-    const blob = await blobPromise;
-    if (!blob || blob.size === 0) { alert('MP4 导出失败：未生成视频数据'); return; }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'stickman_video_' + Date.now() + '.mp4';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-  }
-
-  function exportPNGSeq() {
-    if (isPlaying) pause();
-    syncFrameRef();
-    const _sz = getExportSize();
-    const outW = _sz.w;
-    const outH = _sz.h;
-    const transparent = document.getElementById('gifTransparent').checked;
-    const tid = isSubTrackMode() ? String(activeTrackId) : null;
-    
-    // 如果存在摄像机且未开启画布优先，则传 null，让 renderFrameToDataURL 逐帧计算
-    const cam = shouldSkipCameraForExport() ? null : (getCurrentCameraObject() || getCameraAtFrame(0));
-    const crop = cam ? null : getExportCrop(outW, outH, tid);
-    
-    exportPNGsAsZip(frames, tid, {
-      outW,
-      outH,
-      crop,
-      transparent
-    });
   }
 
   /* ==================== 更多设置：工具芯片 ==================== */
   const toolChips = Array.from(document.querySelectorAll('#toolChips .tool-chip'));
   const toolPanels = Array.from(document.querySelectorAll('.tool-panel'));
   const FIGURE_ONLY_TOOLS = ['layer', 'proportion', 'joints', 'glow'];
-  const NON_CAMERA_TOOLS = ['eraser'];   /* 选中任意非摄像机元件才显示 */
+  /* brush-v5.1.0: 「画笔」面板在未选中任何元件时也必须可用（无选中 → 自动绑最近的关节点） */
+  const NON_CAMERA_TOOLS = [];
+  const ALWAYS_TOOLS = ['eraser'];
   let activeTool = null;
 
   function updateStickyHeaderHeight() {
@@ -7766,7 +7444,7 @@ function importActionPresets() {
       headHandleOn = false;
       headHandleDrag = null;
       updateHeadMoveHandle();
-      syncUI();
+      EventBus.emit('need:syncUI');
     }
     toolChips.forEach(ch => {
       const on = !!name && ch.dataset.tool === name;
@@ -7779,7 +7457,7 @@ function importActionPresets() {
     groundLineEditMode = name === 'canvas';
     canvasBoundsEditMode = name === 'canvas';
     updateStickyHeaderHeight();
-    render();
+    EventBus.emit('need:render');
   }
 
   function updateToolVisibility(isFig, hasSel, isCamera) {
@@ -7787,9 +7465,13 @@ function importActionPresets() {
       const tool = ch.dataset.tool;
       const figOnly = FIGURE_ONLY_TOOLS.indexOf(tool) !== -1;
       const nonCamOnly = NON_CAMERA_TOOLS.indexOf(tool) !== -1;
+      const always = ALWAYS_TOOLS.indexOf(tool) !== -1;
       let hidden = false;
-      if (figOnly && !isFig) hidden = true;
-      if (nonCamOnly && (!hasSel || isCamera)) hidden = true;
+      if (always) hidden = !!isCamera;              /* 画笔面板仅摄像机不可用 */
+      else {
+        if (figOnly && !isFig) hidden = true;
+        if (nonCamOnly && (!hasSel || isCamera)) hidden = true;
+      }
       ch.classList.toggle('hidden', hidden);
     });
     if (activeTool) {
@@ -7842,272 +7524,31 @@ function importActionPresets() {
     });
   });
 
-  /* ==================== 主题系统 ==================== */
-  const THEME_STORAGE_KEY = 'skfe_theme_v2';
-  const DEFAULT_THEME = {
-    canvasBg: '#faf7eb', canvasAlpha: 1,
-    panelBg: '#b8db8e', panelAlpha: 0.62,
-    btnBg: '#f3a787', btnHover: '#f5f9f0',
-    primary: '#86c451',
-    textMain: '#274f10', textSub: '#dc701d',
-    borderColor: '#ffffff'
-  };
-  let themeConfig = { ...DEFAULT_THEME };
+  /* ==================== 主题系统（已迁移至 js/features/theme.js） ==================== */
+  SKFE.features.theme.init({
+    EventBus,
+    // 主题 → 画布背景同步，通过回调交回 app.js 处理（theme.js 不直接碰 pageBgColor）
+    onThemeApplied: (cfg) => {
+      // 修复：不再覆盖 pageBgColor（画布设置里用户选的背景色），
+      //       主题色只控制 UI 的 --bg-page，二者解耦。
+      pageBgAlpha = Math.max(0, Math.min(1, Number(cfg.canvasAlpha)));
 
-  const THEME_COLOR_FIELDS = {
-    themeCanvasBg: 'canvasBg', themePanelBg: 'panelBg',
-    themeBtnBg: 'btnBg', themeBtnHover: 'btnHover',
-    themePrimary: 'primary', themeTextMain: 'textMain',
-    themeTextSub: 'textSub', themeBorderColor: 'borderColor'
-  };
-  const THEME_ALPHA_FIELDS = { themeCanvasAlpha: 'canvasAlpha', themePanelAlpha: 'panelAlpha' };
-
-  function themeHexToRgba(hex, alpha) {
-    let h = String(hex || '#000000').replace('#', '').trim();
-    if (h.length === 3) h = h.split('').map(c => c + c).join('');
-    if (h.length !== 6 || /[^0-9a-f]/i.test(h)) h = '000000';
-    const n = parseInt(h, 16);
-    const a = Math.max(0, Math.min(1, Number(alpha)));
-    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
-  }
-
-  function themeMixHex(hex, target, ratio) {
-    const parse = (value) => {
-      let h = String(value || '#000000').replace('#', '');
-      if (h.length === 3) h = h.split('').map(c => c + c).join('');
-      const n = parseInt(h, 16);
-      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-    };
-    const a = parse(hex), b = parse(target);
-    const r = Math.max(0, Math.min(1, Number(ratio)));
-    return '#' + a.map((v, i) => Math.round(v + (b[i] - v) * r).toString(16).padStart(2, '0')).join('');
-  }
-
-  function loadThemeConfig() {
-    try {
-      const raw = localStorage.getItem(THEME_STORAGE_KEY);
-      if (!raw) return;
-      const saved = JSON.parse(raw);
-      if (saved && typeof saved === 'object') themeConfig = { ...DEFAULT_THEME, ...saved };
-    } catch (err) {}
-  }
-  function saveThemeConfig() {
-    try { localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(themeConfig)); } catch (err) {}
-  }
-
-  function applyThemeConfig(cfg) {
-    const style = document.documentElement.style;
-    style.setProperty('--bg-page', themeHexToRgba(cfg.canvasBg, cfg.canvasAlpha));
-    style.setProperty('--bg-panel', themeHexToRgba(cfg.panelBg, cfg.panelAlpha));
-    style.setProperty('--btn-bg', cfg.btnBg);
-    style.setProperty('--btn-hover', cfg.btnHover);
-    style.setProperty('--color-primary', cfg.primary);
-    style.setProperty('--color-primary-hover', themeMixHex(cfg.primary, '#000000', 0.12));
-    style.setProperty('--color-primary-soft', themeMixHex(cfg.primary, '#ffffff', 0.86));
-    style.setProperty('--color-primary-soft-hover', themeMixHex(cfg.primary, '#ffffff', 0.78));
-    style.setProperty('--text-main', cfg.textMain);
-    style.setProperty('--text-sub', cfg.textSub);
-    style.setProperty('--border-color', cfg.borderColor);
-
-    // 修复：不再覆盖 pageBgColor（画布设置里用户选的背景色），
-    //       主题色只控制 UI 的 --bg-page，二者解耦。
-    pageBgAlpha = Math.max(0, Math.min(1, Number(cfg.canvasAlpha)));
-
-    // 若用户还没有手动调整「画布背景」，就让主题色同步一次，作为初始默认值
-    if (pageBgColorInput) {
-      if (!pageBgColorInput.dataset.manual) {
-        pageBgColor = cfg.canvasBg;
-        pageBgColorInput.value = cfg.canvasBg;
-      } else {
-        // 用户已手动改过，主题面板不覆盖
-        pageBgColorInput.value = pageBgColor;
-      }
-    }
-    if (mp4BgColorInput && !mp4BgColorInput.dataset.manual) mp4BgColorInput.value = pageBgColor;
-
-    render();
-  }
-
-  function syncThemeUI() {
-    Object.keys(THEME_COLOR_FIELDS).forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.value = themeConfig[THEME_COLOR_FIELDS[id]];
-    });
-    Object.keys(THEME_ALPHA_FIELDS).forEach(id => {
-      const key = THEME_ALPHA_FIELDS[id];
-      const el = document.getElementById(id);
-      const val = Math.max(0, Math.min(1, Number(themeConfig[key])));
-      if (el) el.value = val;
-      const label = document.getElementById(id + 'Val');
-      if (label) label.textContent = val.toFixed(2);
-    });
-  }
-
-  function readThemeUI() {
-    Object.keys(THEME_COLOR_FIELDS).forEach(id => {
-      const el = document.getElementById(id);
-      if (el && el.value) themeConfig[THEME_COLOR_FIELDS[id]] = el.value;
-    });
-    Object.keys(THEME_ALPHA_FIELDS).forEach(id => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      const key = THEME_ALPHA_FIELDS[id];
-      const val = Math.max(0, Math.min(1, Number(el.value)));
-      themeConfig[key] = val;
-      const label = document.getElementById(id + 'Val');
-      if (label) label.textContent = val.toFixed(2);
-    });
-  }
-
-  function bindThemeInputs() {
-    Object.keys(THEME_COLOR_FIELDS).forEach(id => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.addEventListener('input', () => { readThemeUI(); applyThemeConfig(themeConfig); saveThemeConfig(); });
-    });
-    Object.keys(THEME_ALPHA_FIELDS).forEach(id => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.addEventListener('input', () => { readThemeUI(); applyThemeConfig(themeConfig); saveThemeConfig(); });
-    });
-    const resetBtn = document.getElementById('btnResetTheme');
-    if (resetBtn) {
-      resetBtn.addEventListener('click', () => {
-        themeConfig = { ...DEFAULT_THEME };
-        syncThemeUI();
-        applyThemeConfig(themeConfig);
-        saveThemeConfig();
-      });
-    }
-  }
-  bindThemeInputs();
-  /* ==================== 主题预设存储逻辑 ==================== */
-  const THEME_PRESET_KEY = 'skfe_theme_presets_v1';
-  let themePresets = [];
-
-  function loadThemePresets() {
-    try {
-      const raw = localStorage.getItem(THEME_PRESET_KEY);
-      
-      // 如果本地没有任何记录（说明是第一次打开），就注入这4个默认预设
-      if (raw === null) {
-        const DEFAULT_THEME_PRESETS = [
-          { 
-            name: 'TSC', 
-            config: { 
-              canvasBg: '#faf7eb', canvasAlpha: 1,
-              panelBg: '#b8db8e', panelAlpha: 0.62, 
-              btnBg: '#f3a787', btnHover: '#f5f9f0', 
-              primary: '#86c451', textMain: '#274f10', textSub: '#dc701d', borderColor: '#ffffff' 
-            } 
-          },
-          { 
-            name: 'Pink', 
-            config: { 
-              canvasBg: '#f9e8da', canvasAlpha: 1,
-              panelBg: '#f9c3c5', panelAlpha: 0.36, 
-              btnBg: '#f9e8da', btnHover: '#f0a29f', 
-              primary: '#ed9e94', textMain: '#551029', textSub: '#b92d5d', borderColor: '#f9c3c5' 
-            } 
-          },
-          { 
-            name: 'Vic', 
-            config: { 
-              canvasBg: '#ffffff', canvasAlpha: 1,
-              panelBg: '#1a1c1c', panelAlpha: 0.31, 
-              btnBg: '#4b6665', btnHover: '#b2b2b2', 
-              primary: '#29b9b4', textMain: '#00ccdf', textSub: '#b1e5ed', borderColor: '#0b0d0e' 
-            } 
-          },
-          { 
-            name: 'TDLTCO', 
-            config: { 
-              canvasBg: '#989898', canvasAlpha: 1,
-              panelBg: '#823535', panelAlpha: 0.36, 
-              btnBg: '#461010', btnHover: '#bf3b3b', 
-              primary: '#212322', textMain: '#290606', textSub: '#b4b4b4', borderColor: '#bd6d6d' 
-            } 
-          }
-        ];
-        
-        themePresets = DEFAULT_THEME_PRESETS.slice();
-        localStorage.setItem(THEME_PRESET_KEY, JSON.stringify(themePresets));
-      } else {
-        themePresets = JSON.parse(raw);
-      }
-    } catch(e) { themePresets = []; }
-  }
-
-  function saveThemePresetsToStorage() {
-    try {
-      localStorage.setItem(THEME_PRESET_KEY, JSON.stringify(themePresets));
-    } catch(e) {}
-  }
-
-  function updateThemePresetUI() {
-    const listEl = document.getElementById('themePresetList');
-    if (!listEl) return;
-    listEl.innerHTML = '';
-    if (themePresets.length === 0) {
-      listEl.innerHTML = '<div class="theme-preset-empty">暂无保存的主题</div>';
-      return;
-    }
-    themePresets.forEach((p, index) => {
-      const cfg = p.config;
-      const item = document.createElement('div');
-      item.className = 'theme-preset-item';
-      
-      // 利用 linear-gradient 从左到右拼合 8 个颜色
-      item.style.background = `linear-gradient(to right, 
-        ${cfg.canvasBg}, ${cfg.panelBg}, ${cfg.btnBg}, ${cfg.btnHover}, 
-        ${cfg.primary}, ${cfg.textMain}, ${cfg.textSub}, ${cfg.borderColor}
-      )`;
-      
-      const nameEl = document.createElement('span');
-      nameEl.className = 'theme-preset-name';
-      nameEl.textContent = p.name;
-      
-      const delBtn = document.createElement('div');
-      delBtn.className = 'theme-preset-del';
-      delBtn.textContent = '×';
-      delBtn.title = '删除该预设';
-      delBtn.onclick = (e) => {
-        e.stopPropagation();
-        if (confirm('确定删除该主题预设吗？')) {
-          themePresets.splice(index, 1);
-          saveThemePresetsToStorage();
-          updateThemePresetUI();
+      // 若用户还没有手动调整「画布背景」，就让主题色同步一次，作为初始默认值
+      if (pageBgColorInput) {
+        if (!pageBgColorInput.dataset.manual) {
+          pageBgColor = cfg.canvasBg;
+          pageBgColorInput.value = cfg.canvasBg;
+        } else {
+          // 用户已手动改过，主题面板不覆盖
+          pageBgColorInput.value = pageBgColor;
         }
-      };
-      
-      item.onclick = () => {
-        themeConfig = { ...DEFAULT_THEME, ...cfg };
-        syncThemeUI();
-        applyThemeConfig(themeConfig);
-        saveThemeConfig();
-      };
-      
-      item.appendChild(nameEl);
-      item.appendChild(delBtn);
-      listEl.appendChild(item);
-    });
-  }
+      }
+      if (mp4BgColorInput && !mp4BgColorInput.dataset.manual) mp4BgColorInput.value = pageBgColor;
 
-  // 绑定保存按钮
-  const btnSaveThemePreset = document.getElementById('btnSaveThemePreset');
-  const themePresetNameInput = document.getElementById('themePresetName');
-  if (btnSaveThemePreset && themePresetNameInput) {
-    btnSaveThemePreset.onclick = () => {
-      const name = themePresetNameInput.value.trim() || ('主题 ' + (themePresets.length + 1));
-      themePresets.push({ name, config: { ...themeConfig } });
-      saveThemePresetsToStorage();
-      updateThemePresetUI();
-      themePresetNameInput.value = '';
-    };
-  }
-
-  loadThemePresets();
-  updateThemePresetUI();
+      EventBus.emit('need:render');
+    },
+  });
+  SKFE.features.theme.boot();
   
   /* ==================== 页面外观 ==================== */
   const pageBgColorInput = document.getElementById('pageBgColor');
@@ -8130,18 +7571,18 @@ function importActionPresets() {
       // 标记用户手动改过，主题面板从此不再覆盖它
       pageBgColorInput.dataset.manual = '1';
       if (mp4BgColorInput && !mp4BgColorInput.dataset.manual) mp4BgColorInput.value = pageBgColor;
-      render();
+      EventBus.emit('need:render');
     });
   }
   if (mp4BgColorInput) {
     mp4BgColorInput.addEventListener('change', e => { e.target.dataset.manual = '1'; });
   }
-  if (gridEnabledCheckbox) gridEnabledCheckbox.addEventListener('change', e => { gridEnabled = e.target.checked; render(); });
+  if (gridEnabledCheckbox) gridEnabledCheckbox.addEventListener('change', e => { gridEnabled = e.target.checked; EventBus.emit('need:render'); });
   if (gridSizeInput) {
     gridSizeInput.addEventListener('input', e => {
       gridSize = +e.target.value;
       if (gridSizeVal) gridSizeVal.textContent = gridSize;
-      render();
+      EventBus.emit('need:render');
     });
   }
 
@@ -8160,34 +7601,34 @@ function importActionPresets() {
     btnGroundShadow.classList.toggle('on', groundShadowEnabled);
     btnGroundShadow.textContent = groundShadowEnabled ? '关闭地面阴影' : '开启地面阴影';
     shadowEditMode = activeTool === 'glow';
-    render();
-    saveHistory('切换地面阴影');
+    EventBus.emit('need:render');
+    EventBus.emit('history:save', '切换地面阴影');
   };
 
-  shadowColorInput.addEventListener('input', e => { shadowColor = e.target.value; render(); });
-  shadowAlphaInput.addEventListener('input', e => { shadowAlpha = +e.target.value; shadowAlphaVal.textContent = shadowAlpha.toFixed(2); render(); });
-  shadowColorInput.addEventListener('change', () => saveHistory('修改阴影颜色'));
-  shadowAlphaInput.addEventListener('change', () => saveHistory('修改阴影透明度'));
+  shadowColorInput.addEventListener('input', e => { shadowColor = e.target.value; EventBus.emit('need:render'); });
+  shadowAlphaInput.addEventListener('input', e => { shadowAlpha = +e.target.value; shadowAlphaVal.textContent = shadowAlpha.toFixed(2); EventBus.emit('need:render'); });
+  shadowColorInput.addEventListener('change', () => EventBus.emit('history:save', '修改阴影颜色'));
+  shadowAlphaInput.addEventListener('change', () => EventBus.emit('history:save', '修改阴影透明度'));
 
   shadowScaleXInput.addEventListener('input', e => {
-    if (selected && selected.type === 'figure') {
-      selected.shadowScaleX = +e.target.value;
-      shadowScaleXVal.textContent = selected.shadowScaleX.toFixed(2);
-      setGlobalProp(selected, 'shadowScaleX', selected.shadowScaleX);
-      render();
+    if (AppState.selected && AppState.selected.type === 'figure') {
+      AppState.selected.shadowScaleX = +e.target.value;
+      shadowScaleXVal.textContent = AppState.selected.shadowScaleX.toFixed(2);
+      setGlobalProp(AppState.selected, 'shadowScaleX', AppState.selected.shadowScaleX);
+      EventBus.emit('need:render');
     }
   });
-  shadowScaleXInput.addEventListener('change', () => saveHistory('调整阴影宽度'));
+  shadowScaleXInput.addEventListener('change', () => EventBus.emit('history:save', '调整阴影宽度'));
 
   shadowScaleYInput.addEventListener('input', e => {
-    if (selected && selected.type === 'figure') {
-      selected.shadowScaleY = +e.target.value;
-      shadowScaleYVal.textContent = selected.shadowScaleY.toFixed(2);
-      setGlobalProp(selected, 'shadowScaleY', selected.shadowScaleY);
-      render();
+    if (AppState.selected && AppState.selected.type === 'figure') {
+      AppState.selected.shadowScaleY = +e.target.value;
+      shadowScaleYVal.textContent = AppState.selected.shadowScaleY.toFixed(2);
+      setGlobalProp(AppState.selected, 'shadowScaleY', AppState.selected.shadowScaleY);
+      EventBus.emit('need:render');
     }
   });
-  shadowScaleYInput.addEventListener('change', () => saveHistory('调整阴影高度'));
+  shadowScaleYInput.addEventListener('change', () => EventBus.emit('history:save', '调整阴影高度'));
 
   /* ==================== 地面参考线 ==================== */
   const btnGroundLine = document.getElementById('btnGroundLine');
@@ -8205,7 +7646,7 @@ function importActionPresets() {
     btnGroundLine.classList.toggle('on', groundLineEnabled);
     btnGroundLine.textContent = groundLineEnabled ? '关闭地面参考线' : '开启地面参考线';
     if (groundLineEnabled) {
-      const firstFig = objects.find(o => o.type === 'figure');
+      const firstFig = AppState.objects.find(o => o.type === 'figure');
       if (firstFig) {
         const j = jointData(firstFig);
         groundLineY = Math.max(j.footL.y, j.footR.y, j.toeL.y, j.toeR.y);
@@ -8215,16 +7656,16 @@ function importActionPresets() {
       syncGroundLineUI();
     }
     groundLineEditMode = activeTool === 'canvas';
-    render();
-    saveHistory('切换地面参考线');
+    EventBus.emit('need:render');
+    EventBus.emit('history:save', '切换地面参考线');
   };
 
   groundLineYInput.addEventListener('input', e => {
     groundLineY = -(+e.target.value);
     groundLineYVal.textContent = Math.round(displayY(groundLineY));
-    render();
+    EventBus.emit('need:render');
   });
-  groundLineYInput.addEventListener('change', () => saveHistory('调整参考线位置'));
+  groundLineYInput.addEventListener('change', () => EventBus.emit('history:save', '调整参考线位置'));
 
   /* ==================== 关节旋转与隐藏 ==================== */
   const hideJointsCheckbox = document.getElementById('hideJoints');
@@ -8236,30 +7677,30 @@ function importActionPresets() {
 
   hideJointsCheckbox.addEventListener('change', e => {
     hideJointsEnabled = e.target.checked;
-    render();
-    saveHistory('切换关节显示');
+    EventBus.emit('need:render');
+    EventBus.emit('history:save', '切换关节显示');
   });
   jointSizeInput.addEventListener('input', e => {
     jointSize = +e.target.value;
     jointSizeVal.textContent = jointSize;
-    render();
+    EventBus.emit('need:render');
   });
-  jointSizeInput.addEventListener('change', () => saveHistory('调整关节大小'));
+  jointSizeInput.addEventListener('change', () => EventBus.emit('history:save', '调整关节大小'));
   
   jointSmoothInput.addEventListener('input', e => {
-    if (selected && selected.type === 'figure') {
-      selected.jointSmooth = +e.target.value;
-      jointSmoothVal.textContent = selected.jointSmooth.toFixed(2);
-      setGlobalProp(selected, 'jointSmooth', selected.jointSmooth);
-      render();
+    if (AppState.selected && AppState.selected.type === 'figure') {
+      AppState.selected.jointSmooth = +e.target.value;
+      jointSmoothVal.textContent = AppState.selected.jointSmooth.toFixed(2);
+      setGlobalProp(AppState.selected, 'jointSmooth', AppState.selected.jointSmooth);
+      EventBus.emit('need:render');
     }
   });
-  jointSmoothInput.addEventListener('change', () => saveHistory('调整关节圆滑度'));
+  jointSmoothInput.addEventListener('change', () => EventBus.emit('history:save', '调整关节圆滑度'));
 
   jointColorDiffCheckbox.addEventListener('change', e => {
     jointColorDiff = e.target.checked;
-    render();
-    saveHistory('关节颜色区分');
+    EventBus.emit('need:render');
+    EventBus.emit('history:save', '关节颜色区分');
   });
 
   /* ==================== 关节分组逻辑 ==================== */
@@ -8290,7 +7731,7 @@ function importActionPresets() {
   const jointSliders = document.querySelectorAll('.joint-rot-slider');
 
   function updateJointSliders() {
-    if (!selected || selected.type !== 'figure') {
+    if (!AppState.selected || AppState.selected.type !== 'figure') {
       jointSliders.forEach(slider => {
         slider.value = 0; slider._lastVal = 0;
         const valEl = slider.nextElementSibling;
@@ -8301,21 +7742,21 @@ function importActionPresets() {
     jointSliders.forEach(slider => {
       const target = slider.dataset.target;
       let deg = 0;
-      if (target === 'head') deg = ((selected.headAngle - (-Math.PI / 2)) * 180 / Math.PI);
-      else if (target === 'armL_u') deg = ((selected.a.armL.u - (Math.PI + 0.18)) * 180 / Math.PI);
-      else if (target === 'armL_f') deg = ((selected.a.armL.f - 0.12) * 180 / Math.PI);
-      else if (target === 'armR_u') deg = ((selected.a.armR.u - (Math.PI - 0.18)) * 180 / Math.PI);
-      else if (target === 'armR_f') deg = ((selected.a.armR.f - (-0.12)) * 180 / Math.PI);
-      else if (target === 'legL_u') deg = ((selected.a.legL.u - (Math.PI + 0.10)) * 180 / Math.PI);
-      else if (target === 'legL_f') deg = ((selected.a.legL.f - (-0.05)) * 180 / Math.PI);
-      else if (target === 'legR_u') deg = ((selected.a.legR.u - (Math.PI - 0.10)) * 180 / Math.PI);
-      else if (target === 'legR_f') deg = ((selected.a.legR.f - 0.05) * 180 / Math.PI);
-      else if (target === 'waist') deg = ((selected.a.waist || 0) * 180 / Math.PI);
-      else if (target === 'neck') deg = ((selected.headAngle - (selected.a.torso + (selected.a.waist || 0))) * 180 / Math.PI);
-      else if (target === 'extL') { if (selected.extremity) deg = (selected.extremity.armAngleL * 180 / Math.PI); }
-      else if (target === 'extR') { if (selected.extremity) deg = (selected.extremity.armAngleR * 180 / Math.PI); }
-      else if (target === 'extLegL') { if (selected.extremity) deg = (selected.extremity.legAngleL * 180 / Math.PI); }
-      else if (target === 'extLegR') { if (selected.extremity) deg = (selected.extremity.legAngleR * 180 / Math.PI); }
+      if (target === 'head') deg = ((AppState.selected.headAngle - (-Math.PI / 2)) * 180 / Math.PI);
+      else if (target === 'armL_u') deg = ((AppState.selected.a.armL.u - (Math.PI + 0.18)) * 180 / Math.PI);
+      else if (target === 'armL_f') deg = ((AppState.selected.a.armL.f - 0.12) * 180 / Math.PI);
+      else if (target === 'armR_u') deg = ((AppState.selected.a.armR.u - (Math.PI - 0.18)) * 180 / Math.PI);
+      else if (target === 'armR_f') deg = ((AppState.selected.a.armR.f - (-0.12)) * 180 / Math.PI);
+      else if (target === 'legL_u') deg = ((AppState.selected.a.legL.u - (Math.PI + 0.10)) * 180 / Math.PI);
+      else if (target === 'legL_f') deg = ((AppState.selected.a.legL.f - (-0.05)) * 180 / Math.PI);
+      else if (target === 'legR_u') deg = ((AppState.selected.a.legR.u - (Math.PI - 0.10)) * 180 / Math.PI);
+      else if (target === 'legR_f') deg = ((AppState.selected.a.legR.f - 0.05) * 180 / Math.PI);
+      else if (target === 'waist') deg = ((AppState.selected.a.waist || 0) * 180 / Math.PI);
+      else if (target === 'neck') deg = ((AppState.selected.headAngle - (AppState.selected.a.torso + (AppState.selected.a.waist || 0))) * 180 / Math.PI);
+      else if (target === 'extL') { if (AppState.selected.extremity) deg = (AppState.selected.extremity.armAngleL * 180 / Math.PI); }
+      else if (target === 'extR') { if (AppState.selected.extremity) deg = (AppState.selected.extremity.armAngleR * 180 / Math.PI); }
+      else if (target === 'extLegL') { if (AppState.selected.extremity) deg = (AppState.selected.extremity.legAngleL * 180 / Math.PI); }
+      else if (target === 'extLegR') { if (AppState.selected.extremity) deg = (AppState.selected.extremity.legAngleR * 180 / Math.PI); }
       deg = Math.round(deg);
       while (deg > 180) deg -= 360;
       while (deg < -180) deg += 360;
@@ -8337,7 +7778,7 @@ function importActionPresets() {
         isolatedJointName = group;
       }
       syncJointButtonsUI();
-      render();
+      EventBus.emit('need:render');
     });
   });
 
@@ -8350,30 +7791,30 @@ function importActionPresets() {
       slider._lastVal = val;
       const valEl = slider.nextElementSibling;
       if (valEl) valEl.textContent = val + '°';
-      if (selected && selected.type === 'figure') {
+      if (AppState.selected && AppState.selected.type === 'figure') {
         const target = slider.dataset.target;
-        if (target === 'head') selected.headAngle += delta;
-        else if (target === 'armL_u') selected.a.armL.u += delta;
-        else if (target === 'armL_f') selected.a.armL.f += delta;
-        else if (target === 'armR_u') selected.a.armR.u += delta;
-        else if (target === 'armR_f') selected.a.armR.f += delta;
-        else if (target === 'legL_u') selected.a.legL.u += delta;
-        else if (target === 'legL_f') selected.a.legL.f += delta;
-        else if (target === 'legR_u') selected.a.legR.u += delta;
-        else if (target === 'legR_f') selected.a.legR.f += delta;
-        else if (target === 'waist') { if (selected.a.waist === undefined) selected.a.waist = 0; selected.a.waist += delta; }
-        else if (target === 'neck') selected.headAngle += delta;
-        else if (target === 'extL') { if (selected.extremity) selected.extremity.armAngleL += delta; }
-        else if (target === 'extR') { if (selected.extremity) selected.extremity.armAngleR += delta; }
-        else if (target === 'extLegL') { if (selected.extremity) selected.extremity.legAngleL += delta; }
-        else if (target === 'extLegL') { if (selected.extremity) selected.extremity.legAngleL += delta; }
-        else if (target === 'extLegR') { if (selected.extremity) selected.extremity.legAngleR += delta; }
-        enforcePins(selected);
+        if (target === 'head') AppState.selected.headAngle += delta;
+        else if (target === 'armL_u') AppState.selected.a.armL.u += delta;
+        else if (target === 'armL_f') AppState.selected.a.armL.f += delta;
+        else if (target === 'armR_u') AppState.selected.a.armR.u += delta;
+        else if (target === 'armR_f') AppState.selected.a.armR.f += delta;
+        else if (target === 'legL_u') AppState.selected.a.legL.u += delta;
+        else if (target === 'legL_f') AppState.selected.a.legL.f += delta;
+        else if (target === 'legR_u') AppState.selected.a.legR.u += delta;
+        else if (target === 'legR_f') AppState.selected.a.legR.f += delta;
+        else if (target === 'waist') { if (AppState.selected.a.waist === undefined) AppState.selected.a.waist = 0; AppState.selected.a.waist += delta; }
+        else if (target === 'neck') AppState.selected.headAngle += delta;
+        else if (target === 'extL') { if (AppState.selected.extremity) AppState.selected.extremity.armAngleL += delta; }
+        else if (target === 'extR') { if (AppState.selected.extremity) AppState.selected.extremity.armAngleR += delta; }
+        else if (target === 'extLegL') { if (AppState.selected.extremity) AppState.selected.extremity.legAngleL += delta; }
+        else if (target === 'extLegL') { if (AppState.selected.extremity) AppState.selected.extremity.legAngleL += delta; }
+        else if (target === 'extLegR') { if (AppState.selected.extremity) AppState.selected.extremity.legAngleR += delta; }
+        enforcePins(AppState.selected);
         markCurrentFrameModified();
-        render();
+        EventBus.emit('need:render');
       }
     });
-    slider.addEventListener('change', () => saveHistory('调整关节'));
+    slider.addEventListener('change', () => EventBus.emit('history:save', '调整关节'));
   });
 
   /* ==================== 画布设置 ==================== */
@@ -8386,11 +7827,11 @@ function importActionPresets() {
 
   function syncCanvasUI() {
     if (canvasSliders) {
-      canvasSliders.style.display = canvasBoundsEnabled ? 'block' : 'none';
+      canvasSliders.style.display = AppState.canvasBoundsEnabled ? 'block' : 'none';
     }
     if (btnToggleCanvasBounds) {
-      btnToggleCanvasBounds.classList.toggle('on', canvasBoundsEnabled);
-      btnToggleCanvasBounds.textContent = canvasBoundsEnabled ? '关闭画布边界' : '开启画布边界';
+      btnToggleCanvasBounds.classList.toggle('on', AppState.canvasBoundsEnabled);
+      btnToggleCanvasBounds.textContent = AppState.canvasBoundsEnabled ? '关闭画布边界' : '开启画布边界';
     }
     syncExportCanvasFirstBtn();
     updatePosInputs(); // 确保基础属性面板中的 X/Y 同步
@@ -8399,15 +7840,15 @@ function importActionPresets() {
   const btnExportCanvasFirst = document.getElementById('btnExportCanvasFirst');
   function syncExportCanvasFirstBtn() {
     if (!btnExportCanvasFirst) return;
-    btnExportCanvasFirst.classList.toggle('on', exportCanvasFirst && canvasBoundsEnabled);
-    btnExportCanvasFirst.disabled = !canvasBoundsEnabled;
-    btnExportCanvasFirst.title = canvasBoundsEnabled
+    btnExportCanvasFirst.classList.toggle('on', exportCanvasFirst && AppState.canvasBoundsEnabled);
+    btnExportCanvasFirst.disabled = !AppState.canvasBoundsEnabled;
+    btnExportCanvasFirst.title = AppState.canvasBoundsEnabled
       ? (exportCanvasFirst ? '已开启：导出时优先使用画布边界（点击关闭）' : '开启后，导出时优先使用画布边界')
       : '请先开启画布边界';
   }
   if (btnExportCanvasFirst) {
     btnExportCanvasFirst.addEventListener('click', () => {
-      if (!canvasBoundsEnabled) return;
+      if (!AppState.canvasBoundsEnabled) return;
       exportCanvasFirst = !exportCanvasFirst;
       try { localStorage.setItem('skfe_export_canvas_first_v1', exportCanvasFirst ? '1' : '0'); } catch (_) {}
       syncExportCanvasFirstBtn();
@@ -8439,45 +7880,45 @@ function importActionPresets() {
   }
 
   btnToggleCanvasBounds.onclick = () => {
-    canvasBoundsEnabled = !canvasBoundsEnabled;
-    btnToggleCanvasBounds.classList.toggle('on', canvasBoundsEnabled);
-    btnToggleCanvasBounds.textContent = canvasBoundsEnabled ? '关闭画布边界' : '开启画布边界';
-    canvasSliders.style.display = canvasBoundsEnabled ? 'block' : 'none';
-    if (canvasBoundsEnabled) {
+    AppState.canvasBoundsEnabled = !AppState.canvasBoundsEnabled;
+    btnToggleCanvasBounds.classList.toggle('on', AppState.canvasBoundsEnabled);
+    btnToggleCanvasBounds.textContent = AppState.canvasBoundsEnabled ? '关闭画布边界' : '开启画布边界';
+    canvasSliders.style.display = AppState.canvasBoundsEnabled ? 'block' : 'none';
+    if (AppState.canvasBoundsEnabled) {
       const bbox = computeAllFramesBounds();
       if (bbox) {
         const cx = (bbox.minX + bbox.maxX) / 2;
         const cy = (bbox.minY + bbox.maxY) / 2;
         const side = Math.max(bbox.maxX - bbox.minX, bbox.maxY - bbox.minY, 100) * 1.2;
-        canvasBounds = { x: cx - side / 2, y: cy - side / 2, w: side, h: side, rotation: 0 };
+        AppState.canvasBounds = { x: cx - side / 2, y: cy - side / 2, w: side, h: side, rotation: 0 };
       }
-      canvasBaseBounds = { ...canvasBounds };
+      canvasBaseBounds = { ...AppState.canvasBounds };
       /* 新增：开启边界时，自动选中画布，这样变换框会直接弹出来 */
-      canvasSelected = true;
-      selected = null; 
+      AppState.canvasSelected = true;
+      AppState.selected = null; 
       syncCanvasUI();
       syncCanvasMaskUI();
     } else {
-      canvasSelected = false;
+      AppState.canvasSelected = false;
     }
-    syncUI(); /* 新增：刷新面板，确保变换框按钮正确亮起 */
-    render();
-    saveHistory('切换画布边界');
+    EventBus.emit('need:syncUI'); /* 新增：刷新面板，确保变换框按钮正确亮起 */
+    EventBus.emit('need:render');
+    EventBus.emit('history:save', '切换画布边界');
   };
 
   if (canvasMaskCheckbox) {
     canvasMaskCheckbox.addEventListener('change', e => {
       canvasMaskEnabled = e.target.checked;
       canvasMaskAlphaRow.style.display = canvasMaskEnabled ? 'flex' : 'none';
-      render();
-      saveHistory('切换画布遮罩'); // 新增：记录撤销
+      EventBus.emit('need:render');
+      EventBus.emit('history:save', '切换画布遮罩'); // 新增：记录撤销
     });
   }
   if (canvasMaskAlphaInput) {
     canvasMaskAlphaInput.addEventListener('input', e => {
       canvasMaskAlpha = +e.target.value;
       canvasMaskAlphaVal.textContent = canvasMaskAlpha.toFixed(2);
-      render();
+      EventBus.emit('need:render');
     });
   }
 
@@ -8487,38 +7928,38 @@ function importActionPresets() {
   if (canvasMaskBgColorEl) {
     canvasMaskBgColorEl.addEventListener('input', e => {
       canvasMaskBgColor = e.target.value;
-      render();
+      EventBus.emit('need:render');
     });
-    canvasMaskBgColorEl.addEventListener('change', () => saveHistory('修改遮罩颜色'));
+    canvasMaskBgColorEl.addEventListener('change', () => EventBus.emit('history:save', '修改遮罩颜色'));
   }
   if (canvasMaskGridColorEl) {
     canvasMaskGridColorEl.addEventListener('input', e => {
       canvasMaskGridColor = e.target.value;
-      render();
+      EventBus.emit('need:render');
     });
-    canvasMaskGridColorEl.addEventListener('change', () => saveHistory('修改网格颜色'));
+    canvasMaskGridColorEl.addEventListener('change', () => EventBus.emit('history:save', '修改网格颜色'));
   }
 
   document.querySelectorAll('.canvas-ratio-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      if (!canvasBoundsEnabled) return;
+      if (!AppState.canvasBoundsEnabled) return;
       const ratioStr = btn.dataset.ratio;
       let r = 1;
       if (ratioStr === '16:9') r = 16 / 9;
       else if (ratioStr === '4:3') r = 4 / 3;
       else if (ratioStr === '9:16') r = 9 / 16;
-      canvasBounds.h = canvasBounds.w / r;
-      canvasBaseBounds = { ...canvasBounds };
+      AppState.canvasBounds.h = AppState.canvasBounds.w / r;
+      canvasBaseBounds = { ...AppState.canvasBounds };
       syncCanvasUI();
-      render();
-      saveHistory('设置画布比例');
+      EventBus.emit('need:render');
+      EventBus.emit('history:save', '设置画布比例');
     });
   });
 
   const btnCenterCanvas = document.getElementById('btnCenterCanvas');
   if (btnCenterCanvas) {
     btnCenterCanvas.addEventListener('click', () => {
-      if (!canvasBoundsEnabled) { alert('请先开启画布边界'); return; }
+      if (!AppState.canvasBoundsEnabled) { alert('请先开启画布边界'); return; }
 
       // ① 用 getComputedStyle 判断可见性（能识别 CSS display:none 的初始状态）
       const timelineVisible = getComputedStyle(timelineEl).display !== 'none';
@@ -8552,23 +7993,23 @@ function importActionPresets() {
 
       const targetW = availW * 0.9;
       const targetH = availH * 0.9;
-      const newScale = Math.min(targetW / canvasBounds.w, targetH / canvasBounds.h);
-      viewScale = Math.max(0.1, Math.min(5, newScale));
+      const newScale = Math.min(targetW / AppState.canvasBounds.w, targetH / AppState.canvasBounds.h);
+      AppState.viewScale = Math.max(0.1, Math.min(5, newScale));
 
-      const cbCx = canvasBounds.x + canvasBounds.w / 2;
-      const cbCy = canvasBounds.y + canvasBounds.h / 2;
+      const cbCx = AppState.canvasBounds.x + AppState.canvasBounds.w / 2;
+      const cbCy = AppState.canvasBounds.y + AppState.canvasBounds.h / 2;
 
-      viewOffset.x = (availLeft + availW / 2) - cbCx * viewScale;
-      viewOffset.y = (availTop  + availH / 2) - cbCy * viewScale;
+      AppState.viewOffset.x = (availLeft + availW / 2) - cbCx * AppState.viewScale;
+      AppState.viewOffset.y = (availTop  + availH / 2) - cbCy * AppState.viewScale;
 
       if (viewPinned && pinnedView) {
-        pinnedView.offset.x = viewOffset.x;
-        pinnedView.offset.y = viewOffset.y;
-        pinnedView.scale = viewScale;
+        pinnedView.offset.x = AppState.viewOffset.x;
+        pinnedView.offset.y = AppState.viewOffset.y;
+        pinnedView.scale = AppState.viewScale;
       }
 
-      render();
-      saveHistory('复位画布');
+      EventBus.emit('need:render');
+      EventBus.emit('history:save', '复位画布');
     });
   }
 
@@ -8583,15 +8024,15 @@ function importActionPresets() {
       if (!viewPinned) {
         viewPinned = true;
         pinnedView = {
-          offset: { x: viewOffset.x, y: viewOffset.y },
-          scale: viewScale
+          offset: { x: AppState.viewOffset.x, y: AppState.viewOffset.y },
+          scale: AppState.viewScale
         };
       } else {
         viewPinned = false;
         pinnedView = null;
       }
       syncPinViewBtn();
-      render();
+      EventBus.emit('need:render');
     });
   }
 
@@ -8737,24 +8178,24 @@ function importActionPresets() {
   /* ==================== 对象重命名 ==================== */
   function syncObjNameInput() {
     if (!objNameInput) return;
-    if (!selected) {
+    if (!AppState.selected) {
       objNameInput.value = '';
       objNameInput.disabled = true;
       return;
     }
     objNameInput.disabled = false;
     if (document.activeElement !== objNameInput) {
-      objNameInput.value = selected.name || '';
+      objNameInput.value = AppState.selected.name || '';
     }
   }
 
   if (objNameInput) {
     objNameInput.addEventListener('input', () => {
-      if (!selected) return;
+      if (!AppState.selected) return;
       const newName = objNameInput.value.slice(0, 24);
-      selected.name = newName;
-      const tid = String(selected.id);
-      const t = tracks[tid];
+      AppState.selected.name = newName;
+      const tid = String(AppState.selected.id);
+      const t = AppState.tracks[tid];
       if (t) {
         t.name = newName || tid;
         for (const data of t.frames) {
@@ -8763,59 +8204,61 @@ function importActionPresets() {
       }
       refreshSubTrackOptions();
       updateCoordDisplay();
+      /* name-v5.1.1: 图层列表即时显示新名称（图片/配饰等所有类型通用） */
+      updateLayerList();
     });
     objNameInput.addEventListener('change', () => {
-      if (selected) saveHistory('重命名对象');
+      if (AppState.selected) EventBus.emit('history:save', '重命名对象');
     });
   }
 
   /* ==================== 深度 / IK ==================== */
   depthEnabledInput.addEventListener('change', e => {
-    if (selected && selected.type === 'figure') {
-      if (!selected.depth) selected.depth = { enabled: false, useCustom: false, customColor: '#555555' };
-      selected.depth.enabled = e.target.checked;
-      setGlobalProp(selected, 'depth.enabled', selected.depth.enabled);
+    if (AppState.selected && AppState.selected.type === 'figure') {
+      if (!AppState.selected.depth) AppState.selected.depth = { enabled: false, useCustom: false, customColor: '#555555' };
+      AppState.selected.depth.enabled = e.target.checked;
+      setGlobalProp(AppState.selected, 'depth.enabled', AppState.selected.depth.enabled);
       markCurrentFrameModified();
-      render();
-      saveHistory('切换深色处理');
+      EventBus.emit('need:render');
+      EventBus.emit('history:save', '切换深色处理');
     }
   });
   depthCustomInput.addEventListener('change', e => {
-    if (selected && selected.type === 'figure') {
-      if (!selected.depth) selected.depth = { enabled: false, useCustom: false, customColor: '#555555' };
-      selected.depth.useCustom = e.target.checked;
-      depthColorInput.disabled = !selected.depth.useCustom;
-      setGlobalProp(selected, 'depth.useCustom', selected.depth.useCustom);
+    if (AppState.selected && AppState.selected.type === 'figure') {
+      if (!AppState.selected.depth) AppState.selected.depth = { enabled: false, useCustom: false, customColor: '#555555' };
+      AppState.selected.depth.useCustom = e.target.checked;
+      depthColorInput.disabled = !AppState.selected.depth.useCustom;
+      setGlobalProp(AppState.selected, 'depth.useCustom', AppState.selected.depth.useCustom);
       markCurrentFrameModified();
-      render();
-      saveHistory('自定义深色');
+      EventBus.emit('need:render');
+      EventBus.emit('history:save', '自定义深色');
     }
   });
   depthColorInput.addEventListener('input', e => {
-    if (selected && selected.type === 'figure') {
-      if (!selected.depth) selected.depth = { enabled: false, useCustom: false, customColor: '#555555' };
-      selected.depth.customColor = e.target.value;
-      setGlobalProp(selected, 'depth.customColor', selected.depth.customColor);
+    if (AppState.selected && AppState.selected.type === 'figure') {
+      if (!AppState.selected.depth) AppState.selected.depth = { enabled: false, useCustom: false, customColor: '#555555' };
+      AppState.selected.depth.customColor = e.target.value;
+      setGlobalProp(AppState.selected, 'depth.customColor', AppState.selected.depth.customColor);
       markCurrentFrameModified();
-      render();
+      EventBus.emit('need:render');
     }
   });
-  depthColorInput.addEventListener('change', () => saveHistory('修改深色颜色'));
+  depthColorInput.addEventListener('change', () => EventBus.emit('history:save', '修改深色颜色'));
 
   ikMasterEnable.addEventListener('change', e => {
-  if (!selected || selected.type !== 'figure') return;
+  if (!AppState.selected || AppState.selected.type !== 'figure') return;
   const newIK = e.target.checked;
-  selected.ikEnabled = newIK;
+  AppState.selected.ikEnabled = newIK;
   if (!newIK) {
-    selected.pinned = { footL: false, footR: false, handL: false, handR: false, pelvis: false };
-    selected.pinnedPos = { footL: null, footR: null, handL: null, handR: null, pelvis: null };
+    AppState.selected.pinned = { footL: false, footR: false, handL: false, handR: false, pelvis: false };
+    AppState.selected.pinnedPos = { footL: null, footR: null, handL: null, handR: null, pelvis: null };
   }
   if (globalEditEnabled) {
-    const tid = String(selected.id);
-    const t = tracks[tid];
+    const tid = String(AppState.selected.id);
+    const t = AppState.tracks[tid];
     if (t && t.frames) {
       for (let i = 0; i < t.frames.length; i++) {
-        if (i === currentFrameIndex) continue;
+        if (i === AppState.currentFrameIndex) continue;
         const data = t.frames[i];
         if (!data || String(data.id) !== tid) continue;
         data.ikEnabled = newIK;
@@ -8826,19 +8269,19 @@ function importActionPresets() {
       }
     }
   }
-  syncUI();
+  EventBus.emit('need:syncUI');
   markCurrentFrameModified();
   invalidateAllFrameThumbs();
-  render();
-  saveHistory('切换关节固定');
+  EventBus.emit('need:render');
+  EventBus.emit('history:save', '切换关节固定');
 });
 
 function togglePin(part) {
-  if (!selected || selected.type !== 'figure' || !selected.ikEnabled) return;
-  if (!selected.pinned) selected.pinned = { footL: false, footR: false, handL: false, handR: false, pelvis: false };
-  if (!selected.pinnedPos) selected.pinnedPos = { footL: null, footR: null, handL: null, handR: null, pelvis: null };
-  const newState = !selected.pinned[part];
-  const tid = String(selected.id);
+  if (!AppState.selected || AppState.selected.type !== 'figure' || !AppState.selected.ikEnabled) return;
+  if (!AppState.selected.pinned) AppState.selected.pinned = { footL: false, footR: false, handL: false, handR: false, pelvis: false };
+  if (!AppState.selected.pinnedPos) AppState.selected.pinnedPos = { footL: null, footR: null, handL: null, handR: null, pelvis: null };
+  const newState = !AppState.selected.pinned[part];
+  const tid = String(AppState.selected.id);
   const readPos = (jd, p) => {
     if (p === 'footL') return { x: jd.footL.x, y: jd.footL.y };
     if (p === 'footR') return { x: jd.footR.x, y: jd.footR.y };
@@ -8847,18 +8290,18 @@ function togglePin(part) {
     return { x: jd.pelvis.x, y: jd.pelvis.y };
   };
   if (newState) {
-    const j = jointData(selected);
-    selected.pinned[part] = true;
-    selected.pinnedPos[part] = readPos(j, part);
+    const j = jointData(AppState.selected);
+    AppState.selected.pinned[part] = true;
+    AppState.selected.pinnedPos[part] = readPos(j, part);
   } else {
-    selected.pinned[part] = false;
-    selected.pinnedPos[part] = null;
+    AppState.selected.pinned[part] = false;
+    AppState.selected.pinnedPos[part] = null;
   }
   if (globalEditEnabled) {
-    const t = tracks[tid];
+    const t = AppState.tracks[tid];
     if (t && t.frames) {
       for (let i = 0; i < t.frames.length; i++) {
-        if (i === currentFrameIndex) continue;
+        if (i === AppState.currentFrameIndex) continue;
         const data = t.frames[i];
         if (!data || String(data.id) !== tid) continue;
         if (!data.ikEnabled) data.ikEnabled = true;
@@ -8875,10 +8318,10 @@ function togglePin(part) {
       }
     }
   }
-  syncUI();
+  EventBus.emit('need:syncUI');
   invalidateAllFrameThumbs();
-  render();
-  saveHistory('固定关节');
+  EventBus.emit('need:render');
+  EventBus.emit('history:save', '固定关节');
 }
 
   btnPinFootL.onclick = () => togglePin('footL');
@@ -8889,19 +8332,19 @@ function togglePin(part) {
 
   /* ==================== 肢体状态 ==================== */
   function updateLimbStatus() {
-    if (!selected || selected.type !== 'figure') return;
-    statusHead.textContent = selected.layer.head;
+    if (!AppState.selected || AppState.selected.type !== 'figure') return;
+    statusHead.textContent = AppState.selected.layer.head;
     const statusBody = document.getElementById('statusBody');
-    if (statusBody) statusBody.textContent = selected.layer.body;
-    statusArmL.textContent = selected.layer.armL;
-    statusArmR.textContent = selected.layer.armR;
-    statusLegL.textContent = selected.layer.legL;
-    statusLegR.textContent = selected.layer.legR;
+    if (statusBody) statusBody.textContent = AppState.selected.layer.body;
+    statusArmL.textContent = AppState.selected.layer.armL;
+    statusArmR.textContent = AppState.selected.layer.armR;
+    statusLegL.textContent = AppState.selected.layer.legL;
+    statusLegR.textContent = AppState.selected.layer.legR;
   }
 
   /* ==================== UI 同步 ==================== */
   function updateAnchorUI() {
-    if (!selected || (selected.type !== 'image' && selected.type !== 'acc' && selected.type !== 'shape' && selected.type !== 'bubble')) {
+    if (!AppState.selected || (AppState.selected.type !== 'image' && AppState.selected.type !== 'acc' && AppState.selected.type !== 'shape' && AppState.selected.type !== 'bubble')) {
       btnAnchorToggle.style.display = 'none';
       objAnchorRow.style.display = 'none';
       anchorModeOn = false;
@@ -8911,19 +8354,20 @@ function togglePin(part) {
     btnAnchorToggle.style.display = '';
     btnAnchorToggle.classList.toggle('on', anchorModeOn);
     objAnchorRow.style.display = anchorModeOn ? 'flex' : 'none';
-    if (document.activeElement !== objAnchorX) objAnchorX.value = Math.round(selected.ax || 0);
-    if (document.activeElement !== objAnchorY) objAnchorY.value = Math.round(selected.ay || 0);
+    if (document.activeElement !== objAnchorX) objAnchorX.value = Math.round(AppState.selected.ax || 0);
+    if (document.activeElement !== objAnchorY) objAnchorY.value = Math.round(AppState.selected.ay || 0);
   }
 
   function syncUI() {
-    const isFig = selected && selected.type === 'figure';
-    const isAcc = selected && selected.type === 'acc';
-    const isShape = selected && selected.type === 'shape';
-    const isBubble = selected && selected.type === 'bubble';
-    const isCamera = selected && selected.type === 'camera';
-    const hasSel = !!selected;
-    const hasCanvasSel = canvasSelected && canvasBoundsEnabled && !selected;
-    const isIndep = !!(isFig && selected.bodyScale.armL !== undefined);
+    const isFig = AppState.selected && AppState.selected.type === 'figure';
+    const isAcc = AppState.selected && AppState.selected.type === 'acc';
+    const isShape = AppState.selected && AppState.selected.type === 'shape';
+    const isBubble = AppState.selected && AppState.selected.type === 'bubble';
+    const isInk = AppState.selected && AppState.selected.type === 'ink'; // brush-v5.1.0
+    const isCamera = AppState.selected && AppState.selected.type === 'camera';
+    const hasSel = !!AppState.selected;
+    const hasCanvasSel = AppState.canvasSelected && AppState.canvasBoundsEnabled && !AppState.selected;
+    const isIndep = !!(isFig && AppState.selected.bodyScale.armL !== undefined);
 
     document.getElementById('btnSavePreset').disabled = !isFig;
     document.getElementById('presetNameInput').disabled = !isFig;
@@ -8931,7 +8375,7 @@ function togglePin(part) {
     lwInput.disabled = !isFig;
     btnHeadFill.disabled = !isFig;
     if (headFillCustomCheckbox) headFillCustomCheckbox.disabled = !isFig;
-    if (headFillColorInput) headFillColorInput.disabled = !isFig || !(isFig && selected.headFillCustom);
+    if (headFillColorInput) headFillColorInput.disabled = !isFig || !(isFig && AppState.selected.headFillCustom);
     btnLight.disabled = !isFig;
     lightColorInput.disabled = !isFig;
     lightSizeInput.disabled = !isFig;
@@ -8961,7 +8405,7 @@ function togglePin(part) {
     depthEnabledInput.disabled = !isFig;
     depthCustomInput.disabled = !isFig;
     if (isFig) {
-      const d = selected.depth || { enabled: false, useCustom: false, customColor: '#555555' };
+      const d = AppState.selected.depth || { enabled: false, useCustom: false, customColor: '#555555' };
       depthEnabledInput.checked = d.enabled;
       depthCustomInput.checked = d.useCustom;
       depthColorInput.value = d.customColor;
@@ -8974,12 +8418,12 @@ function togglePin(part) {
 
     ikMasterEnable.disabled = !isFig;
     if (isFig) {
-      ikMasterEnable.checked = !!selected.ikEnabled;
-      btnPinFootL.disabled = !selected.ikEnabled;
-      btnPinFootR.disabled = !selected.ikEnabled;
-      btnPinPelvis.disabled = !selected.ikEnabled;
-      btnPinHandL.disabled = !selected.ikEnabled;
-      btnPinHandR.disabled = !selected.ikEnabled;
+      ikMasterEnable.checked = !!AppState.selected.ikEnabled;
+      btnPinFootL.disabled = !AppState.selected.ikEnabled;
+      btnPinFootR.disabled = !AppState.selected.ikEnabled;
+      btnPinPelvis.disabled = !AppState.selected.ikEnabled;
+      btnPinHandL.disabled = !AppState.selected.ikEnabled;
+      btnPinHandR.disabled = !AppState.selected.ikEnabled;
     } else {
       ikMasterEnable.checked = false;
       btnPinFootL.disabled = true;
@@ -8989,12 +8433,12 @@ function togglePin(part) {
       btnPinHandR.disabled = true;
     }
 
-    if (isFig && selected.pinned) {
-      btnPinFootL.classList.toggle('on', selected.pinned.footL);
-      btnPinFootR.classList.toggle('on', selected.pinned.footR);
-      btnPinPelvis.classList.toggle('on', selected.pinned.pelvis);
-      btnPinHandL.classList.toggle('on', selected.pinned.handL);
-      btnPinHandR.classList.toggle('on', selected.pinned.handR);
+    if (isFig && AppState.selected.pinned) {
+      btnPinFootL.classList.toggle('on', AppState.selected.pinned.footL);
+      btnPinFootR.classList.toggle('on', AppState.selected.pinned.footR);
+      btnPinPelvis.classList.toggle('on', AppState.selected.pinned.pelvis);
+      btnPinHandL.classList.toggle('on', AppState.selected.pinned.handL);
+      btnPinHandR.classList.toggle('on', AppState.selected.pinned.handR);
     } else {
       btnPinFootL.classList.remove('on');
       btnPinFootR.classList.remove('on');
@@ -9006,8 +8450,8 @@ function togglePin(part) {
     shadowScaleXInput.disabled = !isFig;
     shadowScaleYInput.disabled = !isFig;
     if (isFig) {
-      const sSx = selected.shadowScaleX || 1;
-      const sSy = selected.shadowScaleY || 1;
+      const sSx = AppState.selected.shadowScaleX || 1;
+      const sSy = AppState.selected.shadowScaleY || 1;
       shadowScaleXInput.value = sSx; shadowScaleXVal.textContent = sSx.toFixed(2);
       shadowScaleYInput.value = sSy; shadowScaleYVal.textContent = sSy.toFixed(2);
     } else {
@@ -9017,40 +8461,40 @@ function togglePin(part) {
 
     shapePanel.style.display = isShape ? 'block' : 'none';
     if (isShape) {
-      shapeWInput.value = selected.w; shapeWVal.textContent = selected.w;
-      shapeHInput.value = selected.h; shapeHVal.textContent = selected.h;
-      shapeFill.value = selected.fillColor;
-      shapeStroke.value = selected.strokeColor;
-      shapeLW.value = selected.strokeWidth;
-      shapeLWVal.textContent = selected.strokeWidth;
+      shapeWInput.value = AppState.selected.w; shapeWVal.textContent = AppState.selected.w;
+      shapeHInput.value = AppState.selected.h; shapeHVal.textContent = AppState.selected.h;
+      shapeFill.value = AppState.selected.fillColor;
+      shapeStroke.value = AppState.selected.strokeColor;
+      shapeLW.value = AppState.selected.strokeWidth;
+      shapeLWVal.textContent = AppState.selected.strokeWidth;
     }
 
     bubblePanel.style.display = isBubble ? 'block' : 'none';
     if (isBubble) {
-      if (selected.isMirrored === undefined) selected.isMirrored = false;
-      if (selected.customSize === undefined) selected.customSize = false;
-      if (selected.customW === undefined) selected.customW = Math.round(selected.w || 180);
-      if (selected.customH === undefined) selected.customH = Math.round(selected.h || 90);
-      bubbleText.value = selected.text;
-      bubbleMirrorCheckbox.checked = selected.isMirrored;
-      bubbleFontSizeInput.value = selected.fontSize; bubbleFontSizeVal.textContent = selected.fontSize;
-      bubbleTextColor.value = selected.textColor;
-      bubbleGradientCheckbox.checked = selected.isGradient;
-      bubbleGradientRow.style.display = selected.isGradient ? 'flex' : 'none';
-      bubbleGradientColor.value = selected.gradientColor;
-      bubbleBgColor.value = selected.fillColor;
-      bubbleStrokeColor.value = selected.strokeColor;
-      bubbleStrokeWidthInput.value = selected.strokeWidth; bubbleStrokeWidthVal.textContent = selected.strokeWidth;
-      bubbleCustomSizeCheckbox.checked = selected.customSize;
-      bubbleSizeRow.style.display = selected.customSize ? 'block' : 'none';
-      bubbleWInput.value = selected.customW; bubbleWVal.textContent = selected.customW;
-      bubbleHInput.value = selected.customH; bubbleHVal.textContent = selected.customH;
+      if (AppState.selected.isMirrored === undefined) AppState.selected.isMirrored = false;
+      if (AppState.selected.customSize === undefined) AppState.selected.customSize = false;
+      if (AppState.selected.customW === undefined) AppState.selected.customW = Math.round(AppState.selected.w || 180);
+      if (AppState.selected.customH === undefined) AppState.selected.customH = Math.round(AppState.selected.h || 90);
+      bubbleText.value = AppState.selected.text;
+      bubbleMirrorCheckbox.checked = AppState.selected.isMirrored;
+      bubbleFontSizeInput.value = AppState.selected.fontSize; bubbleFontSizeVal.textContent = AppState.selected.fontSize;
+      bubbleTextColor.value = AppState.selected.textColor;
+      bubbleGradientCheckbox.checked = AppState.selected.isGradient;
+      bubbleGradientRow.style.display = AppState.selected.isGradient ? 'flex' : 'none';
+      bubbleGradientColor.value = AppState.selected.gradientColor;
+      bubbleBgColor.value = AppState.selected.fillColor;
+      bubbleStrokeColor.value = AppState.selected.strokeColor;
+      bubbleStrokeWidthInput.value = AppState.selected.strokeWidth; bubbleStrokeWidthVal.textContent = AppState.selected.strokeWidth;
+      bubbleCustomSizeCheckbox.checked = AppState.selected.customSize;
+      bubbleSizeRow.style.display = AppState.selected.customSize ? 'block' : 'none';
+      bubbleWInput.value = AppState.selected.customW; bubbleWVal.textContent = AppState.selected.customW;
+      bubbleHInput.value = AppState.selected.customH; bubbleHVal.textContent = AppState.selected.customH;
     }
 
     const camPanelEl = document.getElementById('cameraPanel');
     if (camPanelEl) camPanelEl.style.display = isCamera ? 'block' : 'none';
     if (isCamera) {
-      const ratio = selected.w / Math.max(1, selected.h);
+      const ratio = AppState.selected.w / Math.max(1, AppState.selected.h);
       document.querySelectorAll('.camera-ratio-btn').forEach(b => {
         const parts = (b.dataset.ratio || '').split(':').map(Number);
         const r = parts[0] / Math.max(1, parts[1]);
@@ -9059,54 +8503,54 @@ function togglePin(part) {
     }
     /* eraser 面板已打包为 tool-panel[data-tool="eraser"]，显示由 updateToolVisibility 统一控制 */
 
-    const showBindPanel = (isAcc || isShape) && !isCamera;
+    const showBindPanel = (isAcc || isShape || isInk) && !isCamera; // brush-v5.1.0: §6.3.5
     bindPanel.style.display = showBindPanel ? 'block' : 'none';
     if (showBindPanel) {
       updateTargetFigureOptions();
-      accBind.value = selected.bindTo;
+      accBind.value = AppState.selected.bindTo;
     }
 
     updateToolVisibility(isFig, hasSel, isCamera);
     if (isFig) {
-      if (!selected.light) selected.light = { enabled: false, color: '#ffbb66', size: 1.0, angle: 315 };
-      if (selected.light.size === undefined) selected.light.size = 1.0;
-      if (selected.light.angle === undefined) selected.light.angle = 315;
-      ensureExtremity(selected);
+      if (!AppState.selected.light) AppState.selected.light = { enabled: false, color: '#ffbb66', size: 1.0, angle: 315 };
+      if (AppState.selected.light.size === undefined) AppState.selected.light.size = 1.0;
+      if (AppState.selected.light.angle === undefined) AppState.selected.light.angle = 315;
+      ensureExtremity(AppState.selected);
       updateLimbStatus();
-      colorInput.value = selected.color;
-      lwInput.value = selected.lw; lwVal.textContent = selected.lw;
-      lightColorInput.value = selected.light.color;
-      lightSizeInput.value = selected.light.size; lightSizeVal.textContent = selected.light.size.toFixed(1);
-      lightAngleInput.value = selected.light.angle; lightAngleVal.textContent = selected.light.angle + '°';
-      btnLight.textContent = selected.light.enabled ? '关闭侧面高光' : '开启侧面高光';
-      btnLight.classList.toggle('on', selected.light.enabled);
-      btnExtremity.textContent = selected.extremity.enabled ? '关闭小手小脚' : '开启小手小脚';
-      btnExtremity.classList.toggle('on', selected.extremity.enabled);
+      colorInput.value = AppState.selected.color;
+      lwInput.value = AppState.selected.lw; lwVal.textContent = AppState.selected.lw;
+      lightColorInput.value = AppState.selected.light.color;
+      lightSizeInput.value = AppState.selected.light.size; lightSizeVal.textContent = AppState.selected.light.size.toFixed(1);
+      lightAngleInput.value = AppState.selected.light.angle; lightAngleVal.textContent = AppState.selected.light.angle + '°';
+      btnLight.textContent = AppState.selected.light.enabled ? '关闭侧面高光' : '开启侧面高光';
+      btnLight.classList.toggle('on', AppState.selected.light.enabled);
+      btnExtremity.textContent = AppState.selected.extremity.enabled ? '关闭小手小脚' : '开启小手小脚';
+      btnExtremity.classList.toggle('on', AppState.selected.extremity.enabled);
       // 控制手腕脚踝面板显隐
       document.querySelectorAll('.ext-joint-row').forEach(el => {
-        el.style.display = selected.extremity.enabled ? 'flex' : 'none';
+        el.style.display = AppState.selected.extremity.enabled ? 'flex' : 'none';
       });
       // 如果小手小脚关了，且当前隔离的是手臂/腿部（包含了手腕脚踝），清空高亮防止错乱
-      if (!selected.extremity.enabled) {
+      if (!AppState.selected.extremity.enabled) {
         if (isolatedJointName) {
           // 实际上关掉小手小脚不影响整条手臂/腿的高亮，只是少了 ext 节点
         }
       }
       syncJointButtonsUI();
-      armExtRatio.value = selected.extremity.armRatio;
-      armExtRatioVal.textContent = selected.extremity.armRatio.toFixed(2);
-      legExtRatio.value = selected.extremity.legRatio;
-      legExtRatioVal.textContent = selected.extremity.legRatio.toFixed(2);
+      armExtRatio.value = AppState.selected.extremity.armRatio;
+      armExtRatioVal.textContent = AppState.selected.extremity.armRatio.toFixed(2);
+      legExtRatio.value = AppState.selected.extremity.legRatio;
+      legExtRatioVal.textContent = AppState.selected.extremity.legRatio.toFixed(2);
 
-      headInput.value = selected.bodyScale.head; headVal.textContent = selected.bodyScale.head.toFixed(2);
-      armInput.value = selected.bodyScale.arm; armVal.textContent = selected.bodyScale.arm.toFixed(2);
-      legInput.value = selected.bodyScale.leg; legVal.textContent = selected.bodyScale.leg.toFixed(2);
-      torsoInput.value = selected.bodyScale.torso; torsoVal.textContent = selected.bodyScale.torso.toFixed(2);
-      const fa = selected.bodyScale.foreArm !== undefined ? selected.bodyScale.foreArm : 0.37;
+      headInput.value = AppState.selected.bodyScale.head; headVal.textContent = AppState.selected.bodyScale.head.toFixed(2);
+      armInput.value = AppState.selected.bodyScale.arm; armVal.textContent = AppState.selected.bodyScale.arm.toFixed(2);
+      legInput.value = AppState.selected.bodyScale.leg; legVal.textContent = AppState.selected.bodyScale.leg.toFixed(2);
+      torsoInput.value = AppState.selected.bodyScale.torso; torsoVal.textContent = AppState.selected.bodyScale.torso.toFixed(2);
+      const fa = AppState.selected.bodyScale.foreArm !== undefined ? AppState.selected.bodyScale.foreArm : 0.37;
       foreArmRatioInput.value = fa; foreArmRatioVal.textContent = fa.toFixed(2);
-      const sh = selected.bodyScale.shin !== undefined ? selected.bodyScale.shin : 0.49;
+      const sh = AppState.selected.bodyScale.shin !== undefined ? AppState.selected.bodyScale.shin : 0.49;
       shinRatioInput.value = sh; shinRatioVal.textContent = sh.toFixed(2);
-      const bs = selected.bodyScale;
+      const bs = AppState.selected.bodyScale;
       armLenLInput.value = isIndep ? bs.armL : bs.arm; armLenLVal.textContent = (+armLenLInput.value).toFixed(2);
       armLenRInput.value = isIndep ? bs.armR : bs.arm; armLenRVal.textContent = (+armLenRInput.value).toFixed(2);
       foreArmRatioLInput.value = isIndep ? bs.foreArmL : fa; foreArmRatioLVal.textContent = (+foreArmRatioLInput.value).toFixed(2);
@@ -9115,41 +8559,41 @@ function togglePin(part) {
       legLenRInput.value = isIndep ? bs.legR : bs.leg; legLenRVal.textContent = (+legLenRInput.value).toFixed(2);
       shinRatioLInput.value = isIndep ? bs.shinL : sh; shinRatioLVal.textContent = (+shinRatioLInput.value).toFixed(2);
       shinRatioRInput.value = isIndep ? bs.shinR : sh; shinRatioRVal.textContent = (+shinRatioRInput.value).toFixed(2);
-      btnHeadFill.textContent = selected.headFilled ? '头部实心' : '头部空心';
-      btnHeadFill.classList.toggle('on', selected.headFilled);
-      if (headFillCustomCheckbox) headFillCustomCheckbox.checked = !!selected.headFillCustom;
-      if (headFillColorInput) headFillColorInput.value = selected.headFillColor || '#111111';
+      btnHeadFill.textContent = AppState.selected.headFilled ? '头部实心' : '头部空心';
+      btnHeadFill.classList.toggle('on', AppState.selected.headFilled);
+      if (headFillCustomCheckbox) headFillCustomCheckbox.checked = !!AppState.selected.headFillCustom;
+      if (headFillColorInput) headFillColorInput.value = AppState.selected.headFillColor || '#111111';
       
       const headIndepCb = document.getElementById('headIndep');
       if (headIndepCb) headIndepCb.checked = headHandleOn;
       updateHeadMoveHandle();
-      glowColor.value = selected.glow.color;
-      glowAlpha.value = selected.glow.alpha; glowAlphaVal.textContent = selected.glow.alpha.toFixed(2);
-      glowBlur.value = selected.glow.blur; glowBlurVal.textContent = selected.glow.blur;
-      btnGlow.textContent = selected.glow.enabled ? '关闭发光' : '开启发光';
-      btnGlow.classList.toggle('on', selected.glow.enabled);
-      jointColor.value = selected.joint.color;
-      jointLen.value = selected.joint.len; jointLenVal.textContent = selected.joint.len.toFixed(2);
-      btnJoint.textContent = selected.joint.enabled ? '关闭渐变' : '开启渐变';
-      btnJoint.classList.toggle('on', selected.joint.enabled);
+      glowColor.value = AppState.selected.glow.color;
+      glowAlpha.value = AppState.selected.glow.alpha; glowAlphaVal.textContent = AppState.selected.glow.alpha.toFixed(2);
+      glowBlur.value = AppState.selected.glow.blur; glowBlurVal.textContent = AppState.selected.glow.blur;
+      btnGlow.textContent = AppState.selected.glow.enabled ? '关闭发光' : '开启发光';
+      btnGlow.classList.toggle('on', AppState.selected.glow.enabled);
+      jointColor.value = AppState.selected.joint.color;
+      jointLen.value = AppState.selected.joint.len; jointLenVal.textContent = AppState.selected.joint.len.toFixed(2);
+      btnJoint.textContent = AppState.selected.joint.enabled ? '关闭渐变' : '开启渐变';
+      btnJoint.classList.toggle('on', AppState.selected.joint.enabled);
     }
 
     if (hasCanvasSel) {
       objPanel.style.display = 'block';
-      const k = canvasBaseBounds ? (canvasBounds.w / canvasBaseBounds.w) : 1;
+      const k = canvasBaseBounds ? (AppState.canvasBounds.w / canvasBaseBounds.w) : 1;
       // 已删除 objScale.value = k; objScaleVal.textContent = k.toFixed(2);
       objAlpha.value = 1; objAlphaVal.textContent = '1.00';
       objAlpha.disabled = true;
       if (objXInput) { 
-        objXInput.value = Math.round(canvasBounds.x + canvasBounds.w / 2); 
+        objXInput.value = Math.round(AppState.canvasBounds.x + AppState.canvasBounds.w / 2); 
         objXInput.disabled = false; 
       }
       if (objYInput) { 
-        objYInput.value = Math.round(displayY(canvasBounds.y + canvasBounds.h / 2)); 
+        objYInput.value = Math.round(displayY(AppState.canvasBounds.y + AppState.canvasBounds.h / 2)); 
         objYInput.disabled = false; 
       }
       if (objRotationInput) {
-        const rotDeg = Math.round((canvasBounds.rotation || 0) * 180 / Math.PI);
+        const rotDeg = Math.round((AppState.canvasBounds.rotation || 0) * 180 / Math.PI);
         objRotationInput.value = rotDeg;
         objRotationVal.textContent = rotDeg + '°';
         objRotationInput.disabled = false;
@@ -9159,7 +8603,7 @@ function togglePin(part) {
       objAnchorRow.style.display = 'none';
     } else if (hasSel) {
       // 已删除 objScale.value = selected.scale; objScaleVal.textContent = selected.scale.toFixed(2);
-      objAlpha.value = selected.alpha; objAlphaVal.textContent = selected.alpha.toFixed(2);
+      objAlpha.value = AppState.selected.alpha; objAlphaVal.textContent = AppState.selected.alpha.toFixed(2);
       objAlpha.disabled = false;
       updatePosInputs();
       objPanel.style.display = 'block';
@@ -9171,7 +8615,7 @@ function togglePin(part) {
       }
       btnUp.disabled = false; btnDown.disabled = false; btnTop.disabled = false; btnBottom.disabled = false;
       if (objRotationInput) {
-        const rotDeg = Math.round(selected.rot || 0);
+        const rotDeg = Math.round(AppState.selected.rot || 0);
         objRotationInput.value = rotDeg;
         objRotationVal.textContent = rotDeg + '°';
         objRotationInput.disabled = false;
@@ -9194,15 +8638,15 @@ function togglePin(part) {
     }
     const btnFree = document.getElementById('btnFreeStretch');
     if (btnFree) {
-      const freeTargetOk = hasCanvasSel || (!!selected && !selected.locked && ['image', 'shape', 'acc'].includes(selected.type));
+      const freeTargetOk = hasCanvasSel || (!!AppState.selected && !AppState.selected.locked && ['image', 'shape', 'acc'].includes(AppState.selected.type));
       btnFree.disabled = !freeTargetOk;
       btnFree.classList.toggle('on', !!freeStretchOn);
       btnFree.setAttribute('aria-pressed', freeStretchOn ? 'true' : 'false');
     }
 
     if (objXInput && objYInput && !hasCanvasSel) {
-      objXInput.disabled = !selected || selected.locked;
-      objYInput.disabled = !selected || selected.locked;
+      objXInput.disabled = !AppState.selected || AppState.selected.locked;
+      objYInput.disabled = !AppState.selected || AppState.selected.locked;
     }
 
     if (hideJointsCheckbox) hideJointsCheckbox.checked = hideJointsEnabled;
@@ -9210,7 +8654,7 @@ function togglePin(part) {
     
     if (jointSmoothInput) {
       if (isFig) {
-        const js = selected.jointSmooth !== undefined ? selected.jointSmooth : 1;
+        const js = AppState.selected.jointSmooth !== undefined ? AppState.selected.jointSmooth : 1;
         jointSmoothInput.value = js;
         jointSmoothVal.textContent = js.toFixed(2);
       } else {
@@ -9229,18 +8673,18 @@ function togglePin(part) {
 
   function select(f) {
     /* 子轨道下从图层列表等位置选择其他元件时，自动把轨道切到该元件，保持隔离 */
-    if (isSubTrackMode() && f && String(f.id) !== activeTrackId) {
-      activeTrackId = (f.type === 'video') ? TRACK_ALL_ID : String(f.id);
+    if (isSubTrackMode() && f && String(f.id) !== AppState.activeTrackId) {
+      AppState.activeTrackId = (f.type === 'video') ? TRACK_ALL_ID : String(f.id);
       refreshSubTrackOptions();
     }
-    canvasSelected = false;
-    selected = f;
+    AppState.canvasSelected = false;
+    AppState.selected = f;
     isolatedJointName = null; // 切换对象自动退出隔离模式
     cancelTransformBoxDrag();
     anchorModeOn = false;
     if (f && f.type === 'camera') { anchorModeOn = false; }
     updateJointSliders();
-    syncUI();
+    EventBus.emit('need:syncUI');
     updateLayerList();
     updateTrackOptions();
     if (f) flashCoordDisplay();
@@ -9253,20 +8697,20 @@ function togglePin(part) {
 
   function getPos(e) {
     const r = canvas.getBoundingClientRect();
-    const camView = getCameraViewObject();
+    const camView = SKFE.systems.camera.getCameraViewObject();
     if (camView) {
-      const t = getCameraViewTransform(camView);
-      return cameraScreenToWorld({ x: e.clientX - r.left, y: e.clientY - r.top }, camView, t);
+      const t = SKFE.systems.camera.getCameraViewTransform(camView);
+      return SKFE.systems.camera.cameraScreenToWorld({ x: e.clientX - r.left, y: e.clientY - r.top }, camView, t);
     }
     return {
-      x: (e.clientX - r.left - viewOffset.x) / viewScale,
-      y: (e.clientY - r.top - viewOffset.y) / viewScale
+      x: (e.clientX - r.left - AppState.viewOffset.x) / AppState.viewScale,
+      y: (e.clientY - r.top - AppState.viewOffset.y) / AppState.viewScale
     };
   }
 
   function hitObj(o, p) {
     let fig = null;
-    if (o.bindTo !== 'none' && o.targetId) fig = objects.find(f => f.id === o.targetId && f.type === 'figure');
+    if (o.bindTo !== 'none' && o.targetId) fig = AppState.objects.find(f => f.id === o.targetId && f.type === 'figure');
     let pp = p;
     if (fig && (fig.rot || fig.mirror)) pp = worldToFigureLocal(fig, p);
     const tr = getBindTransform(o);
@@ -9417,12 +8861,12 @@ function togglePin(part) {
       lastMid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
       /* 判断双指中点是否在摄像机取景框内 → 决定这次双指缩放摄像机还是缩放页面视图 */
       twoFingerMode = 'view';
-      const camViewObj = getCameraViewObject();
+      const camViewObj = SKFE.systems.camera.getCameraViewObject();
       if (camViewObj) {
         const rect = canvas.getBoundingClientRect();
         const midX = lastMid.x - rect.left;
         const midY = lastMid.y - rect.top;
-        const ct = getCameraViewTransform(camViewObj);
+        const ct = SKFE.systems.camera.getCameraViewTransform(camViewObj);
         const inside = (
           midX >= ct.left && midX <= ct.left + ct.viewW &&
           midY >= ct.top && midY <= ct.top + ct.viewH
@@ -9442,18 +8886,18 @@ function togglePin(part) {
     const subTrackObj = subTrackMode ? getActiveTrackObject() : null;
 
     /* 橡皮擦优先：直接开始一笔矢量擦除，拦截掉所有的点击 */
-    if (eraserOn) {
-      startEraserStroke(p, e); // 哪怕没点中也会在里面去尝试绑定当前选中对象
+    if (SKFE.systems.eraser.isOn()) {
+      SKFE.systems.eraser.startStroke(p, e); // 哪怕没点中也会在里面去尝试绑定当前选中对象
       if (e.pointerType === 'mouse' && e.button === 0) return; // 鼠标彻底禁止平移与穿透选中画布
     }
 
     /* 摄像机子轨道：取景框内拖动 = 平移摄像机；取景框外拖动 = 平移视图（避开 UI 面板） */
-    const camViewObj = getCameraViewObject();
+    const camViewObj = SKFE.systems.camera.getCameraViewObject();
     if (camViewObj) {
-      selected = camViewObj;
-      const insideRect = pointInCameraRect(camViewObj, p, 0);
+      AppState.selected = camViewObj;
+      const insideRect = SKFE.systems.camera.pointInCameraRect(camViewObj, p, 0);
       if (insideRect) {
-        const ct = getCameraViewTransform(camViewObj);
+        const ct = SKFE.systems.camera.getCameraViewTransform(camViewObj);
         drag = {
           o: camViewObj, part: 'camera-view-pan',
           startClientX: e.clientX, startClientY: e.clientY,
@@ -9473,23 +8917,23 @@ function togglePin(part) {
 
     // 移除直接点击锚点标记拖动，改为由专用手柄处理
 
-    if (canvasBoundsEnabled && canvasBoundsEditMode) {
-      const cx = canvasBounds.x + canvasBounds.w / 2;
-      const cy = canvasBounds.y + canvasBounds.h / 2;
-      const rot = canvasBounds.rotation || 0;
+    if (AppState.canvasBoundsEnabled && canvasBoundsEditMode) {
+      const cx = AppState.canvasBounds.x + AppState.canvasBounds.w / 2;
+      const cy = AppState.canvasBounds.y + AppState.canvasBounds.h / 2;
+      const rot = AppState.canvasBounds.rotation || 0;
       const dx = p.x - cx, dy = p.y - cy;
       const lx = dx * Math.cos(-rot) - dy * Math.sin(-rot);
       const ly = dx * Math.sin(-rot) + dy * Math.cos(-rot);
       const minDist = Math.min(
-        Math.abs(lx - (-canvasBounds.w / 2)), Math.abs(lx - (canvasBounds.w / 2)),
-        Math.abs(ly - (-canvasBounds.h / 2)), Math.abs(ly - (canvasBounds.h / 2))
+        Math.abs(lx - (-AppState.canvasBounds.w / 2)), Math.abs(lx - (AppState.canvasBounds.w / 2)),
+        Math.abs(ly - (-AppState.canvasBounds.h / 2)), Math.abs(ly - (AppState.canvasBounds.h / 2))
       );
-      if (minDist < 20 / viewScale) {
+      if (minDist < 20 / AppState.viewScale) {
         /* === 新增：点击画布边框时，自动将选中目标切换为画布 === */
-        if (!canvasSelected) {
-          canvasSelected = true;
-          selected = null;
-          syncUI();
+        if (!AppState.canvasSelected) {
+          AppState.canvasSelected = true;
+          AppState.selected = null;
+          EventBus.emit('need:syncUI');
           updateLayerList();
           updateCoordDisplay();
           updatePosInputs();
@@ -9497,7 +8941,7 @@ function togglePin(part) {
         }
         /* ======================================================= */
         draggingCanvasBounds = true;
-        canvasDragStart = { x: p.x, y: p.y, cx: canvasBounds.x, cy: canvasBounds.y };
+        canvasDragStart = { x: p.x, y: p.y, cx: AppState.canvasBounds.x, cy: AppState.canvasBounds.y };
         canvas.setPointerCapture(e.pointerId);
         return;
       }
@@ -9505,7 +8949,7 @@ function togglePin(part) {
 
     if (groundLineEnabled && groundLineEditMode) {
       const rect = canvas.getBoundingClientRect();
-      const screenY = viewOffset.y + groundLineY * viewScale;
+      const screenY = AppState.viewOffset.y + groundLineY * AppState.viewScale;
       const mouseScreenY = e.clientY - rect.top;
       if (Math.abs(mouseScreenY - screenY) < 10) {
         draggingGroundLine = true;
@@ -9518,7 +8962,7 @@ function togglePin(part) {
     if (subTrackMode && !subTrackObj) {
       if (!isTouch) {
         isPanning = true;
-        panStart = { x: e.clientX - viewOffset.x, y: e.clientY - viewOffset.y };
+        panStart = { x: e.clientX - AppState.viewOffset.x, y: e.clientY - AppState.viewOffset.y };
         canvas.setPointerCapture(e.pointerId);
       }
       return;
@@ -9528,45 +8972,45 @@ function togglePin(part) {
     hideHandles();
 
     /* 摄像机参考框：拖边框移动（选中后内部也可拖动） */
-    const camHit = findCameraHit(p);
+    const camHit = SKFE.systems.camera.findCameraHit(p);
     if (camHit) {
-      if (camHit !== selected) select(camHit);
+      if (camHit !== AppState.selected) select(camHit);
       drag = {
         o: camHit, part: 'camera-move',
         startX: p.x, startY: p.y, startCamX: camHit.x, startCamY: camHit.y
       };
       canvas.setPointerCapture(e.pointerId);
-      render();
+      EventBus.emit('need:render');
       return;
     }
 
     let clickedObj = false;
-    const handleHitRadius = (isTouch ? 36 : 18) / viewScale;
-    const bodyHitRadius = (isTouch ? 24 : 14) / viewScale;
-    const shadowExtra = (isTouch ? 24 : 12) / viewScale;
+    const handleHitRadius = (isTouch ? 36 : 18) / AppState.viewScale;
+    const bodyHitRadius = (isTouch ? 24 : 14) / AppState.viewScale;
+    const shadowExtra = (isTouch ? 24 : 12) / AppState.viewScale;
 
     if (!subTrackMode && videoObj && refVideo && refVideo.readyState >= 2 && !videoObj.locked) {
       const w = videoObj.w * videoObj.scale, h = videoObj.h * videoObj.scale;
       if (p.x >= videoObj.x - w / 2 && p.x <= videoObj.x + w / 2 && p.y >= videoObj.y - h / 2 && p.y <= videoObj.y + h / 2) {
-        if (videoObj === selected) {
+        if (videoObj === AppState.selected) {
           clickedObj = true;
           drag = { o: videoObj, part: 'move', dx: videoObj.x - p.x, dy: videoObj.y - p.y };
           canvas.setPointerCapture(e.pointerId);
-          render(); return;
+          EventBus.emit('need:render'); return;
         } else {
-          select(videoObj); render(); return;
+          select(videoObj); EventBus.emit('need:render'); return;
         }
       }
     }
 
-    const hitObjects = subTrackMode ? [subTrackObj] : objects;
+    const hitObjects = subTrackMode ? [subTrackObj] : AppState.objects;
     for (let i = hitObjects.length - 1; i >= 0; i--) {
       const o = hitObjects[i];
       if (!o || o.locked) continue;
 
       if (o.type === 'figure') {
         const pLocal = (o.rot || o.mirror) ? worldToFigureLocal(o, p) : p;
-        if (groundShadowEnabled && shadowEditMode && o === selected) {
+        if (groundShadowEnabled && shadowEditMode && o === AppState.selected) {
           const jS = jointData(o);
           const lowestY = Math.max(jS.footL.y, jS.footR.y, jS.toeL.y, jS.toeR.y);
           const sx = o.x + (o.shadowOffX || 0);
@@ -9578,7 +9022,7 @@ function togglePin(part) {
             clickedObj = true; select(o);
             drag = { o, part: 'shadow', startX: p.x, startY: p.y, startShadowOffX: o.shadowOffX || 0, startShadowOffY: o.shadowOffY || 0 };
             canvas.setPointerCapture(e.pointerId);
-            render(); return;
+            EventBus.emit('need:render'); return;
           }
         }
         const j = jointData(o);
@@ -9589,7 +9033,7 @@ function togglePin(part) {
           if (d < bestD) { bestD = d; best = h; }
         }
         if (best) {
-          if (o === selected) {
+          if (o === AppState.selected) {
             if (jointStretchOn && best.name) {
               let isPinned = false;
               if (o.ikEnabled && o.pinned) {
@@ -9607,25 +9051,25 @@ function togglePin(part) {
             clickedObj = true;
             drag = { o, part: best.name, dx: o.x - p.x, dy: o.y - p.y, startFixedJ: JSON.parse(JSON.stringify(j)) };
             canvas.setPointerCapture(e.pointerId);
-            render(); return;
+            EventBus.emit('need:render'); return;
           } else {
-            select(o); render(); return;
+            select(o); EventBus.emit('need:render'); return;
           }
         }
         const torsoSegs = [[j.pelvis, j.waistPoint], [j.waistPoint, j.neck]];
         const torsoHit = torsoSegs.some(([a, b]) => distToSeg(pLocal, a, b) < bodyHitRadius);
         if (torsoHit) {
-          if (o === selected) {
+          if (o === AppState.selected) {
             clickedObj = true;
             drag = { o, part: 'pelvis', dx: o.x - p.x, dy: o.y - p.y, startFixedJ: JSON.parse(JSON.stringify(j)) };
             canvas.setPointerCapture(e.pointerId);
-            render(); return;
+            EventBus.emit('need:render'); return;
           } else {
-            select(o); render(); return;
+            select(o); EventBus.emit('need:render'); return;
           }
         }
         if (segments(j, o).some(([a, b]) => distToSeg(pLocal, a, b) < bodyHitRadius)) {
-          if (o !== selected) { select(o); render(); }
+          if (o !== AppState.selected) { select(o); EventBus.emit('need:render'); }
           return;
         }
       } else if (o.type === 'image') {
@@ -9638,24 +9082,24 @@ function togglePin(part) {
         const ry = dxr * s + dyr * c;
         const hit = Math.abs(rx + ax) <= b.w / 2 && Math.abs(ry + ay) <= b.h / 2;
         if (hit) {
-          if (o === selected) {
+          if (o === AppState.selected) {
             clickedObj = true;
-            drag = { o, part: 'move', dx: o.x - p.x, dy: o.y - p.y };
+            drag = { o, part: 'move', dx: o.x - p.x, dy: o.y - p.y, startWorldPos: getObjectWorldPos(o) }; // global-v5.1.1: 记录起始世界位置，松手后同步其它帧
             canvas.setPointerCapture(e.pointerId);
-            render(); return;
+            EventBus.emit('need:render'); return;
           } else {
-            select(o); render(); return;
+            select(o); EventBus.emit('need:render'); return;
           }
         }
-      } else if (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble') {
+      } else if (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble' || o.type === 'ink') { // brush-v5.1.0: ink 复用绑定拖动
         if (hitObj(o, p)) {
-          if (o === selected) {
+          if (o === AppState.selected) {
             clickedObj = true;
-            drag = { o, part: 'move', startX: p.x, startY: p.y, startOffX: o.offX || 0, startOffY: o.offY || 0, dx: o.x - p.x, dy: o.y - p.y };
+            drag = { o, part: 'move', startX: p.x, startY: p.y, startOffX: o.offX || 0, startOffY: o.offY || 0, dx: o.x - p.x, dy: o.y - p.y, startWorldPos: getObjectWorldPos(o) };
             canvas.setPointerCapture(e.pointerId);
-            render(); return;
+            EventBus.emit('need:render'); return;
           } else {
-            select(o); render(); return;
+            select(o); EventBus.emit('need:render'); return;
           }
         }
       }
@@ -9663,7 +9107,7 @@ function togglePin(part) {
 
     if (!clickedObj) {
       /* v4.7.0 变换框：点击框内空白区域 → 拖拽移动对象 */
-      if (transformBoxOn && !eraserOn) {
+      if (transformBoxOn && !SKFE.systems.eraser.isOn()) {
         const g = getTransformBoxGeometry();
         if (g && pointInTransformBoxScreen(tboxScreenFromEvent(e))) {
           beginTBoxDrag('move', e, g);
@@ -9674,61 +9118,61 @@ function togglePin(part) {
       if (subTrackMode) {
         if (!isTouch) {
           isPanning = true;
-          panStart = { x: e.clientX - viewOffset.x, y: e.clientY - viewOffset.y };
+          panStart = { x: e.clientX - AppState.viewOffset.x, y: e.clientY - AppState.viewOffset.y };
           canvas.setPointerCapture(e.pointerId);
         }
         return;
       }
-      const insideCanvas = canvasBoundsEnabled && !eraserOn && canvasBoundsEditMode && (() => {
-        const cx = canvasBounds.x + canvasBounds.w / 2;
-        const cy = canvasBounds.y + canvasBounds.h / 2;
-        const rot = canvasBounds.rotation || 0;
+      const insideCanvas = AppState.canvasBoundsEnabled && !SKFE.systems.eraser.isOn() && canvasBoundsEditMode && (() => {
+        const cx = AppState.canvasBounds.x + AppState.canvasBounds.w / 2;
+        const cy = AppState.canvasBounds.y + AppState.canvasBounds.h / 2;
+        const rot = AppState.canvasBounds.rotation || 0;
         const dx = p.x - cx, dy = p.y - cy;
         const lx = dx * Math.cos(-rot) - dy * Math.sin(-rot);
         const ly = dx * Math.sin(-rot) + dy * Math.cos(-rot);
-        return Math.abs(lx) <= canvasBounds.w / 2 && Math.abs(ly) <= canvasBounds.h / 2;
+        return Math.abs(lx) <= AppState.canvasBounds.w / 2 && Math.abs(ly) <= AppState.canvasBounds.h / 2;
       })();
       if (insideCanvas) {
-        canvasSelected = true;
-        selected = null;
-        syncUI();
+        AppState.canvasSelected = true;
+        AppState.selected = null;
+        EventBus.emit('need:syncUI');
         updateLayerList();
         updateCoordDisplay();
         updatePosInputs();
         flashCoordDisplay();
       } else {
-        canvasSelected = false;
+        AppState.canvasSelected = false;
         select(null);
       }
-      if (!isTouch && !eraserOn) {
+      if (!isTouch && !SKFE.systems.eraser.isOn()) {
         isPanning = true;
-        panStart = { x: e.clientX - viewOffset.x, y: e.clientY - viewOffset.y };
+        panStart = { x: e.clientX - AppState.viewOffset.x, y: e.clientY - AppState.viewOffset.y };
         canvas.setPointerCapture(e.pointerId);
       }
-      render();
+      EventBus.emit('need:render');
     }
   }
 
   /* 计算吸附位置（X、Y 独立计算，互不影响） */
   function calcSnap(tx, ty) {
     let res = { dx: 0, dy: 0, lineX: null, lineY: null };
-    if (!snapEnabled || !selected || selected.locked) return res;
-    if (selected.type === 'camera' || selected.type === 'video') return res;
+    if (!snapEnabled || !AppState.selected || AppState.selected.locked) return res;
+    if (AppState.selected.type === 'camera' || AppState.selected.type === 'video') return res;
     /* 绑定对象不参与吸附，避免配饰脱头 */
-    if (selected.bindTo && selected.bindTo !== 'none' && selected.targetId) return res;
+    if (AppState.selected.bindTo && AppState.selected.bindTo !== 'none' && AppState.selected.targetId) return res;
 
-    const vs = getActiveViewScale();
+    const vs = SKFE.systems.eraser.getActiveViewScale();
     const THRESHOLD = 10 / vs; /* 屏幕 10px 换算为世界单位 */
     
     /* 1. 计算自身移动后的包围盒 (AABB) */
-    const curBounds = getObjectBounds(selected);
-    const dxMove = tx - selected.x;
-    const dyMove = ty - selected.y;
+    const curBounds = getObjectBounds(AppState.selected);
+    const dxMove = tx - AppState.selected.x;
+    const dyMove = ty - AppState.selected.y;
 
     /* 自身 9 个候选点：左、中、右 + 上、中、下 + 骨盆 */
     let selfXPts = [curBounds.left + dxMove, (curBounds.left + curBounds.right) / 2 + dxMove, curBounds.right + dxMove];
     let selfYPts = [curBounds.top + dyMove, (curBounds.top + curBounds.bottom) / 2 + dyMove, curBounds.bottom + dyMove];
-    if (selected.type === 'figure') {
+    if (AppState.selected.type === 'figure') {
       selfXPts.push(tx); /* 骨盆 x */
       selfYPts.push(ty); /* 骨盆 y */
     }
@@ -9736,13 +9180,13 @@ function togglePin(part) {
     /* 2. 收集所有目标的候选点 */
     let targetXPts = [];
     let targetYPts = [];
-    for (const o of objects) {
-      if (o === selected) continue;
+    for (const o of AppState.objects) {
+      if (o === AppState.selected) continue;
       if (o.type === 'camera' || o.type === 'video') continue;
       if (o.type !== 'figure' && o.type !== 'image' && o.type !== 'acc' && o.type !== 'shape' && o.type !== 'bubble') continue;
       
       /* 其他轨道：隐藏的跳过，50% 的允许 */
-      if (isSubTrackMode() && String(o.id) !== activeTrackId) {
+      if (isSubTrackMode() && String(o.id) !== AppState.activeTrackId) {
         if (otherTracksVisibility === 'hide') continue;
       }
 
@@ -9787,8 +9231,8 @@ function togglePin(part) {
   function onPointerMove(e) {
     if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-    if (eraserDrag) {
-      updateEraserStroke(getPos(e));
+    if (SKFE.systems.eraser.isDragging()) {
+      SKFE.systems.eraser.updateStroke(getPos(e));
       return;
     }
 
@@ -9800,63 +9244,63 @@ function togglePin(part) {
       const wy = (dx * s + dy * c) / drag.fit;
       drag.o.x = drag.camX + wx;
       drag.o.y = drag.camY + wy;
-      render();
+      EventBus.emit('need:render');
       return;
     }
 
     if (drag && drag.part === 'camera-view-move') {
       camViewOffset.x = drag.startOffsetX + (e.clientX - drag.startClientX);
       camViewOffset.y = drag.startOffsetY + (e.clientY - drag.startClientY);
-      render();
+      EventBus.emit('need:render');
       return;
     }
 
     if (draggingCanvasBounds) {
       const p = getPos(e);
-      canvasBounds.x = canvasDragStart.cx + (p.x - canvasDragStart.x);
-      canvasBounds.y = canvasDragStart.cy + (p.y - canvasDragStart.y);
+      AppState.canvasBounds.x = canvasDragStart.cx + (p.x - canvasDragStart.x);
+      AppState.canvasBounds.y = canvasDragStart.cy + (p.y - canvasDragStart.y);
       syncCanvasUI();
-      render();
+      EventBus.emit('need:render');
       return;
     }
 
     if (draggingGroundLine) {
       const rect = canvas.getBoundingClientRect();
       const screenY = e.clientY - rect.top;
-      groundLineY = (screenY - viewOffset.y) / viewScale;
+      groundLineY = (screenY - AppState.viewOffset.y) / AppState.viewScale;
       syncGroundLineUI();
-      render();
+      EventBus.emit('need:render');
       return;
     }
 
     if (groundLineEnabled && groundLineEditMode && !drag && !isPanning && pointers.size === 0) {
       const rect = canvas.getBoundingClientRect();
-      const screenY = viewOffset.y + groundLineY * viewScale;
+      const screenY = AppState.viewOffset.y + groundLineY * AppState.viewScale;
       const mouseScreenY = e.clientY - rect.top;
       canvas.style.cursor = Math.abs(mouseScreenY - screenY) < 10 ? 'ns-resize' : 'default';
     }
 
-    if (canvasBoundsEnabled && canvasBoundsEditMode && !drag && !isPanning && pointers.size === 0) {
+    if (AppState.canvasBoundsEnabled && canvasBoundsEditMode && !drag && !isPanning && pointers.size === 0) {
       const p = getPos(e);
-      const cx = canvasBounds.x + canvasBounds.w / 2;
-      const cy = canvasBounds.y + canvasBounds.h / 2;
-      const rot = canvasBounds.rotation || 0;
+      const cx = AppState.canvasBounds.x + AppState.canvasBounds.w / 2;
+      const cy = AppState.canvasBounds.y + AppState.canvasBounds.h / 2;
+      const rot = AppState.canvasBounds.rotation || 0;
       const dx = p.x - cx, dy = p.y - cy;
       const lx = dx * Math.cos(-rot) - dy * Math.sin(-rot);
       const ly = dx * Math.sin(-rot) + dy * Math.cos(-rot);
       const minDist = Math.min(
-        Math.abs(lx - (-canvasBounds.w / 2)), Math.abs(lx - (canvasBounds.w / 2)),
-        Math.abs(ly - (-canvasBounds.h / 2)), Math.abs(ly - (canvasBounds.h / 2))
+        Math.abs(lx - (-AppState.canvasBounds.w / 2)), Math.abs(lx - (AppState.canvasBounds.w / 2)),
+        Math.abs(ly - (-AppState.canvasBounds.h / 2)), Math.abs(ly - (AppState.canvasBounds.h / 2))
       );
-      canvas.style.cursor = minDist < 20 / viewScale ? 'move' : 'default';
+      canvas.style.cursor = minDist < 20 / AppState.viewScale ? 'move' : 'default';
     }
 
     /* v4.7.0 变换框：悬停框内显示移动光标 */
-    if (transformBoxOn && !eraserOn && !drag && !isPanning && pointers.size === 0) {
+    if (transformBoxOn && !SKFE.systems.eraser.isOn() && !drag && !isPanning && pointers.size === 0) {
       const g = getTransformBoxGeometry();
       if (g && pointInTransformBoxScreen(tboxScreenFromEvent(e))) {
         canvas.style.cursor = 'move';
-      } else if (canvas.style.cursor === 'move' && !(canvasBoundsEnabled && canvasBoundsEditMode)) {
+      } else if (canvas.style.cursor === 'move' && !(AppState.canvasBoundsEnabled && canvasBoundsEditMode)) {
         canvas.style.cursor = 'default';
       }
     }
@@ -9865,7 +9309,7 @@ function togglePin(part) {
       const pts = Array.from(pointers.values());
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
       const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
-      const camViewObj = getCameraViewObject();
+      const camViewObj = SKFE.systems.camera.getCameraViewObject();
 
       if (camViewObj && twoFingerMode === 'camera') {
         /* 双指缩放摄像机（取景框内）：以双指中点为锚点 */
@@ -9877,11 +9321,11 @@ function togglePin(part) {
             const rect = canvas.getBoundingClientRect();
             const midX = mid.x - rect.left;
             const midY = mid.y - rect.top;
-            const ct = getCameraViewTransform(camViewObj);
-            const worldPt = cameraScreenToWorld({ x: midX, y: midY }, camViewObj, ct);
+            const ct = SKFE.systems.camera.getCameraViewTransform(camViewObj);
+            const worldPt = SKFE.systems.camera.cameraScreenToWorld({ x: midX, y: midY }, camViewObj, ct);
             camViewObj.scale = newScale;
-            const ctAfter = getCameraViewTransform(camViewObj);
-            const worldAfter = cameraScreenToWorld({ x: midX, y: midY }, camViewObj, ctAfter);
+            const ctAfter = SKFE.systems.camera.getCameraViewTransform(camViewObj);
+            const worldAfter = SKFE.systems.camera.cameraScreenToWorld({ x: midX, y: midY }, camViewObj, ctAfter);
             camViewObj.x += worldPt.x - worldAfter.x;
             camViewObj.y += worldPt.y - worldAfter.y;
             if (globalEditEnabled) {
@@ -9890,7 +9334,7 @@ function togglePin(part) {
           }
         }
         lastDist = dist; lastMid = mid;
-        render(); return;
+        EventBus.emit('need:render'); return;
       }
 
       if (camViewObj && twoFingerMode === 'view') {
@@ -9909,41 +9353,41 @@ function togglePin(part) {
           camViewZoom = newZoom;
         }
         lastDist = dist; lastMid = mid;
-        render(); return;
+        EventBus.emit('need:render'); return;
       }
 
       /* 非摄像机视角：原有逻辑 */
       if (lastDist > 0) {
         const zoomFactor = dist / lastDist;
-        let newScale = Math.min(5, Math.max(0.2, viewScale * zoomFactor));
+        let newScale = Math.min(5, Math.max(0.2, AppState.viewScale * zoomFactor));
         if (viewPinned && pinnedView) {
           newScale = Math.max(newScale, pinnedView.scale);
         }
         if (viewPinned && pinnedView && newScale <= pinnedView.scale + 0.0001) {
-          viewScale = pinnedView.scale;
-          viewOffset.x = pinnedView.offset.x;
-          viewOffset.y = pinnedView.offset.y;
+          AppState.viewScale = pinnedView.scale;
+          AppState.viewOffset.x = pinnedView.offset.x;
+          AppState.viewOffset.y = pinnedView.offset.y;
         } else {
-          const actualZoom = newScale / viewScale;
-          viewOffset.x = mid.x - (mid.x - viewOffset.x) * actualZoom;
-          viewOffset.y = mid.y - (mid.y - viewOffset.y) * actualZoom;
-          viewScale = newScale;
-          viewOffset.x += mid.x - lastMid.x;
-          viewOffset.y += mid.y - lastMid.y;
+          const actualZoom = newScale / AppState.viewScale;
+          AppState.viewOffset.x = mid.x - (mid.x - AppState.viewOffset.x) * actualZoom;
+          AppState.viewOffset.y = mid.y - (mid.y - AppState.viewOffset.y) * actualZoom;
+          AppState.viewScale = newScale;
+          AppState.viewOffset.x += mid.x - lastMid.x;
+          AppState.viewOffset.y += mid.y - lastMid.y;
         }
       }
       lastDist = dist; lastMid = mid;
-      render(); return;
+      EventBus.emit('need:render'); return;
     }
     if (isPanning) {
-      if (viewPinned && pinnedView && viewScale <= pinnedView.scale + 0.0001) {
-        viewOffset.x = pinnedView.offset.x;
-        viewOffset.y = pinnedView.offset.y;
+      if (viewPinned && pinnedView && AppState.viewScale <= pinnedView.scale + 0.0001) {
+        AppState.viewOffset.x = pinnedView.offset.x;
+        AppState.viewOffset.y = pinnedView.offset.y;
       } else {
-        viewOffset.x = e.clientX - panStart.x;
-        viewOffset.y = e.clientY - panStart.y;
+        AppState.viewOffset.x = e.clientX - panStart.x;
+        AppState.viewOffset.y = e.clientY - panStart.y;
       }
-      render(); return;
+      EventBus.emit('need:render'); return;
     }
     if (!drag) return;
     const p = getPos(e);
@@ -9965,7 +9409,7 @@ function togglePin(part) {
         objRotationInput.value = Math.round(drag.accumRot);
         objRotationVal.textContent = Math.round(drag.accumRot) + '°';
       }
-      render();
+      EventBus.emit('need:render');
       return;
     }
 
@@ -9984,7 +9428,7 @@ function togglePin(part) {
         o.shadowOffY = drag.startShadowOffY + (p.y - drag.startY);
         setGlobalProp(o, 'shadowOffX', o.shadowOffX);
         setGlobalProp(o, 'shadowOffY', o.shadowOffY);
-        render(); return;
+        EventBus.emit('need:render'); return;
       }
       if (drag.part === 'pelvis') {
         let tx = p.x + drag.dx;
@@ -10067,7 +9511,7 @@ function togglePin(part) {
         snapLines.x = snap.lineX;
         snapLines.y = snap.lineY;
       }
-    } else if (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble') {
+    } else if (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble' || o.type === 'ink') { // brush-v5.1.0: ink 走同一套绑定拖动
       if (drag.part === 'move') {
         if (o.bindTo === 'none' || !o.targetId) {
           let tx = p.x + drag.dx;
@@ -10078,7 +9522,7 @@ function togglePin(part) {
           snapLines.x = snap.lineX;
           snapLines.y = snap.lineY;
         } else {
-          const fig = objects.find(f => f.id === o.targetId && f.type === 'figure');
+          const fig = AppState.objects.find(f => f.id === o.targetId && f.type === 'figure');
           if (fig) {
             let baseAngle = 0;
             switch (o.bindTo) {
@@ -10108,12 +9552,12 @@ function togglePin(part) {
         }
       }
     }
-    render();
+    EventBus.emit('need:render');
   }
 
   function onPointerUp(e) {
-    if (eraserDrag) {
-      finishEraserStroke();
+    if (SKFE.systems.eraser.isDragging()) {
+      SKFE.systems.eraser.finishStroke();
       pointers.delete(e.pointerId);
       try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
       return;
@@ -10125,23 +9569,23 @@ function togglePin(part) {
       try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
       if (isPan) {
         markCurrentFrameModified();
-        saveHistory('移动摄像机');
+        EventBus.emit('history:save', '移动摄像机');
       }
-      render();
+      EventBus.emit('need:render');
       return;
     }
     if (draggingCanvasBounds) {
       draggingCanvasBounds = false;
       pointers.delete(e.pointerId);
       try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
-      saveHistory('拖动画布边界');
+      EventBus.emit('history:save', '拖动画布边界');
       return;
     }
     if (draggingGroundLine) {
       draggingGroundLine = false;
       pointers.delete(e.pointerId);
       try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
-      saveHistory('拖动参考线');
+      EventBus.emit('history:save', '拖动参考线');
       return;
     }
     pointers.delete(e.pointerId);
@@ -10153,8 +9597,8 @@ function togglePin(part) {
         if (camWheelThumbTimer) { clearTimeout(camWheelThumbTimer); camWheelThumbTimer = null; }
         invalidateAllFrameThumbs();
         updateFrameBar();
-        saveHistory('缩放摄像机');
-        render();
+        EventBus.emit('history:save', '缩放摄像机');
+        EventBus.emit('need:render');
       }
     }
 
@@ -10163,25 +9607,34 @@ function togglePin(part) {
     } else if (drag) {
       const part = drag.part;
       const movedFig = drag.o;
+      const dragStartWorld = drag.startWorldPos;
       const startPelvis = (drag.startFixedJ && drag.startFixedJ.pelvis)
         ? { x: drag.startFixedJ.pelvis.x, y: drag.startFixedJ.pelvis.y }
         : null;
       drag = null;
-      syncUI();
+      EventBus.emit('need:syncUI');
       markCurrentFrameModified();
-      if (part === 'rotate') saveHistory('旋转对象');
-      else if (part === 'anchor') saveHistory('设置锚点');
-      else if (part === 'camera-move') saveHistory('移动摄像机');
+      if (part === 'rotate') EventBus.emit('history:save', '旋转对象');
+      else if (part === 'anchor') EventBus.emit('history:save', '设置锚点');
+      else if (part === 'camera-move') EventBus.emit('history:save', '移动摄像机');
       else if (part === 'pelvis') {
         if (movedFig && startPelvis) applyGlobalPositionDelta(movedFig, startPelvis);
-        saveHistory('移动对象');
+        EventBus.emit('history:save', '移动对象');
       }
-      else saveHistory('调整姿势');
+      else if (part === 'move') {
+        /* global-v5.1.1: 画布直接拖动图片/配饰时，位移同样要同步到该元件的其它帧
+           （以前只有四角变换框拖动才同步，导致"某帧位置对不上"） */
+        if (movedFig && dragStartWorld && movedFig.type !== 'figure') {
+          applyGlobalPositionDeltaForObject(movedFig, dragStartWorld);
+        }
+        EventBus.emit('history:save', '移动对象');
+      }
+      else EventBus.emit('history:save', '调整姿势');
     }
 
     try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
     snapLines = { x: null, y: null }; /* 松手清空线 */
-    render();
+    EventBus.emit('need:render');
   }
 
   /* ==================== v4.7.1 相对滑条逻辑 ==================== */
@@ -10191,18 +9644,18 @@ function togglePin(part) {
 
   function onPosSliderStart() {
     // 新增：按下滑动条时，立刻记录当前状态（相当于预存修改前的状态）
-    if (canvasSelected || selected) {
+    if (AppState.canvasSelected || AppState.selected) {
       pushPreSnapshot(getSnapshot(), '滑动调整');
     }
 
-    if (canvasSelected && canvasBoundsEnabled) {
-      sliderDragStartPos = { x: canvasBounds.x + canvasBounds.w / 2, y: canvasBounds.y + canvasBounds.h / 2 };
-      sliderDragStartScale = canvasBaseBounds ? (canvasBounds.w / canvasBaseBounds.w) : 1;
-      sliderDragStartRot = (canvasBounds.rotation || 0) * 180 / Math.PI;
-    } else if (selected) {
-      sliderDragStartPos = getObjectWorldPos(selected);
-      sliderDragStartScale = selected.scale || 1;
-      sliderDragStartRot = selected.rot || 0;
+    if (AppState.canvasSelected && AppState.canvasBoundsEnabled) {
+      sliderDragStartPos = { x: AppState.canvasBounds.x + AppState.canvasBounds.w / 2, y: AppState.canvasBounds.y + AppState.canvasBounds.h / 2 };
+      sliderDragStartScale = canvasBaseBounds ? (AppState.canvasBounds.w / canvasBaseBounds.w) : 1;
+      sliderDragStartRot = (AppState.canvasBounds.rotation || 0) * 180 / Math.PI;
+    } else if (AppState.selected) {
+      sliderDragStartPos = getObjectWorldPos(AppState.selected);
+      sliderDragStartScale = AppState.selected.scale || 1;
+      sliderDragStartRot = AppState.selected.rot || 0;
     } else {
       sliderDragStartPos = { x: 0, y: 0 };
       sliderDragStartScale = 1;
@@ -10211,7 +9664,7 @@ function togglePin(part) {
   }
 
   function onPosSliderMove(axis) {
-    if (!canvasSelected && !selected) return;
+    if (!AppState.canvasSelected && !AppState.selected) return;
     
     if (axis === 'scale') {
       const val = parseFloat(posScaleSlider.value);
@@ -10219,52 +9672,52 @@ function togglePin(part) {
       const factor = 1 + (val / 100);
       const newScale = Math.max(0.01, Math.min(100, sliderDragStartScale * factor));
       
-      if (canvasSelected && canvasBoundsEnabled) {
-        if (!canvasBaseBounds) canvasBaseBounds = { ...canvasBounds };
-        const cx = canvasBounds.x + canvasBounds.w / 2;
-        const cy = canvasBounds.y + canvasBounds.h / 2;
-        canvasBounds.w = canvasBaseBounds.w * newScale;
-        canvasBounds.h = canvasBaseBounds.h * newScale;
-        canvasBounds.x = cx - canvasBounds.w / 2;
-        canvasBounds.y = cy - canvasBounds.h / 2;
-      } else if (selected) {
-        selected.scale = newScale;
-        if (selected.type === 'acc' || selected.type === 'shape' || selected.type === 'bubble') {
-          setGlobalPropForBound(selected, 'scale', selected.scale);
+      if (AppState.canvasSelected && AppState.canvasBoundsEnabled) {
+        if (!canvasBaseBounds) canvasBaseBounds = { ...AppState.canvasBounds };
+        const cx = AppState.canvasBounds.x + AppState.canvasBounds.w / 2;
+        const cy = AppState.canvasBounds.y + AppState.canvasBounds.h / 2;
+        AppState.canvasBounds.w = canvasBaseBounds.w * newScale;
+        AppState.canvasBounds.h = canvasBaseBounds.h * newScale;
+        AppState.canvasBounds.x = cx - AppState.canvasBounds.w / 2;
+        AppState.canvasBounds.y = cy - AppState.canvasBounds.h / 2;
+      } else if (AppState.selected) {
+        AppState.selected.scale = newScale;
+        if (AppState.selected.type === 'acc' || AppState.selected.type === 'shape' || AppState.selected.type === 'bubble') {
+          setGlobalPropForBound(AppState.selected, 'scale', AppState.selected.scale);
         } else {
-          setGlobalProp(selected, 'scale', selected.scale);
+          setGlobalProp(AppState.selected, 'scale', AppState.selected.scale);
         }
       }
     } else if (axis === 'rotate') {
       const val = parseFloat(posRotSlider.value);
       if (val === 0) return;
       const newRot = sliderDragStartRot + val;
-      if (canvasSelected && canvasBoundsEnabled) {
-        canvasBounds.rotation = newRot * Math.PI / 180;
-      } else if (selected) {
-        selected.rot = newRot;
-        if (selected.type === 'acc' || selected.type === 'shape' || selected.type === 'bubble') {
-          setGlobalPropForBound(selected, 'rot', selected.rot);
+      if (AppState.canvasSelected && AppState.canvasBoundsEnabled) {
+        AppState.canvasBounds.rotation = newRot * Math.PI / 180;
+      } else if (AppState.selected) {
+        AppState.selected.rot = newRot;
+        if (AppState.selected.type === 'acc' || AppState.selected.type === 'shape' || AppState.selected.type === 'bubble') {
+          setGlobalPropForBound(AppState.selected, 'rot', AppState.selected.rot);
         } else {
-          setGlobalProp(selected, 'rot', selected.rot);
+          setGlobalProp(AppState.selected, 'rot', AppState.selected.rot);
         }
       }
     } else {
       const val = axis === 'x' ? parseFloat(posXSlider.value) : parseFloat(posYSlider.value);
       const delta = val * 4; 
-      if (canvasSelected && canvasBoundsEnabled) {
+      if (AppState.canvasSelected && AppState.canvasBoundsEnabled) {
         const nx = sliderDragStartPos.x + (axis === 'x' ? delta : 0);
         const ny = sliderDragStartPos.y - (axis === 'y' ? delta : 0); 
-        canvasBounds.x = nx - canvasBounds.w / 2;
-        canvasBounds.y = ny - canvasBounds.h / 2;
+        AppState.canvasBounds.x = nx - AppState.canvasBounds.w / 2;
+        AppState.canvasBounds.y = ny - AppState.canvasBounds.h / 2;
         syncCanvasUI();
-      } else if (selected) {
+      } else if (AppState.selected) {
         const nx = sliderDragStartPos.x + (axis === 'x' ? delta : 0);
         const ny = sliderDragStartPos.y - (axis === 'y' ? delta : 0);
-        setObjectWorldPos(selected, nx, ny);
+        setObjectWorldPos(AppState.selected, nx, ny);
       }
     }
-    render();
+    EventBus.emit('need:render');
     updatePosInputs();
   }
 
@@ -10273,11 +9726,20 @@ function togglePin(part) {
     if (posYSlider) posYSlider.value = 0;
     if (posScaleSlider) posScaleSlider.value = 0;
     if (posRotSlider) posRotSlider.value = 0;
-    if (canvasSelected || selected) {
+    if (AppState.canvasSelected || AppState.selected) {
+      /* global-v5.1.1: 位移滑条同样把位移同步到该元件的其它帧 */
+      if (AppState.selected && !AppState.canvasSelected && sliderDragStartPos) {
+        if (isBoundObj(AppState.selected)) {
+          setGlobalPropForBound(AppState.selected, 'offX', AppState.selected.offX);
+          setGlobalPropForBound(AppState.selected, 'offY', AppState.selected.offY);
+        } else {
+          applyGlobalPositionDeltaForObject(AppState.selected, sliderDragStartPos);
+        }
+      }
       markCurrentFrameModified();
       // saveHistory('滑动调整');  // 删除这行，因为已经在 onPosSliderStart 记录了
     }
-    syncUI();
+    EventBus.emit('need:syncUI');
   }
 
   const _pX = document.getElementById('posXSlider');
@@ -10313,21 +9775,21 @@ function togglePin(part) {
 
   /* ==================== 坐标输入 / 锚点 ==================== */
   function commitCoordInput() {
-    if (canvasSelected && canvasBoundsEnabled) {
+    if (AppState.canvasSelected && AppState.canvasBoundsEnabled) {
       const nx = parseFloat(objXInput.value);
       const nyDisp = parseFloat(objYInput.value);
       if (!isFinite(nx) || !isFinite(nyDisp)) { updatePosInputs(); return; }
       const pre = getSnapshot();
       const cx = nx;
       const cy = -nyDisp;
-      canvasBounds.x = cx - canvasBounds.w / 2;
-      canvasBounds.y = cy - canvasBounds.h / 2;
+      AppState.canvasBounds.x = cx - AppState.canvasBounds.w / 2;
+      AppState.canvasBounds.y = cy - AppState.canvasBounds.h / 2;
       pushPreSnapshot(pre, '移动画布边界');
-      syncCanvasUI(); render();
+      syncCanvasUI(); EventBus.emit('need:render');
       return;
     }
-    if (!selected) return;
-    if (globalEditEnabled && selected.type === 'figure' && hasAnyPinInAllFrames(selected)) {
+    if (!AppState.selected) return;
+    if (globalEditEnabled && AppState.selected.type === 'figure' && hasAnyPinInAllFrames(AppState.selected)) {
       alert('当前元件存在关节固定，请先在「关节」面板中解除所有帧的固定，才能整体位移。');
       updatePosInputs();
       return;
@@ -10336,15 +9798,19 @@ function togglePin(part) {
     const nyDisp = parseFloat(objYInput.value);
     if (!isFinite(nx) || !isFinite(nyDisp)) { updatePosInputs(); return; }
     const pre = getSnapshot();
-    const prevPos = (selected.type === 'figure') ? { x: selected.x, y: selected.y } : null;
-    setObjectWorldPos(selected, nx, -nyDisp);
-    if (prevPos) applyGlobalPositionDelta(selected, prevPos);
-    if (isBoundObj(selected)) {
-      setGlobalPropForBound(selected, 'offX', selected.offX);
-      setGlobalPropForBound(selected, 'offY', selected.offY);
+    const prevPos = (AppState.selected.type === 'figure') ? { x: AppState.selected.x, y: AppState.selected.y } : null;
+    /* global-v5.1.1: 非火柴人元件（图片 / 配饰 / 形状 / 对话框 / 画笔）也要把位移同步到其它帧，
+       否则手填坐标只改当前帧，看起来就是"某一帧位置不对" */
+    const prevWorld = prevPos ? null : getObjectWorldPos(AppState.selected);
+    setObjectWorldPos(AppState.selected, nx, -nyDisp);
+    if (prevPos) applyGlobalPositionDelta(AppState.selected, prevPos);
+    else if (prevWorld) applyGlobalPositionDeltaForObject(AppState.selected, prevWorld);
+    if (isBoundObj(AppState.selected)) {
+      setGlobalPropForBound(AppState.selected, 'offX', AppState.selected.offX);
+      setGlobalPropForBound(AppState.selected, 'offY', AppState.selected.offY);
     }
     pushPreSnapshot(pre, '移动对象');
-    syncUI(); render(); markCurrentFrameModified();
+    EventBus.emit('need:syncUI'); EventBus.emit('need:render'); markCurrentFrameModified();
   }
   if (objXInput && objYInput) {
     objXInput.addEventListener('change', commitCoordInput);
@@ -10358,27 +9824,27 @@ function togglePin(part) {
     objSizeInput.addEventListener('change', () => {
       const val = parseFloat(objSizeInput.value);
       if (!isFinite(val) || val <= 0) { updatePosInputs(); return; }
-      if (canvasSelected && canvasBoundsEnabled && canvasBaseBounds) {
+      if (AppState.canvasSelected && AppState.canvasBoundsEnabled && canvasBaseBounds) {
         const pre = getSnapshot();
         const k = Math.max(0.05, Math.min(10, val));
-        const cx = canvasBounds.x + canvasBounds.w / 2;
-        const cy = canvasBounds.y + canvasBounds.h / 2;
-        canvasBounds.w = canvasBaseBounds.w * k;
-        canvasBounds.h = canvasBaseBounds.h * k;
-        canvasBounds.x = cx - canvasBounds.w / 2;
-        canvasBounds.y = cy - canvasBounds.h / 2;
+        const cx = AppState.canvasBounds.x + AppState.canvasBounds.w / 2;
+        const cy = AppState.canvasBounds.y + AppState.canvasBounds.h / 2;
+        AppState.canvasBounds.w = canvasBaseBounds.w * k;
+        AppState.canvasBounds.h = canvasBaseBounds.h * k;
+        AppState.canvasBounds.x = cx - AppState.canvasBounds.w / 2;
+        AppState.canvasBounds.y = cy - AppState.canvasBounds.h / 2;
         syncCanvasUI();
-        render();
+        EventBus.emit('need:render');
         pushPreSnapshot(pre, '缩放画布');
-      } else if (selected) {
+      } else if (AppState.selected) {
         const pre = getSnapshot();
-        selected.scale = Math.max(0.01, Math.min(100, val));
-        if (selected.type === 'acc' || selected.type === 'shape' || selected.type === 'bubble') {
-          setGlobalPropForBound(selected, 'scale', selected.scale);
+        AppState.selected.scale = Math.max(0.01, Math.min(100, val));
+        if (AppState.selected.type === 'acc' || AppState.selected.type === 'shape' || AppState.selected.type === 'bubble') {
+          setGlobalPropForBound(AppState.selected, 'scale', AppState.selected.scale);
         } else {
-          setGlobalProp(selected, 'scale', selected.scale);
+          setGlobalProp(AppState.selected, 'scale', AppState.selected.scale);
         }
-        syncUI(); render(); markCurrentFrameModified();
+        EventBus.emit('need:syncUI'); EventBus.emit('need:render'); markCurrentFrameModified();
         pushPreSnapshot(pre, '调整大小');
       }
     });
@@ -10403,7 +9869,7 @@ function togglePin(part) {
       syncSnapBtn();
       if (!snapEnabled) {
         snapLines = { x: null, y: null };
-        render();
+        EventBus.emit('need:render');
       }
     };
   }
@@ -10418,64 +9884,64 @@ function togglePin(part) {
   /* 锚点模式开关 */
   btnAnchorToggle.addEventListener('click', (e) => {
     e.preventDefault(); e.stopPropagation();
-    if (!selected) return;
+    if (!AppState.selected) return;
     anchorModeOn = !anchorModeOn;
-    syncUI();
-    render();
+    EventBus.emit('need:syncUI');
+    EventBus.emit('need:render');
   });
 
   if (objAnchorX && objAnchorY) {
     const applyAnchorInput = () => {
-      if (!selected) return;
+      if (!AppState.selected) return;
       const vx = parseFloat(objAnchorX.value);
       const vy = parseFloat(objAnchorY.value);
       if (!isFinite(vx) || !isFinite(vy)) return;
-      selected.ax = vx;
-      selected.ay = vy;
-      if (selected.type === 'acc' || selected.type === 'shape' || selected.type === 'bubble') {
-        setGlobalPropForBound(selected, 'ax', vx);
-        setGlobalPropForBound(selected, 'ay', vy);
+      AppState.selected.ax = vx;
+      AppState.selected.ay = vy;
+      if (AppState.selected.type === 'acc' || AppState.selected.type === 'shape' || AppState.selected.type === 'bubble') {
+        setGlobalPropForBound(AppState.selected, 'ax', vx);
+        setGlobalPropForBound(AppState.selected, 'ay', vy);
       } else {
-        setGlobalProp(selected, 'ax', vx);
-        setGlobalProp(selected, 'ay', vy);
+        setGlobalProp(AppState.selected, 'ax', vx);
+        setGlobalProp(AppState.selected, 'ay', vy);
       }
       markCurrentFrameModified();
-      render();
+      EventBus.emit('need:render');
     };
     objAnchorX.addEventListener('input', applyAnchorInput);
     objAnchorY.addEventListener('input', applyAnchorInput);
-    objAnchorX.addEventListener('change', () => saveHistory('设置锚点'));
-    objAnchorY.addEventListener('change', () => saveHistory('设置锚点'));
+    objAnchorX.addEventListener('change', () => EventBus.emit('history:save', '设置锚点'));
+    objAnchorY.addEventListener('change', () => EventBus.emit('history:save', '设置锚点'));
   }
   if (btnAnchorCenter) {
     btnAnchorCenter.addEventListener('click', (e) => {
       e.preventDefault(); e.stopPropagation();
-      if (!selected) return;
-      selected.ax = 0; selected.ay = 0;
-      if (selected.type === 'acc' || selected.type === 'shape' || selected.type === 'bubble') {
-        setGlobalPropForBound(selected, 'ax', 0);
-        setGlobalPropForBound(selected, 'ay', 0);
+      if (!AppState.selected) return;
+      AppState.selected.ax = 0; AppState.selected.ay = 0;
+      if (AppState.selected.type === 'acc' || AppState.selected.type === 'shape' || AppState.selected.type === 'bubble') {
+        setGlobalPropForBound(AppState.selected, 'ax', 0);
+        setGlobalPropForBound(AppState.selected, 'ay', 0);
       } else {
-        setGlobalProp(selected, 'ax', 0);
-        setGlobalProp(selected, 'ay', 0);
+        setGlobalProp(AppState.selected, 'ax', 0);
+        setGlobalProp(AppState.selected, 'ay', 0);
       }
-      syncUI(); markCurrentFrameModified(); render(); saveHistory('锚点复位');
+      EventBus.emit('need:syncUI'); markCurrentFrameModified(); EventBus.emit('need:render'); EventBus.emit('history:save', '锚点复位');
     });
   }
 
   if (anchorHandleEl) {
     anchorHandleEl.addEventListener('pointerdown', (e) => {
-      if (!selected) return;
+      if (!AppState.selected) return;
       e.preventDefault(); e.stopPropagation();
       anchorHandleDrag = {
         id: e.pointerId,
         sx: e.clientX,
         sy: e.clientY,
-        ax: selected.ax || 0,
-        ay: selected.ay || 0,
+        ax: AppState.selected.ax || 0,
+        ay: AppState.selected.ay || 0,
         moved: false,
         pre: getSnapshot(),
-        target: selected
+        target: AppState.selected
       };
       try { anchorHandleEl.setPointerCapture(e.pointerId); } catch (_) {}
     });
@@ -10487,8 +9953,8 @@ function togglePin(part) {
       const o = anchorHandleDrag.target;
       if (!o) return;
       
-      const dx = (e.clientX - anchorHandleDrag.sx) / viewScale;
-      const dy = (e.clientY - anchorHandleDrag.sy) / viewScale;
+      const dx = (e.clientX - anchorHandleDrag.sx) / AppState.viewScale;
+      const dy = (e.clientY - anchorHandleDrag.sy) / AppState.viewScale;
       if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) anchorHandleDrag.moved = true;
       
       // 转换到局部坐标系
@@ -10501,7 +9967,7 @@ function togglePin(part) {
       if (sc !== 0) {
         o.ax = anchorHandleDrag.ax + dxLoc / sc;
         o.ay = anchorHandleDrag.ay + dyLoc / sc;
-        if (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble') {
+        if (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble' || o.type === 'ink') {
           setGlobalPropForBound(o, 'ax', o.ax);
           setGlobalPropForBound(o, 'ay', o.ay);
         } else {
@@ -10513,7 +9979,7 @@ function togglePin(part) {
       if (objAnchorX && document.activeElement !== objAnchorX) objAnchorX.value = Math.round(o.ax || 0);
       if (objAnchorY && document.activeElement !== objAnchorY) objAnchorY.value = Math.round(o.ay || 0);
       
-      render();
+      EventBus.emit('need:render');
     });
 
     const endAnchorDrag = (e) => {
@@ -10538,361 +10004,99 @@ function togglePin(part) {
       const deg = parseFloat(e.target.value);
       if (!isFinite(deg)) return;
       if (objRotationVal) objRotationVal.textContent = deg + '°';
-      if (canvasSelected && canvasBoundsEnabled) {
-        canvasBounds.rotation = deg * Math.PI / 180;
-        render();
+      if (AppState.canvasSelected && AppState.canvasBoundsEnabled) {
+        AppState.canvasBounds.rotation = deg * Math.PI / 180;
+        EventBus.emit('need:render');
         return;
       }
-      if (!selected) return;
-      selected.rot = deg;
-      if (selected.type === 'acc' || selected.type === 'shape' || selected.type === 'bubble') {
-        setGlobalPropForBound(selected, 'rot', deg);
+      if (!AppState.selected) return;
+      AppState.selected.rot = deg;
+      if (AppState.selected.type === 'acc' || AppState.selected.type === 'shape' || AppState.selected.type === 'bubble') {
+        setGlobalPropForBound(AppState.selected, 'rot', deg);
       } else {
-        setGlobalProp(selected, 'rot', deg);
+        setGlobalProp(AppState.selected, 'rot', deg);
       }
-      render();
+      EventBus.emit('need:render');
       markCurrentFrameModified();
     });
     objRotationInput.addEventListener('change', () => {
-      saveHistory(canvasSelected ? '旋转画布' : '旋转对象');
+      EventBus.emit('history:save', AppState.canvasSelected ? '旋转画布' : '旋转对象');
     });
   }
 
-  /* ==================== 颜色增强：画面吸色 + 预设色块 ==================== */
-  const SWATCH_KEY = 'skfe_color_swatches_v1';
-  const DEFAULT_SWATCHES = ['#111111', '#ffffff', '#ef4444', '#f97316', '#f59e0b', '#10b981', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899', '#64748b', '#f4f6f9'];
-  const swatchPopover = document.getElementById('swatchPopover');
-  const swatchGrid = document.getElementById('swatchGrid');
-  const btnCloseSwatches = document.getElementById('btnCloseSwatches');
-  const btnSaveSwatch = document.getElementById('btnSaveSwatch');
-  const colorPickHint = document.getElementById('colorPickHint');
-  const colorPickHintText = document.getElementById('colorPickHintText');
-  const btnCancelPick = document.getElementById('btnCancelPick');
-
-  let savedSwatches = [];
-  let swatchTargetInput = null;
-  let swatchPopoverOpen = false;
-  let pickState = null;
-  let pickDown = false;
-  let colorToastEl = null;
-
-  function loadSwatches() {
-    try {
-      const raw = localStorage.getItem(SWATCH_KEY);
-      if (raw === null) { savedSwatches = DEFAULT_SWATCHES.slice(); persistSwatches(); return; }
-      const arr = JSON.parse(raw);
-      savedSwatches = Array.isArray(arr)
-        ? arr.filter(c => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c)).slice(0, 60)
-        : [];
-    } catch (_) { savedSwatches = DEFAULT_SWATCHES.slice(); }
-  }
-  function persistSwatches() {
-    try { localStorage.setItem(SWATCH_KEY, JSON.stringify(savedSwatches)); } catch (_) {}
-  }
-
-  function showColorToast(msg) {
-    if (!colorToastEl) {
-      colorToastEl = document.createElement('div');
-      colorToastEl.className = 'ui-toast color-toast';
-      document.body.appendChild(colorToastEl);
-    }
-    colorToastEl.textContent = msg;
-    colorToastEl.style.display = 'block';
-    colorToastEl.style.opacity = '1';
-    clearTimeout(colorToastEl._timer);
-    colorToastEl._timer = setTimeout(() => {
-      colorToastEl.style.opacity = '0';
-      setTimeout(() => { colorToastEl.style.display = 'none'; }, 260);
-    }, 1400);
-  }
-
-  function applyColorToInput(input, color) {
-    if (!input) return;
-    input.value = color;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  }
-
-  function renderSwatches() {
-    if (!swatchGrid) return;
-    swatchGrid.innerHTML = '';
-    if (!savedSwatches.length) {
-      const empty = document.createElement('div');
-      empty.className = 'sp-empty';
-      empty.textContent = '还没有保存的颜色';
-      swatchGrid.appendChild(empty);
-      return;
-    }
-    savedSwatches.forEach(color => {
-      const item = document.createElement('div');
-      item.className = 'sp-item';
-      item.style.background = color;
-      item.title = color;
-      item.setAttribute('role', 'button');
-      item.tabIndex = 0;
-      if (swatchTargetInput && swatchTargetInput.value.toLowerCase() === color.toLowerCase()) item.classList.add('active');
-      item.addEventListener('click', (e) => {
-        e.preventDefault(); e.stopPropagation();
-        applyColorToInput(swatchTargetInput, color);
-        renderSwatches();
-      });
-      const del = document.createElement('button');
-      del.type = 'button';
-      del.className = 'sp-del';
-      del.textContent = '×';
-      del.title = '删除该颜色';
-      del.setAttribute('aria-label', '删除该颜色');
-      del.addEventListener('click', (e) => {
-        e.preventDefault(); e.stopPropagation();
-        savedSwatches = savedSwatches.filter(c => c.toLowerCase() !== color.toLowerCase());
-        persistSwatches();
-        renderSwatches();
-      });
-      item.appendChild(del);
-      swatchGrid.appendChild(item);
-    });
-  }
-
-  function openSwatches(input, anchor) {
-    swatchTargetInput = input;
-    swatchPopoverOpen = true;
-    renderSwatches();
-    swatchPopover.style.display = 'block';
-    const r = anchor.getBoundingClientRect();
-    const pw = swatchPopover.offsetWidth || 236;
-    const ph = swatchPopover.offsetHeight || 220;
-    let left = r.right - pw;
-    let top = r.bottom + 8;
-    if (left < 8) left = 8;
-    if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
-    if (top + ph > window.innerHeight - 8) top = Math.max(8, r.top - ph - 8);
-    swatchPopover.style.left = Math.max(8, left) + 'px';
-    swatchPopover.style.top = Math.max(8, top) + 'px';
-  }
-
-  function closeSwatches() {
-    swatchPopoverOpen = false;
-    swatchTargetInput = null;
-    if (swatchPopover) swatchPopover.style.display = 'none';
-  }
-
-  function sampleCanvasColor(clientX, clientY) {
-    const r = canvas.getBoundingClientRect();
-    const sx = canvas.width / Math.max(1, r.width);
-    const sy = canvas.height / Math.max(1, r.height);
-    const px = Math.floor((clientX - r.left) * sx);
-    const py = Math.floor((clientY - r.top) * sy);
-    if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return null;
-    try {
-      const d = ctx.getImageData(px, py, 1, 1).data;
-      if (d[3] < 8) return pageBgColor;
-      return rgbToHex(d[0], d[1], d[2]);
-    } catch (_) { return null; }
-  }
-
-  function onPickPointerDown(e) {
-    if (!pickState) return;
-    e.preventDefault(); e.stopPropagation();
-    pickDown = true;
-    const c = sampleCanvasColor(e.clientX, e.clientY);
-    if (c) { pickState.input.value = c; pickState.input.dispatchEvent(new Event('input', { bubbles: true })); }
-  }
-  function onPickPointerMove(e) {
-    if (!pickState || !pickDown) return;
-    e.preventDefault(); e.stopPropagation();
-    const c = sampleCanvasColor(e.clientX, e.clientY);
-    if (c) { pickState.input.value = c; pickState.input.dispatchEvent(new Event('input', { bubbles: true })); }
-  }
-  function onPickPointerUp(e) {
-    if (!pickState) return;
-    const wasDown = pickDown;
-    pickDown = false;
-    if (wasDown) {
-      const color = pickState.input.value;
-      pickState.input.dispatchEvent(new Event('change', { bubbles: true }));
-      showColorToast('已取色 ' + color);
-    }
-    stopColorPick();
-  }
-
-  function stopColorPick() {
-    if (!pickState) return;
-    if (pickState.btn) pickState.btn.classList.remove('active');
-    pickState = null;
-    pickDown = false;
-    document.body.classList.remove('color-picking');
-    if (colorPickHint) colorPickHint.style.display = 'none';
-    canvas.removeEventListener('pointerdown', onPickPointerDown, true);
-    canvas.removeEventListener('pointermove', onPickPointerMove, true);
-    window.removeEventListener('pointerup', onPickPointerUp, true);
-    window.removeEventListener('pointercancel', onPickPointerUp, true);
-  }
-
-  function startColorPick(input, btn) {
-    if (!input) return;
-    if (pickState) stopColorPick();
-    closeSwatches();
-    pickState = { input, btn, original: input.value };
-    pickDown = false;
-    document.body.classList.add('color-picking');
-    if (colorPickHintText) colorPickHintText.textContent = '点击画布任意位置取色';
-    if (colorPickHint) colorPickHint.style.display = 'flex';
-    if (btn) btn.classList.add('active');
-    canvas.addEventListener('pointerdown', onPickPointerDown, true);
-    canvas.addEventListener('pointermove', onPickPointerMove, true);
-    window.addEventListener('pointerup', onPickPointerUp, true);
-    window.addEventListener('pointercancel', onPickPointerUp, true);
-  }
-
-  function cancelColorPick() {
-    if (!pickState) return;
-    const inp = pickState.input;
-    const orig = pickState.original;
-    stopColorPick();
-    if (inp && orig != null) {
-      inp.value = orig;
-      inp.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-  }
-
-  function enhanceColorInputs() {
-    document.querySelectorAll('input[type="color"]').forEach(inp => {
-      if (inp.dataset.colorEnhanced) return;
-      if (inp.closest('.tool-panel[data-tool="theme"]')) return;
-      inp.dataset.colorEnhanced = '1';
-      const wrap = document.createElement('span');
-      wrap.className = 'color-enhance';
-      inp.parentNode.insertBefore(wrap, inp);
-      wrap.appendChild(inp);
-
-      const eye = document.createElement('button');
-      eye.type = 'button';
-      eye.className = 'color-tool-btn eyedropper';
-      eye.textContent = '💧';
-      eye.title = '画面吸色';
-      eye.setAttribute('aria-label', '画面吸色');
-      eye.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); startColorPick(inp, eye); });
-
-      const pal = document.createElement('button');
-      pal.type = 'button';
-      pal.className = 'color-tool-btn palette';
-      pal.innerHTML = '<span class="dot"></span>';
-      pal.title = '预设颜色';
-      pal.setAttribute('aria-label', '预设颜色');
-      pal.addEventListener('click', (e) => {
-        e.preventDefault(); e.stopPropagation();
-        if (swatchPopoverOpen && swatchTargetInput === inp) closeSwatches();
-        else openSwatches(inp, pal);
-      });
-
-      wrap.appendChild(eye);
-      wrap.appendChild(pal);
-    });
-  }
-
-  function updateColorToolLabels() {
-    document.querySelectorAll('.color-tool-btn.eyedropper').forEach(b => { b.title = '画面吸色'; });
-    document.querySelectorAll('.color-tool-btn.palette').forEach(b => { b.title = '预设颜色'; });
-    if (swatchPopoverOpen) renderSwatches();
-  }
-
-  if (btnCloseSwatches) btnCloseSwatches.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); closeSwatches(); });
-  if (btnSaveSwatch) btnSaveSwatch.addEventListener('click', (e) => {
-    e.preventDefault(); e.stopPropagation();
-    if (!swatchTargetInput) return;
-    const color = swatchTargetInput.value;
-    if (!savedSwatches.some(c => c.toLowerCase() === color.toLowerCase())) {
-      savedSwatches.unshift(color);
-      savedSwatches = savedSwatches.slice(0, 60);
-      persistSwatches();
-    }
-    renderSwatches();
-    showColorToast('已取色 ' + color);
+  /* ==================== 颜色增强：画面吸色 + 预设色块（js/features/color-tools.js） ==================== */
+  SKFE.features.colorTools.init({
+    getCtx: () => ctx,
+    getCanvas: () => canvas,
+    getPageBgColor: () => pageBgColor,
   });
-  if (btnCancelPick) {
-    const doCancelPick = (e) => { e.preventDefault(); e.stopPropagation(); cancelColorPick(); };
-    btnCancelPick.addEventListener('pointerdown', doCancelPick);
-    btnCancelPick.addEventListener('click', doCancelPick);
-  }
-
-  document.addEventListener('pointerdown', (e) => {
-    if (!swatchPopoverOpen) return;
-    if (swatchPopover && swatchPopover.contains(e.target)) return;
-    if (e.target.closest && e.target.closest('.color-tool-btn.palette')) return;
-    closeSwatches();
-  }, true);
-
-  document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
-    if (pickState) { cancelColorPick(); return; }
-    if (swatchPopoverOpen) closeSwatches();
-  }, true);
+  SKFE.features.colorTools.boot();
 
   /* ==================== 添加 / 复制 / 删除 ==================== */
   function addFigure() {
     const sp = getSpawnPoint();
     const f = makeFigure(sp.x, sp.y, currentColor, currentLW);
     f.layer = { body: 1, head: 2, armL: 1, armR: 1, legL: 1, legR: 1 };
-    generateName(f); addObjectToFrames(f); select(f); render();
-    saveHistory('添加火柴人');
+    generateName(f); addObjectToFrames(f); select(f); EventBus.emit('need:render');
+    EventBus.emit('history:save', '添加火柴人');
   }
   function addShape(type) {
     const sp = getSpawnPoint();
     const s = makeShape(type, sp.x, sp.y);
     s.layer = 1;
-    generateName(s); addObjectToFrames(s); select(s); render();
-    saveHistory('添加图形');
+    generateName(s); addObjectToFrames(s); select(s); EventBus.emit('need:render');
+    EventBus.emit('history:save', '添加图形');
   }
   function addBubble() {
     const sp = getSpawnPoint();
     let cy = sp.y;
-    const existingBubbles = objects.filter(o => o.type === 'bubble');
+    const existingBubbles = AppState.objects.filter(o => o.type === 'bubble');
     if (existingBubbles.length > 0) {
       const last = existingBubbles[existingBubbles.length - 1];
       cy = last.y + (last.h * last.scale) / 2 + 60;
     }
     const b = makeBubble(sp.x, cy);
     b.layer = 10;
-    generateName(b); addObjectToFrames(b); select(b); render();
-    saveHistory('添加对话框');
+    generateName(b); addObjectToFrames(b); select(b); EventBus.emit('need:render');
+    EventBus.emit('history:save', '添加对话框');
   }
 
   function cloneSelected() {
-    if (!selected || selected.type === 'video') return;
-    if (selected.type === 'camera') { alert('摄像机只能存在一个。'); return; }
-    const copy = JSON.parse(JSON.stringify(selected, (k, v) => (k === 'img' ? undefined : v)));
+    if (!AppState.selected || AppState.selected.type === 'video') return;
+    if (AppState.selected.type === 'camera') { alert('摄像机只能存在一个。'); return; }
+    const copy = JSON.parse(JSON.stringify(AppState.selected, (k, v) => (k === 'img' ? undefined : v)));
     copy.id = ++uid; generateName(copy);
-    if (selected.img) copy.img = selected.img;
+    if (AppState.selected.img) copy.img = AppState.selected.img;
     if (copy.type === 'figure') Object.keys(copy.layer).forEach(k => copy.layer[k] += 1);
     else copy.layer += 1;
     if (copy.type === 'figure' || copy.type === 'image') { copy.x += 46; copy.y += 34; }
     if (copy.ax === undefined) copy.ax = 0;
     if (copy.ay === undefined) copy.ay = 0;
-    addObjectToFrames(copy); select(copy); render();
-    saveHistory('复制对象');
+    addObjectToFrames(copy); select(copy); EventBus.emit('need:render');
+    EventBus.emit('history:save', '复制对象');
   }
 
   function deleteSelected() {
-    if (!selected) return;
-    if (selected.type === 'video') return;
-    const id = selected.id;
-    const isFigure = selected.type === 'figure';
+    if (!AppState.selected) return;
+    if (AppState.selected.type === 'video') return;
+    const id = AppState.selected.id;
+    const isFigure = AppState.selected.type === 'figure';
     const shouldRemove = (o) => {
       if (!o) return false;
       if (o.id === id) return true;
-      if (isFigure && (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble') && o.targetId === id) return true;
+      if (isFigure && (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble' || o.type === 'ink') && o.targetId === id) return true; // brush-v5.1.0: 删除火柴人时一并删除挂载的画笔
       return false;
     };
     if (isSubTrackMode()) {
       /* 子轨道删除：只清空当前轨道当前帧，绝不触碰其他 track */
-      const t = tracks[activeTrackId];
+      const t = AppState.tracks[AppState.activeTrackId];
       if (t && t.frames) {
-        if (shouldRemove(getTrackFrame(activeTrackId, currentFrameIndex))) t.frames[currentFrameIndex] = null;
+        if (shouldRemove(getTrackFrame(AppState.activeTrackId, AppState.currentFrameIndex))) t.frames[AppState.currentFrameIndex] = null;
       }
     } else if (globalEditEnabled) {
       /* 全局删除：从所有 track 的所有帧中移除该元件及其挂件 */
-      for (const tid in tracks) {
-        const t = tracks[tid];
+      for (const tid in AppState.tracks) {
+        const t = AppState.tracks[tid];
         if (!t || !t.frames) continue;
         for (let i = 0; i < t.frames.length; i++) {
           if (shouldRemove(t.frames[i])) t.frames[i] = null;
@@ -10900,116 +10104,144 @@ function togglePin(part) {
       }
     } else {
       /* 全局模式但未开启全局编辑：只清当前帧合并视图 */
-      for (const tid in tracks) {
-        if (shouldRemove(getTrackFrame(tid, currentFrameIndex))) setTrackFrame(tid, currentFrameIndex, null);
+      for (const tid in AppState.tracks) {
+        if (shouldRemove(getTrackFrame(tid, AppState.currentFrameIndex))) setTrackFrame(tid, AppState.currentFrameIndex, null);
       }
     }
     /* 清空后移除整条轨道，避免残留空轨道 */
-    for (const tid in tracks) {
-      const t = tracks[tid];
-      if (!t || !t.frames) { delete tracks[tid]; continue; }
+    for (const tid in AppState.tracks) {
+      const t = AppState.tracks[tid];
+      if (!t || !t.frames) { delete AppState.tracks[tid]; continue; }
       if (t.frames.every(d => d == null)) {
-        delete tracks[tid];
-        if (activeTrackId === tid) activeTrackId = TRACK_ALL_ID;
+        delete AppState.tracks[tid];
+        if (AppState.activeTrackId === tid) AppState.activeTrackId = TRACK_ALL_ID;
       }
     }
-    selected = null;
-    canvasSelected = false;
+    AppState.selected = null;
+    AppState.canvasSelected = false;
     syncMainLengthFromTracks();
     trimTrailingEmptyFrames();
-    objects = getCombinedObjectsForRender();
-    if (isSubTrackMode()) selected = getActiveTrackObject();
+    AppState.objects = getCombinedObjectsForRender();
+    if (isSubTrackMode()) AppState.selected = getActiveTrackObject();
     refreshSubTrackOptions();
     invalidateAllFrameThumbs();
     updateFrameBar();
-    render();
-    syncUI();
-    saveHistory('删除对象');
+    EventBus.emit('app:update', '删除对象');
+  }
+
+  /* brush-v5.1.0: 删除当前帧的所有画笔元件（面板「清除本帧画笔元件」） */
+  function deleteInkOnCurrentFrame() {
+    const inkIds = AppState.objects.filter(o => o && o.type === 'ink').map(o => String(o.id));
+    if (!inkIds.length) return 0;
+    for (const tid of inkIds) {
+      const t = AppState.tracks[tid];
+      if (!t || !t.frames) continue;
+      t.frames[AppState.currentFrameIndex] = null;
+      if (t.frames.every(d => d == null)) {
+        delete AppState.tracks[tid];
+        if (AppState.activeTrackId === tid) AppState.activeTrackId = TRACK_ALL_ID;
+      }
+    }
+    if (AppState.selected && AppState.selected.type === 'ink' && inkIds.indexOf(String(AppState.selected.id)) !== -1) {
+      AppState.selected = null;
+    }
+    AppState.canvasSelected = false;
+    AppState.objects = getCombinedObjectsForRender();
+    if (isSubTrackMode()) AppState.selected = getActiveTrackObject();
+    refreshSubTrackOptions();
+    invalidateAllFrameThumbs();
+    updateFrameBar();
+    markCurrentFrameModified();
+    EventBus.emit('history:save', '清除本帧画笔元件');
+    EventBus.emit('need:render');
+    EventBus.emit('need:syncUI');
+    return inkIds.length;
   }
 
   function resetPose() {
-    if (!selected) return;
-    if (selected.type === 'video') {
-      selected.x = 0; selected.y = 0; selected.scale = 1; selected.alpha = 1;
-    } else if (selected.type === 'figure') {
-      selected.a = makeFigure(0, 0).a;
-      selected.bodyScale = { head: 1.83, arm: 1.06, leg: 1.16, torso: 0.62, foreArm: 0.37, shin: 0.49 };
-      selected.scale = 1.67;
-      selected.rot = 0;
-      selected.mirror = false;
-      selected.headFilled = false;
-      selected.headFillCustom = false;
-      selected.headFillColor = '#111111';
-      selected.headAngle = -Math.PI / 2;
-      selected.headOffset = { x: 0, y: 0 };
-      selected.headOffset = { x: 0, y: 0 };
-      selected.shadowOffX = 0; selected.shadowOffY = 0;
-      selected.shadowScaleX = 1; selected.shadowScaleY = 1;
-      selected.light = { enabled: false, color: '#ffbb66', size: 1.0, angle: 315 };
-      selected.glow = { enabled: false, color: '#ff9d3d', alpha: 0.8, blur: 18 };
-      selected.joint = { enabled: false, color: '#ff0000', len: 0.5 };
-      selected.extremity = {
+    if (!AppState.selected) return;
+    if (AppState.selected.type === 'video') {
+      AppState.selected.x = 0; AppState.selected.y = 0; AppState.selected.scale = 1; AppState.selected.alpha = 1;
+    } else if (AppState.selected.type === 'figure') {
+      AppState.selected.a = makeFigure(0, 0).a;
+      AppState.selected.bodyScale = { head: 1.83, arm: 1.06, leg: 1.16, torso: 0.62, foreArm: 0.37, shin: 0.49 };
+      AppState.selected.scale = 1.67;
+      AppState.selected.rot = 0;
+      AppState.selected.mirror = false;
+      AppState.selected.headFilled = false;
+      AppState.selected.headFillCustom = false;
+      AppState.selected.headFillColor = '#111111';
+      AppState.selected.headAngle = -Math.PI / 2;
+      AppState.selected.headOffset = { x: 0, y: 0 };
+      AppState.selected.headOffset = { x: 0, y: 0 };
+      AppState.selected.shadowOffX = 0; AppState.selected.shadowOffY = 0;
+      AppState.selected.shadowScaleX = 1; AppState.selected.shadowScaleY = 1;
+      AppState.selected.light = { enabled: false, color: '#ffbb66', size: 1.0, angle: 315 };
+      AppState.selected.glow = { enabled: false, color: '#ff9d3d', alpha: 0.8, blur: 18 };
+      AppState.selected.joint = { enabled: false, color: '#ff0000', len: 0.5 };
+      AppState.selected.extremity = {
         enabled: false,
         armAngleL: 30 * Math.PI / 180, armAngleR: 30 * Math.PI / 180,
         legAngleL: 30 * Math.PI / 180, legAngleR: 30 * Math.PI / 180,
         armRatio: 0.23, legRatio: 0.23
       };
-      selected.pinned = { footL: false, footR: false, handL: false, handR: false, pelvis: false };
-      selected.pinnedPos = { footL: null, footR: null, handL: null, handR: null, pelvis: null };
-      selected.layer = { body: 1, head: 2, armL: 1, armR: 1, legL: 1, legR: 1 };
-      selected.depth = { enabled: false, useCustom: false, customColor: '#555555' };
-      selected.ikEnabled = false;
-    } else if (selected.type === 'acc' || selected.type === 'shape' || selected.type === 'bubble') {
-      selected.scale = 1; selected.rot = 0; selected.offX = 0; selected.offY = 0;
-      selected.ax = 0; selected.ay = 0;
-      if (selected.type === 'shape') { selected.w = 60; selected.h = 60; }
-      if (selected.type === 'bubble') {
-        selected.w = 180; selected.h = 90;
-        selected.customSize = false; selected.customW = 180; selected.customH = 90;
+      AppState.selected.pinned = { footL: false, footR: false, handL: false, handR: false, pelvis: false };
+      AppState.selected.pinnedPos = { footL: null, footR: null, handL: null, handR: null, pelvis: null };
+      AppState.selected.layer = { body: 1, head: 2, armL: 1, armR: 1, legL: 1, legR: 1 };
+      AppState.selected.depth = { enabled: false, useCustom: false, customColor: '#555555' };
+      AppState.selected.ikEnabled = false;
+    } else if (AppState.selected.type === 'acc' || AppState.selected.type === 'shape' || AppState.selected.type === 'bubble' || AppState.selected.type === 'ink') {
+      AppState.selected.scale = 1; AppState.selected.rot = 0; AppState.selected.offX = 0; AppState.selected.offY = 0;
+      AppState.selected.ax = 0; AppState.selected.ay = 0;
+      AppState.selected.mirror = false; // brush-v5.1.0: ink 复位时一并清除镜像
+      if (AppState.selected.type === 'shape') { AppState.selected.w = 60; AppState.selected.h = 60; }
+      if (AppState.selected.type === 'bubble') {
+        AppState.selected.w = 180; AppState.selected.h = 90;
+        AppState.selected.customSize = false; AppState.selected.customW = 180; AppState.selected.customH = 90;
       }
-    } else if (selected.type === 'image') {
-      selected.scale = 1; selected.rot = 0; selected.ax = 0; selected.ay = 0;
+    } else if (AppState.selected.type === 'image') {
+      AppState.selected.scale = 1; AppState.selected.rot = 0; AppState.selected.ax = 0; AppState.selected.ay = 0;
     } else {
-      selected.scale = 1;
+      AppState.selected.scale = 1;
     }
-    syncUI(); render();
+    EventBus.emit('need:syncUI'); EventBus.emit('need:render');
     markCurrentFrameModified();
-    saveHistory('重置对象');
+    EventBus.emit('history:save', '重置对象');
   }
 
   function moveLayer(dir) {
-    if (!selected) return;
-    if (selected.type === 'video') {
-      if (dir === 'up') selected.layer += 1;
-      else if (dir === 'down') selected.layer -= 1;
-      else if (dir === 'top') selected.layer = 9999;
-      else if (dir === 'bottom') selected.layer = -9999;
-      render(); markCurrentFrameModified(); saveHistory('调整图层'); return;
+    if (!AppState.selected) return;
+    if (AppState.selected.type === 'video') {
+      if (dir === 'up') AppState.selected.layer += 1;
+      else if (dir === 'down') AppState.selected.layer -= 1;
+      else if (dir === 'top') AppState.selected.layer = 9999;
+      else if (dir === 'bottom') AppState.selected.layer = -9999;
+      EventBus.emit('need:render'); markCurrentFrameModified(); EventBus.emit('history:save', '调整图层'); return;
     }
-    const isFig = selected.type === 'figure';
+    const isFig = AppState.selected.type === 'figure';
     let allLayers = [];
-    objects.forEach(o => {
+    AppState.objects.forEach(o => {
       if (o.type === 'figure') Object.values(o.layer).forEach(v => allLayers.push(v));
       else allLayers.push(o.layer);
     });
     const minLayer = Math.min(...allLayers);
     const maxLayer = Math.max(...allLayers);
     if (dir === 'up') {
-      if (isFig) Object.keys(selected.layer).forEach(k => { selected.layer[k] += 1; setGlobalProp(selected, `layer.${k}`, selected.layer[k]); });
-      else { selected.layer += 1; setGlobalProp(selected, 'layer', selected.layer); }
+      if (isFig) Object.keys(AppState.selected.layer).forEach(k => { AppState.selected.layer[k] += 1; setGlobalProp(AppState.selected, `layer.${k}`, AppState.selected.layer[k]); });
+      else { AppState.selected.layer += 1; setGlobalProp(AppState.selected, 'layer', AppState.selected.layer); }
     } else if (dir === 'down') {
-      if (isFig) Object.keys(selected.layer).forEach(k => { selected.layer[k] -= 1; setGlobalProp(selected, `layer.${k}`, selected.layer[k]); });
-      else { selected.layer -= 1; setGlobalProp(selected, 'layer', selected.layer); }
+      if (isFig) Object.keys(AppState.selected.layer).forEach(k => { AppState.selected.layer[k] -= 1; setGlobalProp(AppState.selected, `layer.${k}`, AppState.selected.layer[k]); });
+      else { AppState.selected.layer -= 1; setGlobalProp(AppState.selected, 'layer', AppState.selected.layer); }
     } else if (dir === 'top') {
-      if (isFig) Object.keys(selected.layer).forEach(k => { selected.layer[k] = maxLayer + 1; setGlobalProp(selected, `layer.${k}`, selected.layer[k]); });
-      else { selected.layer = maxLayer + 1; setGlobalProp(selected, 'layer', selected.layer); }
+      if (isFig) Object.keys(AppState.selected.layer).forEach(k => { AppState.selected.layer[k] = maxLayer + 1; setGlobalProp(AppState.selected, `layer.${k}`, AppState.selected.layer[k]); });
+      else { AppState.selected.layer = maxLayer + 1; setGlobalProp(AppState.selected, 'layer', AppState.selected.layer); }
     } else if (dir === 'bottom') {
-      if (isFig) Object.keys(selected.layer).forEach(k => { selected.layer[k] = minLayer - 1; setGlobalProp(selected, `layer.${k}`, selected.layer[k]); });
-      else { selected.layer = -99999; setGlobalProp(selected, 'layer', selected.layer); }
+      if (isFig) Object.keys(AppState.selected.layer).forEach(k => { AppState.selected.layer[k] = minLayer - 1; setGlobalProp(AppState.selected, `layer.${k}`, AppState.selected.layer[k]); });
+      else { AppState.selected.layer = -99999; setGlobalProp(AppState.selected, 'layer', AppState.selected.layer); }
     }
-    syncUI(); render();
+    EventBus.emit('need:syncUI'); EventBus.emit('need:render');
     markCurrentFrameModified();
-    saveHistory('调整图层');
+    EventBus.emit('history:save', '调整图层');
   }
 
   /* ==================== 事件绑定 ==================== */
@@ -11024,12 +10256,12 @@ function togglePin(part) {
     /* 摄像机视角：
        - 取景框内滚轮 → 缩放摄像机本身（改 cam.scale），相当于在主时间轴改变取景框大小
        - 取景框外滚轮 → 缩放页面视图（改 camViewZoom） */
-       const camViewObj = getCameraViewObject();
+       const camViewObj = SKFE.systems.camera.getCameraViewObject();
     if (camViewObj) {
       const rect = canvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
-      const ct = getCameraViewTransform(camViewObj);
+      const ct = SKFE.systems.camera.getCameraViewTransform(camViewObj);
       const inside = (
         mouseX >= ct.left && mouseX <= ct.left + ct.viewW &&
         mouseY >= ct.top && mouseY <= ct.top + ct.viewH
@@ -11041,24 +10273,24 @@ function togglePin(part) {
         const oldScale = camViewObj.scale || 1;
         const newScale = Math.min(10, Math.max(0.1, oldScale * zoomFactor));
         if (Math.abs(newScale - oldScale) < 1e-6) return;
-        const worldPt = cameraScreenToWorld({ x: mouseX, y: mouseY }, camViewObj, ct);
+        const worldPt = SKFE.systems.camera.cameraScreenToWorld({ x: mouseX, y: mouseY }, camViewObj, ct);
         camViewObj.scale = newScale;
-        const ctAfter = getCameraViewTransform(camViewObj);
-        const worldAfter = cameraScreenToWorld({ x: mouseX, y: mouseY }, camViewObj, ctAfter);
+        const ctAfter = SKFE.systems.camera.getCameraViewTransform(camViewObj);
+        const worldAfter = SKFE.systems.camera.cameraScreenToWorld({ x: mouseX, y: mouseY }, camViewObj, ctAfter);
         camViewObj.x += worldPt.x - worldAfter.x;
         camViewObj.y += worldPt.y - worldAfter.y;
         if (globalEditEnabled) {
           setGlobalProp(camViewObj, 'scale', newScale);
         }
         markCurrentFrameModified();
-        render();
+        EventBus.emit('need:render');
         /* 连续滚轮停止 300ms 后再刷新缩略图与历史，避免过程卡顿 */
         if (camWheelThumbTimer) clearTimeout(camWheelThumbTimer);
         camWheelThumbTimer = setTimeout(() => {
           camWheelThumbTimer = null;
           invalidateAllFrameThumbs();
           updateFrameBar();
-          saveHistory('缩放摄像机');
+          EventBus.emit('history:save', '缩放摄像机');
         }, 300);
       } else {
         /* 缩放页面视图 */
@@ -11069,13 +10301,13 @@ function togglePin(part) {
         camViewOffset.x += (mouseX - cx) * (1 - k);
         camViewOffset.y += (mouseY - cy) * (1 - k);
         camViewZoom = newZoom;
-        render();
+        EventBus.emit('need:render');
       }
       return;
     }
 
     const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-    let newScale = Math.min(5, Math.max(0.2, viewScale * zoomFactor));
+    let newScale = Math.min(5, Math.max(0.2, AppState.viewScale * zoomFactor));
     if (viewPinned && pinnedView) {
       newScale = Math.max(newScale, pinnedView.scale);
     }
@@ -11083,16 +10315,16 @@ function togglePin(part) {
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
     if (viewPinned && pinnedView && newScale <= pinnedView.scale + 0.0001) {
-      viewScale = pinnedView.scale;
-      viewOffset.x = pinnedView.offset.x;
-      viewOffset.y = pinnedView.offset.y;
+      AppState.viewScale = pinnedView.scale;
+      AppState.viewOffset.x = pinnedView.offset.x;
+      AppState.viewOffset.y = pinnedView.offset.y;
     } else {
-      const actualZoom = newScale / viewScale;
-      viewOffset.x = mouseX - (mouseX - viewOffset.x) * actualZoom;
-      viewOffset.y = mouseY - (mouseY - viewOffset.y) * actualZoom;
-      viewScale = newScale;
+      const actualZoom = newScale / AppState.viewScale;
+      AppState.viewOffset.x = mouseX - (mouseX - AppState.viewOffset.x) * actualZoom;
+      AppState.viewOffset.y = mouseY - (mouseY - AppState.viewOffset.y) * actualZoom;
+      AppState.viewScale = newScale;
     }
-    render();
+    EventBus.emit('need:render');
   }, { passive: false });
 
   document.getElementById('btnNew').onclick = addFigure;
@@ -11126,19 +10358,19 @@ function togglePin(part) {
       img.onload = () => {
         if (mode === 'replace') {
           // ==================== 替换图片逻辑 ====================
-          if (!selected) return;
-          const targetId = String(selected.id);
+          if (!AppState.selected) return;
+          const targetId = String(AppState.selected.id);
           const pre = getSnapshot();
           
           // 1. 替换所有轨道中的图片引用
-          for (const id in tracks) {
-            const t = tracks[id];
+          for (const id in AppState.tracks) {
+            const t = AppState.tracks[id];
             if (!t || !t.frames) continue;
             for (let i = 0; i < t.frames.length; i++) {
               const data = t.frames[i];
               if (data && String(data.id) === targetId) {
                 // 如果开启了全局编辑，或者当前帧匹配，则替换
-                if (globalEditEnabled || i === currentFrameIndex) {
+                if (globalEditEnabled || i === AppState.currentFrameIndex) {
                   data.img = img;
                 }
               }
@@ -11146,18 +10378,17 @@ function togglePin(part) {
           }
           
           // 2. 重新获取渲染列表并恢复选中状态
-          objects = getCombinedObjectsForRender();
-          selected = objects.find(o => String(o.id) === targetId) || null;
+          AppState.objects = getCombinedObjectsForRender();
+          AppState.selected = AppState.objects.find(o => String(o.id) === targetId) || null;
           
-          if (selected) {
-            selected.img = img; // 确保当前选中对象被更新
+          if (AppState.selected) {
+            AppState.selected.img = img; // 确保当前选中对象被更新
             // 如果新图片的宽高比与旧图片不同，可以考虑按原宽高中心缩放
             // 但为了“保留原本所有属性”，此处不改变 w/h，让用户自行拉伸调整
           }
 
           invalidateAllFrameThumbs();
-          render();
-          syncUI();
+          EventBus.emit('app:update');
           pushPreSnapshot(pre, '替换图片');
           // ======================================================
         } else {
@@ -11167,8 +10398,8 @@ function togglePin(part) {
           if (mode === 'acc') obj = makeAccessory(img, sp.x, sp.y);
           else obj = makeImage(img, sp.x, sp.y);
           obj.layer = 1;
-          generateName(obj); addObjectToFrames(obj); select(obj); render();
-          saveHistory(mode === 'acc' ? '添加配饰' : '添加图片');
+          generateName(obj); addObjectToFrames(obj); select(obj); EventBus.emit('need:render');
+          EventBus.emit('history:save', mode === 'acc' ? '添加配饰' : '添加图片');
         }
       };
       img.src = ev.target.result;
@@ -11180,7 +10411,7 @@ function togglePin(part) {
   const btnReplace = document.getElementById('btnReplace');
   if (btnReplace) {
     btnReplace.onclick = () => {
-      if (!selected || (selected.type !== 'image' && selected.type !== 'acc')) {
+      if (!AppState.selected || (AppState.selected.type !== 'image' && AppState.selected.type !== 'acc')) {
         alert('请先在画布中选中一个图片或配饰，再进行替换。');
         return;
       }
@@ -11191,199 +10422,205 @@ function togglePin(part) {
   }
 
   targetFigureSelect.addEventListener('change', e => {
-    if (selected && (selected.type === 'acc' || selected.type === 'shape')) {
+    if (AppState.selected && (AppState.selected.type === 'acc' || AppState.selected.type === 'shape' || AppState.selected.type === 'ink')) {
       const val = e.target.value;
-      selected.targetId = val ? Number(val) : null;
-      if (selected.targetId && selected.bindTo === 'none') {
-        selected.bindTo = 'head'; accBind.value = 'head';
-        setGlobalProp(selected, 'bindTo', selected.bindTo);
-      }
-      setGlobalProp(selected, 'targetId', selected.targetId);
-      syncUI(); render(); markCurrentFrameModified();
-      saveHistory('设置绑定目标');
+      const o = AppState.selected;
+      /* bind-keep-v5.1.2: 换绑定目标也不改元件的大小/位置/旋转 —— 只反算相对量 */
+      rebindKeepPlacement(o, () => {
+        o.targetId = val ? Number(val) : null;
+        if (o.targetId && o.bindTo === 'none') o.bindTo = 'head';
+      });
+      if (accBind) accBind.value = o.bindTo;
+      setGlobalPropForBound(o, 'targetId', o.targetId);
+      setGlobalPropForBound(o, 'bindTo', o.bindTo);
+      syncBindingPlacement(o);
+      EventBus.emit('need:syncUI'); EventBus.emit('need:render'); markCurrentFrameModified();
+      EventBus.emit('history:save', '设置绑定目标');
     }
   });
 
   accBind.addEventListener('change', e => {
-    if (selected && (selected.type === 'acc' || selected.type === 'shape')) {
-      selected.bindTo = e.target.value;
-      if (selected.bindTo !== 'none' && !selected.targetId) {
-        const firstFig = objects.find(o => o.type === 'figure');
-        if (firstFig) { selected.targetId = firstFig.id; targetFigureSelect.value = firstFig.id; }
-      }
-      selected.offX = 0; selected.offY = 0; selected.rot = 0;
-      setGlobalProp(selected, 'bindTo', selected.bindTo);
-      setGlobalProp(selected, 'targetId', selected.targetId);
-      setGlobalProp(selected, 'offX', selected.offX);
-      setGlobalProp(selected, 'offY', selected.offY);
-      setGlobalProp(selected, 'rot', selected.rot);
-      syncUI(); render(); markCurrentFrameModified();
-      saveHistory('设置挂载点');
+    if (AppState.selected && (AppState.selected.type === 'acc' || AppState.selected.type === 'shape' || AppState.selected.type === 'ink')) {
+      const o = AppState.selected;
+      /* bind-keep-v5.1.2: 切换挂载点只重算 offX/offY/rot，让元件"原地不动、原角度不歪"，
+         不再把 offX/offY/rot 归零（归零会让元件跳到关节上，且丢掉用户调好的旋转） */
+      rebindKeepPlacement(o, () => {
+        o.bindTo = e.target.value;
+        if (o.bindTo !== 'none' && !o.targetId) {
+          const firstFig = AppState.objects.find(x => x.type === 'figure');
+          if (firstFig) { o.targetId = firstFig.id; if (targetFigureSelect) targetFigureSelect.value = firstFig.id; }
+        }
+      });
+      setGlobalPropForBound(o, 'bindTo', o.bindTo);
+      setGlobalPropForBound(o, 'targetId', o.targetId);
+      syncBindingPlacement(o);
+      EventBus.emit('need:syncUI'); EventBus.emit('need:render'); markCurrentFrameModified();
+      EventBus.emit('history:save', '设置挂载点');
     }
   });
 
   /* 图形 */
-  shapeWInput.addEventListener('input', e => { if (selected && selected.type === 'shape') { selected.w = +e.target.value; shapeWVal.textContent = selected.w; setGlobalProp(selected, 'w', selected.w); render(); markCurrentFrameModified(); } });
-  shapeHInput.addEventListener('input', e => { if (selected && selected.type === 'shape') { selected.h = +e.target.value; shapeHVal.textContent = selected.h; setGlobalProp(selected, 'h', selected.h); render(); markCurrentFrameModified(); } });
-  shapeFill.addEventListener('input', e => { if (selected && selected.type === 'shape') { selected.fillColor = e.target.value; setGlobalProp(selected, 'fillColor', selected.fillColor); render(); markCurrentFrameModified(); } });
-  shapeStroke.addEventListener('input', e => { if (selected && selected.type === 'shape') { selected.strokeColor = e.target.value; setGlobalProp(selected, 'strokeColor', selected.strokeColor); render(); markCurrentFrameModified(); } });
-  shapeLW.addEventListener('input', e => { if (selected && selected.type === 'shape') { selected.strokeWidth = +e.target.value; shapeLWVal.textContent = selected.strokeWidth; setGlobalProp(selected, 'strokeWidth', selected.strokeWidth); render(); markCurrentFrameModified(); } });
-  [shapeWInput, shapeHInput, shapeFill, shapeStroke, shapeLW].forEach(el => el.addEventListener('change', () => saveHistory('修改图形')));
+  shapeWInput.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'shape') { AppState.selected.w = +e.target.value; shapeWVal.textContent = AppState.selected.w; setGlobalProp(AppState.selected, 'w', AppState.selected.w); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  shapeHInput.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'shape') { AppState.selected.h = +e.target.value; shapeHVal.textContent = AppState.selected.h; setGlobalProp(AppState.selected, 'h', AppState.selected.h); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  shapeFill.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'shape') { AppState.selected.fillColor = e.target.value; setGlobalProp(AppState.selected, 'fillColor', AppState.selected.fillColor); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  shapeStroke.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'shape') { AppState.selected.strokeColor = e.target.value; setGlobalProp(AppState.selected, 'strokeColor', AppState.selected.strokeColor); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  shapeLW.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'shape') { AppState.selected.strokeWidth = +e.target.value; shapeLWVal.textContent = AppState.selected.strokeWidth; setGlobalProp(AppState.selected, 'strokeWidth', AppState.selected.strokeWidth); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  [shapeWInput, shapeHInput, shapeFill, shapeStroke, shapeLW].forEach(el => el.addEventListener('change', () => EventBus.emit('history:save', '修改图形')));
 
   /* 对话框 */
-  bubbleText.addEventListener('input', e => { if (selected && selected.type === 'bubble') { selected.text = e.target.value; setGlobalProp(selected, 'text', selected.text); render(); markCurrentFrameModified(); } });
-  bubbleMirrorCheckbox.addEventListener('change', e => { if (selected && selected.type === 'bubble') { selected.isMirrored = e.target.checked; setGlobalProp(selected, 'isMirrored', selected.isMirrored); render(); markCurrentFrameModified(); saveHistory('修改对话框'); } });
-  bubbleFontSizeInput.addEventListener('input', e => { if (selected && selected.type === 'bubble') { selected.fontSize = +e.target.value; bubbleFontSizeVal.textContent = selected.fontSize; setGlobalProp(selected, 'fontSize', selected.fontSize); render(); markCurrentFrameModified(); } });
-  bubbleTextColor.addEventListener('input', e => { if (selected && selected.type === 'bubble') { selected.textColor = e.target.value; setGlobalProp(selected, 'textColor', selected.textColor); render(); markCurrentFrameModified(); } });
+  bubbleText.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'bubble') { AppState.selected.text = e.target.value; setGlobalProp(AppState.selected, 'text', AppState.selected.text); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  bubbleMirrorCheckbox.addEventListener('change', e => { if (AppState.selected && AppState.selected.type === 'bubble') { AppState.selected.isMirrored = e.target.checked; setGlobalProp(AppState.selected, 'isMirrored', AppState.selected.isMirrored); EventBus.emit('need:render'); markCurrentFrameModified(); EventBus.emit('history:save', '修改对话框'); } });
+  bubbleFontSizeInput.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'bubble') { AppState.selected.fontSize = +e.target.value; bubbleFontSizeVal.textContent = AppState.selected.fontSize; setGlobalProp(AppState.selected, 'fontSize', AppState.selected.fontSize); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  bubbleTextColor.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'bubble') { AppState.selected.textColor = e.target.value; setGlobalProp(AppState.selected, 'textColor', AppState.selected.textColor); EventBus.emit('need:render'); markCurrentFrameModified(); } });
   bubbleGradientCheckbox.addEventListener('change', e => {
-    if (selected && selected.type === 'bubble') {
-      selected.isGradient = e.target.checked;
-      bubbleGradientRow.style.display = selected.isGradient ? 'flex' : 'none';
-      setGlobalProp(selected, 'isGradient', selected.isGradient);
-      render(); markCurrentFrameModified(); saveHistory('修改对话框');
+    if (AppState.selected && AppState.selected.type === 'bubble') {
+      AppState.selected.isGradient = e.target.checked;
+      bubbleGradientRow.style.display = AppState.selected.isGradient ? 'flex' : 'none';
+      setGlobalProp(AppState.selected, 'isGradient', AppState.selected.isGradient);
+      EventBus.emit('need:render'); markCurrentFrameModified(); EventBus.emit('history:save', '修改对话框');
     }
   });
-  bubbleGradientColor.addEventListener('input', e => { if (selected && selected.type === 'bubble') { selected.gradientColor = e.target.value; setGlobalProp(selected, 'gradientColor', selected.gradientColor); render(); markCurrentFrameModified(); } });
-  bubbleBgColor.addEventListener('input', e => { if (selected && selected.type === 'bubble') { selected.fillColor = e.target.value; setGlobalProp(selected, 'fillColor', selected.fillColor); render(); markCurrentFrameModified(); } });
-  bubbleStrokeColor.addEventListener('input', e => { if (selected && selected.type === 'bubble') { selected.strokeColor = e.target.value; setGlobalProp(selected, 'strokeColor', selected.strokeColor); render(); markCurrentFrameModified(); } });
-  bubbleStrokeWidthInput.addEventListener('input', e => { if (selected && selected.type === 'bubble') { selected.strokeWidth = +e.target.value; bubbleStrokeWidthVal.textContent = selected.strokeWidth; setGlobalProp(selected, 'strokeWidth', selected.strokeWidth); render(); markCurrentFrameModified(); } });
+  bubbleGradientColor.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'bubble') { AppState.selected.gradientColor = e.target.value; setGlobalProp(AppState.selected, 'gradientColor', AppState.selected.gradientColor); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  bubbleBgColor.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'bubble') { AppState.selected.fillColor = e.target.value; setGlobalProp(AppState.selected, 'fillColor', AppState.selected.fillColor); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  bubbleStrokeColor.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'bubble') { AppState.selected.strokeColor = e.target.value; setGlobalProp(AppState.selected, 'strokeColor', AppState.selected.strokeColor); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  bubbleStrokeWidthInput.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'bubble') { AppState.selected.strokeWidth = +e.target.value; bubbleStrokeWidthVal.textContent = AppState.selected.strokeWidth; setGlobalProp(AppState.selected, 'strokeWidth', AppState.selected.strokeWidth); EventBus.emit('need:render'); markCurrentFrameModified(); } });
   bubbleCustomSizeCheckbox.addEventListener('change', e => {
-    if (selected && selected.type === 'bubble') {
-      selected.customSize = e.target.checked;
-      bubbleSizeRow.style.display = selected.customSize ? 'block' : 'none';
-      setGlobalProp(selected, 'customSize', selected.customSize);
-      render(); markCurrentFrameModified(); saveHistory('修改对话框');
+    if (AppState.selected && AppState.selected.type === 'bubble') {
+      AppState.selected.customSize = e.target.checked;
+      bubbleSizeRow.style.display = AppState.selected.customSize ? 'block' : 'none';
+      setGlobalProp(AppState.selected, 'customSize', AppState.selected.customSize);
+      EventBus.emit('need:render'); markCurrentFrameModified(); EventBus.emit('history:save', '修改对话框');
     }
   });
-  bubbleWInput.addEventListener('input', e => { if (selected && selected.type === 'bubble') { selected.customW = +e.target.value; bubbleWVal.textContent = selected.customW; setGlobalProp(selected, 'customW', selected.customW); render(); markCurrentFrameModified(); } });
-  bubbleHInput.addEventListener('input', e => { if (selected && selected.type === 'bubble') { selected.customH = +e.target.value; bubbleHVal.textContent = selected.customH; setGlobalProp(selected, 'customH', selected.customH); render(); markCurrentFrameModified(); } });
-  [bubbleText, bubbleFontSizeInput, bubbleTextColor, bubbleGradientColor, bubbleBgColor, bubbleStrokeColor, bubbleStrokeWidthInput, bubbleWInput, bubbleHInput].forEach(el => el.addEventListener('change', () => saveHistory('修改对话框')));
+  bubbleWInput.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'bubble') { AppState.selected.customW = +e.target.value; bubbleWVal.textContent = AppState.selected.customW; setGlobalProp(AppState.selected, 'customW', AppState.selected.customW); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  bubbleHInput.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'bubble') { AppState.selected.customH = +e.target.value; bubbleHVal.textContent = AppState.selected.customH; setGlobalProp(AppState.selected, 'customH', AppState.selected.customH); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  [bubbleText, bubbleFontSizeInput, bubbleTextColor, bubbleGradientColor, bubbleBgColor, bubbleStrokeColor, bubbleStrokeWidthInput, bubbleWInput, bubbleHInput].forEach(el => el.addEventListener('change', () => EventBus.emit('history:save', '修改对话框')));
 
   /* 颜色 / 线宽 */
   colorInput.addEventListener('input', e => {
     currentColor = e.target.value;
-    if (selected && selected.type === 'figure') {
-      selected.color = currentColor;
-      setGlobalProp(selected, 'color', currentColor);
-      render(); markCurrentFrameModified();
+    if (AppState.selected && AppState.selected.type === 'figure') {
+      AppState.selected.color = currentColor;
+      setGlobalProp(AppState.selected, 'color', currentColor);
+      EventBus.emit('need:render'); markCurrentFrameModified();
     }
   });
-  colorInput.addEventListener('change', () => saveHistory('修改颜色'));
+  colorInput.addEventListener('change', () => EventBus.emit('history:save', '修改颜色'));
 
   lwInput.addEventListener('input', e => {
     currentLW = +e.target.value; lwVal.textContent = currentLW;
-    if (selected && selected.type === 'figure') {
-      selected.lw = currentLW;
-      setGlobalProp(selected, 'lw', currentLW);
-      render(); markCurrentFrameModified();
+    if (AppState.selected && AppState.selected.type === 'figure') {
+      AppState.selected.lw = currentLW;
+      setGlobalProp(AppState.selected, 'lw', currentLW);
+      EventBus.emit('need:render'); markCurrentFrameModified();
     }
   });
-  lwInput.addEventListener('change', () => saveHistory('修改线宽'));
+  lwInput.addEventListener('change', () => EventBus.emit('history:save', '修改线宽'));
 
   btnHeadFill.onclick = () => {
-    if (!selected || selected.type !== 'figure') return;
-    selected.headFilled = !selected.headFilled;
-    setGlobalProp(selected, 'headFilled', selected.headFilled);
-    syncUI(); render(); markCurrentFrameModified();
-    saveHistory('切换头部填充');
+    if (!AppState.selected || AppState.selected.type !== 'figure') return;
+    AppState.selected.headFilled = !AppState.selected.headFilled;
+    setGlobalProp(AppState.selected, 'headFilled', AppState.selected.headFilled);
+    EventBus.emit('need:syncUI'); EventBus.emit('need:render'); markCurrentFrameModified();
+    EventBus.emit('history:save', '切换头部填充');
   };
 
   if (headFillCustomCheckbox) {
     headFillCustomCheckbox.addEventListener('change', e => {
-      if (!selected || selected.type !== 'figure') return;
-      selected.headFillCustom = e.target.checked;
-      setGlobalProp(selected, 'headFillCustom', selected.headFillCustom);
-      syncUI(); render(); markCurrentFrameModified();
-      saveHistory('切换自定义填充色');
+      if (!AppState.selected || AppState.selected.type !== 'figure') return;
+      AppState.selected.headFillCustom = e.target.checked;
+      setGlobalProp(AppState.selected, 'headFillCustom', AppState.selected.headFillCustom);
+      EventBus.emit('need:syncUI'); EventBus.emit('need:render'); markCurrentFrameModified();
+      EventBus.emit('history:save', '切换自定义填充色');
     });
   }
   if (headFillColorInput) {
     headFillColorInput.addEventListener('input', e => {
-      if (!selected || selected.type !== 'figure') return;
-      selected.headFillColor = e.target.value;
-      setGlobalProp(selected, 'headFillColor', selected.headFillColor);
-      render(); markCurrentFrameModified();
+      if (!AppState.selected || AppState.selected.type !== 'figure') return;
+      AppState.selected.headFillColor = e.target.value;
+      setGlobalProp(AppState.selected, 'headFillColor', AppState.selected.headFillColor);
+      EventBus.emit('need:render'); markCurrentFrameModified();
     });
-    headFillColorInput.addEventListener('change', () => saveHistory('修改头部填充色'));
+    headFillColorInput.addEventListener('change', () => EventBus.emit('history:save', '修改头部填充色'));
   }
 
   /* 高光 */
   btnLight.onclick = () => {
-    if (!selected || selected.type !== 'figure') return;
-    if (!selected.light) selected.light = { enabled: false, color: '#ffbb66', size: 1.0, angle: 315 };
-    selected.light.enabled = !selected.light.enabled;
-    setGlobalProp(selected, 'light.enabled', selected.light.enabled);
-    syncUI(); render(); markCurrentFrameModified();
-    saveHistory('切换侧面高光');
+    if (!AppState.selected || AppState.selected.type !== 'figure') return;
+    if (!AppState.selected.light) AppState.selected.light = { enabled: false, color: '#ffbb66', size: 1.0, angle: 315 };
+    AppState.selected.light.enabled = !AppState.selected.light.enabled;
+    setGlobalProp(AppState.selected, 'light.enabled', AppState.selected.light.enabled);
+    EventBus.emit('need:syncUI'); EventBus.emit('need:render'); markCurrentFrameModified();
+    EventBus.emit('history:save', '切换侧面高光');
   };
   lightColorInput.addEventListener('input', e => {
-    if (selected && selected.type === 'figure') {
-      if (!selected.light) selected.light = { enabled: false, color: '#ffbb66', size: 1.0, angle: 315 };
-      selected.light.color = e.target.value;
-      setGlobalProp(selected, 'light.color', selected.light.color);
-      render(); markCurrentFrameModified();
+    if (AppState.selected && AppState.selected.type === 'figure') {
+      if (!AppState.selected.light) AppState.selected.light = { enabled: false, color: '#ffbb66', size: 1.0, angle: 315 };
+      AppState.selected.light.color = e.target.value;
+      setGlobalProp(AppState.selected, 'light.color', AppState.selected.light.color);
+      EventBus.emit('need:render'); markCurrentFrameModified();
     }
   });
   lightSizeInput.addEventListener('input', e => {
-    if (selected && selected.type === 'figure') {
-      selected.light.size = +e.target.value;
-      lightSizeVal.textContent = selected.light.size.toFixed(1);
-      setGlobalProp(selected, 'light.size', selected.light.size);
-      render(); markCurrentFrameModified();
+    if (AppState.selected && AppState.selected.type === 'figure') {
+      AppState.selected.light.size = +e.target.value;
+      lightSizeVal.textContent = AppState.selected.light.size.toFixed(1);
+      setGlobalProp(AppState.selected, 'light.size', AppState.selected.light.size);
+      EventBus.emit('need:render'); markCurrentFrameModified();
     }
   });
   lightAngleInput.addEventListener('input', e => {
-    if (selected && selected.type === 'figure') {
-      selected.light.angle = +e.target.value;
-      lightAngleVal.textContent = selected.light.angle + '°';
-      setGlobalProp(selected, 'light.angle', selected.light.angle);
-      render(); markCurrentFrameModified();
+    if (AppState.selected && AppState.selected.type === 'figure') {
+      AppState.selected.light.angle = +e.target.value;
+      lightAngleVal.textContent = AppState.selected.light.angle + '°';
+      setGlobalProp(AppState.selected, 'light.angle', AppState.selected.light.angle);
+      EventBus.emit('need:render'); markCurrentFrameModified();
     }
   });
-  [lightColorInput, lightSizeInput, lightAngleInput].forEach(el => el.addEventListener('change', () => saveHistory('修改高光')));
+  [lightColorInput, lightSizeInput, lightAngleInput].forEach(el => el.addEventListener('change', () => EventBus.emit('history:save', '修改高光')));
 
   /* 手脚 */
   btnExtremity.onclick = () => {
-    if (!selected || selected.type !== 'figure') return;
-    const ex = ensureExtremity(selected);
+    if (!AppState.selected || AppState.selected.type !== 'figure') return;
+    const ex = ensureExtremity(AppState.selected);
     ex.enabled = !ex.enabled;
-    setGlobalProp(selected, 'extremity.enabled', ex.enabled);
-    syncUI(); render(); markCurrentFrameModified();
-    saveHistory('切换小手小脚');
+    setGlobalProp(AppState.selected, 'extremity.enabled', ex.enabled);
+    EventBus.emit('need:syncUI'); EventBus.emit('need:render'); markCurrentFrameModified();
+    EventBus.emit('history:save', '切换小手小脚');
   };
   armExtRatio.addEventListener('input', e => {
-    if (selected && selected.type === 'figure') {
-      const ex = ensureExtremity(selected);
+    if (AppState.selected && AppState.selected.type === 'figure') {
+      const ex = ensureExtremity(AppState.selected);
       ex.armRatio = +e.target.value;
       armExtRatioVal.textContent = ex.armRatio.toFixed(2);
-      setGlobalProp(selected, 'extremity.armRatio', ex.armRatio);
-      render(); markCurrentFrameModified();
+      setGlobalProp(AppState.selected, 'extremity.armRatio', ex.armRatio);
+      EventBus.emit('need:render'); markCurrentFrameModified();
     }
   });
   legExtRatio.addEventListener('input', e => {
-    if (selected && selected.type === 'figure') {
-      const ex = ensureExtremity(selected);
+    if (AppState.selected && AppState.selected.type === 'figure') {
+      const ex = ensureExtremity(AppState.selected);
       ex.legRatio = +e.target.value;
       legExtRatioVal.textContent = ex.legRatio.toFixed(2);
-      setGlobalProp(selected, 'extremity.legRatio', ex.legRatio);
-      render(); markCurrentFrameModified();
+      setGlobalProp(AppState.selected, 'extremity.legRatio', ex.legRatio);
+      EventBus.emit('need:render'); markCurrentFrameModified();
     }
   });
-  armExtRatio.addEventListener('change', () => saveHistory('调整手脚比例'));
-  legExtRatio.addEventListener('change', () => saveHistory('调整手脚比例'));
+  armExtRatio.addEventListener('change', () => EventBus.emit('history:save', '调整手脚比例'));
+  legExtRatio.addEventListener('change', () => EventBus.emit('history:save', '调整手脚比例'));
 
   /* 比例 */
-  headInput.addEventListener('input', e => { if (selected && selected.type === 'figure') { selected.bodyScale.head = +e.target.value; headVal.textContent = selected.bodyScale.head.toFixed(2); setGlobalProp(selected, 'bodyScale.head', selected.bodyScale.head); render(); markCurrentFrameModified(); } });
-  armInput.addEventListener('input', e => { if (selected && selected.type === 'figure') { selected.bodyScale.arm = +e.target.value; armVal.textContent = selected.bodyScale.arm.toFixed(2); setGlobalProp(selected, 'bodyScale.arm', selected.bodyScale.arm); render(); markCurrentFrameModified(); } });
-  legInput.addEventListener('input', e => { if (selected && selected.type === 'figure') { selected.bodyScale.leg = +e.target.value; legVal.textContent = selected.bodyScale.leg.toFixed(2); setGlobalProp(selected, 'bodyScale.leg', selected.bodyScale.leg); render(); markCurrentFrameModified(); } });
-  torsoInput.addEventListener('input', e => { if (selected && selected.type === 'figure') { selected.bodyScale.torso = +e.target.value; torsoVal.textContent = selected.bodyScale.torso.toFixed(2); setGlobalProp(selected, 'bodyScale.torso', selected.bodyScale.torso); render(); markCurrentFrameModified(); } });
-  foreArmRatioInput.addEventListener('input', e => { if (selected && selected.type === 'figure') { selected.bodyScale.foreArm = +e.target.value; foreArmRatioVal.textContent = selected.bodyScale.foreArm.toFixed(2); setGlobalProp(selected, 'bodyScale.foreArm', selected.bodyScale.foreArm); render(); markCurrentFrameModified(); } });
-  shinRatioInput.addEventListener('input', e => { if (selected && selected.type === 'figure') { selected.bodyScale.shin = +e.target.value; shinRatioVal.textContent = selected.bodyScale.shin.toFixed(2); setGlobalProp(selected, 'bodyScale.shin', selected.bodyScale.shin); render(); markCurrentFrameModified(); } });
-  [headInput, armInput, legInput, torsoInput, foreArmRatioInput, shinRatioInput].forEach(el => el.addEventListener('change', () => saveHistory('调整身体比例')));
+  headInput.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'figure') { AppState.selected.bodyScale.head = +e.target.value; headVal.textContent = AppState.selected.bodyScale.head.toFixed(2); setGlobalProp(AppState.selected, 'bodyScale.head', AppState.selected.bodyScale.head); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  armInput.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'figure') { AppState.selected.bodyScale.arm = +e.target.value; armVal.textContent = AppState.selected.bodyScale.arm.toFixed(2); setGlobalProp(AppState.selected, 'bodyScale.arm', AppState.selected.bodyScale.arm); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  legInput.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'figure') { AppState.selected.bodyScale.leg = +e.target.value; legVal.textContent = AppState.selected.bodyScale.leg.toFixed(2); setGlobalProp(AppState.selected, 'bodyScale.leg', AppState.selected.bodyScale.leg); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  torsoInput.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'figure') { AppState.selected.bodyScale.torso = +e.target.value; torsoVal.textContent = AppState.selected.bodyScale.torso.toFixed(2); setGlobalProp(AppState.selected, 'bodyScale.torso', AppState.selected.bodyScale.torso); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  foreArmRatioInput.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'figure') { AppState.selected.bodyScale.foreArm = +e.target.value; foreArmRatioVal.textContent = AppState.selected.bodyScale.foreArm.toFixed(2); setGlobalProp(AppState.selected, 'bodyScale.foreArm', AppState.selected.bodyScale.foreArm); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  shinRatioInput.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'figure') { AppState.selected.bodyScale.shin = +e.target.value; shinRatioVal.textContent = AppState.selected.bodyScale.shin.toFixed(2); setGlobalProp(AppState.selected, 'bodyScale.shin', AppState.selected.bodyScale.shin); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  [headInput, armInput, legInput, torsoInput, foreArmRatioInput, shinRatioInput].forEach(el => el.addEventListener('change', () => EventBus.emit('history:save', '调整身体比例')));
 
   limbIndepCheckbox.addEventListener('change', e => {
-    if (!selected || selected.type !== 'figure') return;
-    const bs = selected.bodyScale;
+    if (!AppState.selected || AppState.selected.type !== 'figure') return;
+    const bs = AppState.selected.bodyScale;
     if (e.target.checked) {
       bs.armL = bs.arm; bs.armR = bs.arm;
       bs.foreArmL = (bs.foreArm !== undefined) ? bs.foreArm : 0.37;
@@ -11397,20 +10634,20 @@ function togglePin(part) {
       delete bs.legL; delete bs.legR;
       delete bs.shinL; delete bs.shinR;
     }
-    syncUI(); render(); markCurrentFrameModified();
-    saveHistory('四肢独立');
+    EventBus.emit('need:syncUI'); EventBus.emit('need:render'); markCurrentFrameModified();
+    EventBus.emit('history:save', '四肢独立');
   });
 
   function bindIndepLimb(inputEl, valEl, key) {
     inputEl.addEventListener('input', e => {
-      if (selected && selected.type === 'figure' && selected.bodyScale[key] !== undefined) {
-        selected.bodyScale[key] = +e.target.value;
-        valEl.textContent = selected.bodyScale[key].toFixed(2);
-        setGlobalProp(selected, 'bodyScale.' + key, selected.bodyScale[key]);
-        render(); markCurrentFrameModified();
+      if (AppState.selected && AppState.selected.type === 'figure' && AppState.selected.bodyScale[key] !== undefined) {
+        AppState.selected.bodyScale[key] = +e.target.value;
+        valEl.textContent = AppState.selected.bodyScale[key].toFixed(2);
+        setGlobalProp(AppState.selected, 'bodyScale.' + key, AppState.selected.bodyScale[key]);
+        EventBus.emit('need:render'); markCurrentFrameModified();
       }
     });
-    inputEl.addEventListener('change', () => saveHistory('调整肢体比例'));
+    inputEl.addEventListener('change', () => EventBus.emit('history:save', '调整肢体比例'));
   }
   bindIndepLimb(armLenLInput, armLenLVal, 'armL');
   bindIndepLimb(armLenRInput, armLenRVal, 'armR');
@@ -11423,37 +10660,37 @@ function togglePin(part) {
 
   /* 发光 */
   btnGlow.onclick = () => {
-    if (!selected || selected.type !== 'figure') return;
-    selected.glow.enabled = !selected.glow.enabled;
-    setGlobalProp(selected, 'glow.enabled', selected.glow.enabled);
-    syncUI(); render(); markCurrentFrameModified();
-    saveHistory('切换发光');
+    if (!AppState.selected || AppState.selected.type !== 'figure') return;
+    AppState.selected.glow.enabled = !AppState.selected.glow.enabled;
+    setGlobalProp(AppState.selected, 'glow.enabled', AppState.selected.glow.enabled);
+    EventBus.emit('need:syncUI'); EventBus.emit('need:render'); markCurrentFrameModified();
+    EventBus.emit('history:save', '切换发光');
   };
-  glowColor.addEventListener('input', e => { if (selected && selected.type === 'figure') { selected.glow.color = e.target.value; setGlobalProp(selected, 'glow.color', selected.glow.color); render(); markCurrentFrameModified(); } });
-  glowAlpha.addEventListener('input', e => { if (selected && selected.type === 'figure') { selected.glow.alpha = +e.target.value; glowAlphaVal.textContent = selected.glow.alpha.toFixed(2); setGlobalProp(selected, 'glow.alpha', selected.glow.alpha); render(); markCurrentFrameModified(); } });
-  glowBlur.addEventListener('input', e => { if (selected && selected.type === 'figure') { selected.glow.blur = +e.target.value; glowBlurVal.textContent = selected.glow.blur; setGlobalProp(selected, 'glow.blur', selected.glow.blur); render(); markCurrentFrameModified(); } });
-  [glowColor, glowAlpha, glowBlur].forEach(el => el.addEventListener('change', () => saveHistory('修改发光')));
+  glowColor.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'figure') { AppState.selected.glow.color = e.target.value; setGlobalProp(AppState.selected, 'glow.color', AppState.selected.glow.color); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  glowAlpha.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'figure') { AppState.selected.glow.alpha = +e.target.value; glowAlphaVal.textContent = AppState.selected.glow.alpha.toFixed(2); setGlobalProp(AppState.selected, 'glow.alpha', AppState.selected.glow.alpha); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  glowBlur.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'figure') { AppState.selected.glow.blur = +e.target.value; glowBlurVal.textContent = AppState.selected.glow.blur; setGlobalProp(AppState.selected, 'glow.blur', AppState.selected.glow.blur); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  [glowColor, glowAlpha, glowBlur].forEach(el => el.addEventListener('change', () => EventBus.emit('history:save', '修改发光')));
 
   /* 手部渐变 */
   btnJoint.onclick = () => {
-    if (!selected || selected.type !== 'figure') return;
-    selected.joint.enabled = !selected.joint.enabled;
-    setGlobalProp(selected, 'joint.enabled', selected.joint.enabled);
-    syncUI(); render(); markCurrentFrameModified();
-    saveHistory('切换手部渐变');
+    if (!AppState.selected || AppState.selected.type !== 'figure') return;
+    AppState.selected.joint.enabled = !AppState.selected.joint.enabled;
+    setGlobalProp(AppState.selected, 'joint.enabled', AppState.selected.joint.enabled);
+    EventBus.emit('need:syncUI'); EventBus.emit('need:render'); markCurrentFrameModified();
+    EventBus.emit('history:save', '切换手部渐变');
   };
-  jointColor.addEventListener('input', e => { if (selected && selected.type === 'figure') { selected.joint.color = e.target.value; setGlobalProp(selected, 'joint.color', selected.joint.color); render(); markCurrentFrameModified(); } });
-  jointLen.addEventListener('input', e => { if (selected && selected.type === 'figure') { selected.joint.len = +e.target.value; jointLenVal.textContent = selected.joint.len.toFixed(2); setGlobalProp(selected, 'joint.len', selected.joint.len); render(); markCurrentFrameModified(); } });
-  [jointColor, jointLen].forEach(el => el.addEventListener('change', () => saveHistory('修改渐变')));
+  jointColor.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'figure') { AppState.selected.joint.color = e.target.value; setGlobalProp(AppState.selected, 'joint.color', AppState.selected.joint.color); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  jointLen.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'figure') { AppState.selected.joint.len = +e.target.value; jointLenVal.textContent = AppState.selected.joint.len.toFixed(2); setGlobalProp(AppState.selected, 'joint.len', AppState.selected.joint.len); EventBus.emit('need:render'); markCurrentFrameModified(); } });
+  [jointColor, jointLen].forEach(el => el.addEventListener('change', () => EventBus.emit('history:save', '修改渐变')));
 
   /* 肢体层级 */
   const adjustLimb = (limb, delta) => {
-    if (!selected || selected.type !== 'figure') return;
-    selected.layer[limb] += delta;
-    setGlobalProp(selected, `layer.${limb}`, selected.layer[limb]);
-    updateLimbStatus(); render();
+    if (!AppState.selected || AppState.selected.type !== 'figure') return;
+    AppState.selected.layer[limb] += delta;
+    setGlobalProp(AppState.selected, `layer.${limb}`, AppState.selected.layer[limb]);
+    updateLimbStatus(); EventBus.emit('need:render');
     markCurrentFrameModified();
-    saveHistory('调整肢体层级');
+    EventBus.emit('history:save', '调整肢体层级');
   };
   document.getElementById('btnHeadFront').onclick = () => adjustLimb('head', 1);
   document.getElementById('btnHeadBack').onclick = () => adjustLimb('head', -1);
@@ -11478,39 +10715,39 @@ function togglePin(part) {
       headHandleOn = e.target.checked;
       if (!headHandleOn) headHandleDrag = null;
       updateHeadMoveHandle();
-      render();
+      EventBus.emit('need:render');
     });
   }
 
   if (btnHeadOffsetReset) {
     btnHeadOffsetReset.addEventListener('click', () => {
-      if (!selected || selected.type !== 'figure') return;
-      if (!selected.headOffset) selected.headOffset = { x: 0, y: 0 };
-      if (selected.headOffset.x === 0 && selected.headOffset.y === 0) return;
+      if (!AppState.selected || AppState.selected.type !== 'figure') return;
+      if (!AppState.selected.headOffset) AppState.selected.headOffset = { x: 0, y: 0 };
+      if (AppState.selected.headOffset.x === 0 && AppState.selected.headOffset.y === 0) return;
       
       const pre = getSnapshot();
-      selected.headOffset = { x: 0, y: 0 };
-      setGlobalProp(selected, 'headOffset.x', 0);
-      setGlobalProp(selected, 'headOffset.y', 0);
+      AppState.selected.headOffset = { x: 0, y: 0 };
+      setGlobalProp(AppState.selected, 'headOffset.x', 0);
+      setGlobalProp(AppState.selected, 'headOffset.y', 0);
       
       markCurrentFrameModified();
-      syncUI();
-      render();
+      EventBus.emit('need:syncUI');
+      EventBus.emit('need:render');
       pushPreSnapshot(pre, '复位头部位置');
     });
   }
 
   if (headMoveHandleEl) {
     headMoveHandleEl.addEventListener('pointerdown', (e) => {
-      if (!selected || selected.type !== 'figure') return;
+      if (!AppState.selected || AppState.selected.type !== 'figure') return;
       e.preventDefault(); e.stopPropagation();
       const p = getPos(e);
       headHandleDrag = {
         id: e.pointerId,
         startX: p.x,
         startY: p.y,
-        startOffX: selected.headOffset ? selected.headOffset.x : 0,
-        startOffY: selected.headOffset ? selected.headOffset.y : 0,
+        startOffX: AppState.selected.headOffset ? AppState.selected.headOffset.x : 0,
+        startOffY: AppState.selected.headOffset ? AppState.selected.headOffset.y : 0,
         moved: false,
         pre: getSnapshot()
       };
@@ -11518,18 +10755,18 @@ function togglePin(part) {
     });
 
     headMoveHandleEl.addEventListener('pointermove', (e) => {
-      if (!headHandleDrag || e.pointerId !== headHandleDrag.id || !selected) return;
+      if (!headHandleDrag || e.pointerId !== headHandleDrag.id || !AppState.selected) return;
       e.preventDefault(); e.stopPropagation();
       const p = getPos(e);
       const dx = p.x - headHandleDrag.startX;
       const dy = p.y - headHandleDrag.startY;
       if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) headHandleDrag.moved = true;
       
-      if (!selected.headOffset) selected.headOffset = { x: 0, y: 0 };
-      selected.headOffset.x = headHandleDrag.startOffX + dx;
-      selected.headOffset.y = headHandleDrag.startOffY + dy;
+      if (!AppState.selected.headOffset) AppState.selected.headOffset = { x: 0, y: 0 };
+      AppState.selected.headOffset.x = headHandleDrag.startOffX + dx;
+      AppState.selected.headOffset.y = headHandleDrag.startOffY + dy;
       
-      render();
+      EventBus.emit('need:render');
       updateHeadMoveHandle();
     });
 
@@ -11541,13 +10778,13 @@ function togglePin(part) {
       try { headMoveHandleEl.releasePointerCapture(e.pointerId); } catch (_) {}
       
       if (didMove) {
-        setGlobalProp(selected, 'headOffset.x', selected.headOffset.x);
-        setGlobalProp(selected, 'headOffset.y', selected.headOffset.y);
+        setGlobalProp(AppState.selected, 'headOffset.x', AppState.selected.headOffset.x);
+        setGlobalProp(AppState.selected, 'headOffset.y', AppState.selected.headOffset.y);
         markCurrentFrameModified();
         pushPreSnapshot(pre, '移动头部');
       }
-      syncUI();
-      render();
+      EventBus.emit('need:syncUI');
+      EventBus.emit('need:render');
     };
     headMoveHandleEl.addEventListener('pointerup', endHeadMove);
     headMoveHandleEl.addEventListener('pointercancel', endHeadMove);
@@ -11555,44 +10792,44 @@ function togglePin(part) {
 
   /* ==================== 缩放 / 透明度 ==================== */
   objScale.addEventListener('input', e => {
-    if (canvasSelected && canvasBoundsEnabled && canvasBaseBounds) {
+    if (AppState.canvasSelected && AppState.canvasBoundsEnabled && canvasBaseBounds) {
       const k = Math.max(0.05, Math.min(4, +e.target.value));
-      const cx = canvasBounds.x + canvasBounds.w / 2;
-      const cy = canvasBounds.y + canvasBounds.h / 2;
-      canvasBounds.w = canvasBaseBounds.w * k;
-      canvasBounds.h = canvasBaseBounds.h * k;
-      canvasBounds.x = cx - canvasBounds.w / 2;
-      canvasBounds.y = cy - canvasBounds.h / 2;
+      const cx = AppState.canvasBounds.x + AppState.canvasBounds.w / 2;
+      const cy = AppState.canvasBounds.y + AppState.canvasBounds.h / 2;
+      AppState.canvasBounds.w = canvasBaseBounds.w * k;
+      AppState.canvasBounds.h = canvasBaseBounds.h * k;
+      AppState.canvasBounds.x = cx - AppState.canvasBounds.w / 2;
+      AppState.canvasBounds.y = cy - AppState.canvasBounds.h / 2;
       objScaleVal.textContent = k.toFixed(2);
       syncCanvasUI();
-      render();
+      EventBus.emit('need:render');
       return;
     }
-    if (selected) {
-      selected.scale = +e.target.value;
-      objScaleVal.textContent = selected.scale.toFixed(2);
-      if (selected.type === 'acc' || selected.type === 'shape' || selected.type === 'bubble') {
-        setGlobalPropForBound(selected, 'scale', selected.scale);
+    if (AppState.selected) {
+      AppState.selected.scale = +e.target.value;
+      objScaleVal.textContent = AppState.selected.scale.toFixed(2);
+      if (AppState.selected.type === 'acc' || AppState.selected.type === 'shape' || AppState.selected.type === 'bubble') {
+        setGlobalPropForBound(AppState.selected, 'scale', AppState.selected.scale);
       } else {
-        setGlobalProp(selected, 'scale', selected.scale);
+        setGlobalProp(AppState.selected, 'scale', AppState.selected.scale);
       }
-      render(); markCurrentFrameModified();
+      EventBus.emit('need:render'); markCurrentFrameModified();
     }
   });
-  objScale.addEventListener('change', () => saveHistory(canvasSelected ? '缩放画布' : '调整大小'));
+  objScale.addEventListener('change', () => EventBus.emit('history:save', AppState.canvasSelected ? '缩放画布' : '调整大小'));
   objAlpha.addEventListener('input', e => {
-    if (selected) {
-      selected.alpha = +e.target.value;
-      objAlphaVal.textContent = selected.alpha.toFixed(2);
-      if (selected.type === 'acc' || selected.type === 'shape' || selected.type === 'bubble') {
-        setGlobalPropForBound(selected, 'alpha', selected.alpha);
+    if (AppState.selected) {
+      AppState.selected.alpha = +e.target.value;
+      objAlphaVal.textContent = AppState.selected.alpha.toFixed(2);
+      if (AppState.selected.type === 'acc' || AppState.selected.type === 'shape' || AppState.selected.type === 'bubble') {
+        setGlobalPropForBound(AppState.selected, 'alpha', AppState.selected.alpha);
       } else {
-        setGlobalProp(selected, 'alpha', selected.alpha);
+        setGlobalProp(AppState.selected, 'alpha', AppState.selected.alpha);
       }
-      render(); markCurrentFrameModified();
+      EventBus.emit('need:render'); markCurrentFrameModified();
     }
   });
-  objAlpha.addEventListener('change', () => saveHistory('调整透明度'));
+  objAlpha.addEventListener('change', () => EventBus.emit('history:save', '调整透明度'));
 
   btnUp.onclick = () => moveLayer('up');
   btnDown.onclick = () => moveLayer('down');
@@ -11604,27 +10841,26 @@ function togglePin(part) {
   document.getElementById('btnClearCanvas').onclick = () => {
     if (confirm('确定清空当前画布的所有元素吗？')) {
       if (isSubTrackMode()) {
-        setTrackFrame(activeTrackId, currentFrameIndex, null);
+        setTrackFrame(AppState.activeTrackId, AppState.currentFrameIndex, null);
       } else {
-        for (const tid in tracks) setTrackFrame(tid, currentFrameIndex, null);
+        for (const tid in AppState.tracks) setTrackFrame(tid, AppState.currentFrameIndex, null);
       }
-      selected = null;
-      canvasSelected = false;
+      AppState.selected = null;
+      AppState.canvasSelected = false;
       syncMainLengthFromTracks();
       trimTrailingEmptyFrames();
-      objects = getCombinedObjectsForRender();
+      AppState.objects = getCombinedObjectsForRender();
       invalidateAllFrameThumbs();
       updateFrameBar();
-      render();
-      syncUI();
+      EventBus.emit('app:update');
       markCurrentFrameModified();
-      saveHistory('清空画布');
+      EventBus.emit('history:save', '清空画布');
     }
   };
 
   /* 时间轴按钮 */
-  document.getElementById('btnPrevFrame').onclick = () => goToFrame(currentFrameIndex - 1);
-  document.getElementById('btnNextFrame').onclick = () => goToFrame(currentFrameIndex + 1);
+  document.getElementById('btnPrevFrame').onclick = () => goToFrame(AppState.currentFrameIndex - 1);
+  document.getElementById('btnNextFrame').onclick = () => goToFrame(AppState.currentFrameIndex + 1);
   document.getElementById('btnPlay').onclick = (e) => { if (e) e.preventDefault(); togglePlay(); };
   document.getElementById('btnAddFrame').onclick = () => addFrame();
   const btnDelFrame = document.getElementById('btnDelFrame');
@@ -11638,25 +10874,23 @@ function togglePin(part) {
   document.getElementById('btnClearAllFrames').onclick = () => {
     if (isPlaying) pause();
     if (!confirm('确定要清空所有动画帧吗？')) return;
-    frames = [{ id: 1, duration: Math.round(1000 / defaultFPS), isTween: false }];
-    tracks = {};
-    currentFrameIndex = 0;
-    activeTrackId = TRACK_ALL_ID;
-    objects = [];
-    selected = null; canvasSelected = false;
+    AppState.frames = [{ id: 1, duration: Math.round(1000 / defaultFPS), isTween: false }];
+    AppState.tracks = {};
+    AppState.currentFrameIndex = 0;
+    AppState.activeTrackId = TRACK_ALL_ID;
+    AppState.objects = [];
+    AppState.selected = null; AppState.canvasSelected = false;
     drag = null;
     isPanning = false;
     trackThumbCache.clear();
     refreshSubTrackOptions();
     updateFrameBar();
-    render();
-    syncUI();
-    saveHistory('清空所有帧');
+    EventBus.emit('app:update', '清空所有帧');
     if (refVideo) seekVideoToFrame(0);
   };
 
   document.getElementById('btnClearOtherFrames').onclick = () => {
-    if (frames.length <= 1) {
+    if (AppState.frames.length <= 1) {
       alert('当前只有一帧，无需清空。');
       return;
     }
@@ -11664,50 +10898,48 @@ function togglePin(part) {
     if (!confirm('确定要保留当前帧，并清空其他所有帧吗？')) return;
 
     syncFrameRef(); // 确保当前画布上的临时修改已存进当前帧
-    const targetIdx = currentFrameIndex;
+    const targetIdx = AppState.currentFrameIndex;
 
     // 1. 提取当前帧的所有轨道数据
     const newTracks = {};
-    for (const id in tracks) {
+    for (const id in AppState.tracks) {
       const data = getTrackFrame(id, targetIdx);
       if (data) {
         newTracks[id] = {
-          name: tracks[id].name,
+          name: AppState.tracks[id].name,
           frames: [cloneObjectKeepImg(data)] // 只留这一帧的数据
         };
       }
     }
 
     // 2. 重置为单帧，用新提取的轨道数据覆盖
-    const oldDuration = frames[targetIdx] ? frames[targetIdx].duration : Math.round(1000 / defaultFPS);
-    frames = [{ id: 1, duration: oldDuration, isTween: false }];
-    tracks = newTracks;
-    currentFrameIndex = 0;
+    const oldDuration = AppState.frames[targetIdx] ? AppState.frames[targetIdx].duration : Math.round(1000 / defaultFPS);
+    AppState.frames = [{ id: 1, duration: oldDuration, isTween: false }];
+    AppState.tracks = newTracks;
+    AppState.currentFrameIndex = 0;
     
     // 如果当前选中的子轨道有保留，就留在那个子轨道；否则退回主轨道
-    if (isSubTrackMode() && !tracks[activeTrackId]) {
-      activeTrackId = TRACK_ALL_ID;
+    if (isSubTrackMode() && !AppState.tracks[AppState.activeTrackId]) {
+      AppState.activeTrackId = TRACK_ALL_ID;
     }
 
-    objects = getCombinedObjectsForRender();
-    selected = null; 
-    canvasSelected = false;
+    AppState.objects = getCombinedObjectsForRender();
+    AppState.selected = null; 
+    AppState.canvasSelected = false;
     drag = null;
     isPanning = false;
     trackThumbCache.clear();
     
     refreshSubTrackOptions();
     updateFrameBar();
-    render();
-    syncUI();
-    saveHistory('清空非当前帧');
+    EventBus.emit('app:update', '清空非当前帧');
     if (refVideo) seekVideoToFrame(0);
   };
 
   document.getElementById('timelineScrubber').addEventListener('input', (e) => { goToFrame(+e.target.value); });
-  document.getElementById('fpsSlider').addEventListener('input', e => { applyFPS(+e.target.value); render(); });
-  document.getElementById('fpsSlider').addEventListener('change', () => saveHistory('修改帧率'));
-  document.getElementById('onionCheck').addEventListener('change', e => { onionEnabled = e.target.checked; render(); });
+  document.getElementById('fpsSlider').addEventListener('input', e => { applyFPS(+e.target.value); EventBus.emit('need:render'); });
+  document.getElementById('fpsSlider').addEventListener('change', () => EventBus.emit('history:save', '修改帧率'));
+  document.getElementById('onionCheck').addEventListener('change', e => { onionEnabled = e.target.checked; EventBus.emit('need:render'); });
   const MAX_ONION_TOTAL = 12;
   document.getElementById('onionBefore').addEventListener('input', e => {
     onionBefore = +e.target.value;
@@ -11719,7 +10951,7 @@ function togglePin(part) {
       if (afterValEl) afterValEl.textContent = onionAfter;
     }
     document.getElementById('onionBeforeVal').textContent = onionBefore;
-    render();
+    EventBus.emit('need:render');
   });
   document.getElementById('onionAfter').addEventListener('input', e => {
     onionAfter = +e.target.value;
@@ -11731,9 +10963,9 @@ function togglePin(part) {
       if (beforeValEl) beforeValEl.textContent = onionBefore;
     }
     document.getElementById('onionAfterVal').textContent = onionAfter;
-    render();
+    EventBus.emit('need:render');
   });
-  document.getElementById('frameThumbMode').addEventListener('change', e => { frameThumbMode = e.target.checked; updateFrameBar(); render(); });
+  document.getElementById('frameThumbMode').addEventListener('change', e => { frameThumbMode = e.target.checked; updateFrameBar(); EventBus.emit('need:render'); });
 
   /* 导出按钮 */
   const btnExportPNG = document.getElementById('btnExportPNG');
@@ -11756,7 +10988,7 @@ function togglePin(part) {
   if (btnExportGIF) {
     btnExportGIF.onclick = () => {
       if (multiSelectMode) exportSelectedGIF();
-      else exportGIF();
+      else SKFE.features.export.exportGIF();
     };
   }
   
@@ -11764,13 +10996,13 @@ function togglePin(part) {
   if (btnExportPNGSeq) {
     btnExportPNGSeq.onclick = () => {
       if (multiSelectMode) exportSelectedPNGs();
-      else exportPNGSeq();
+      else SKFE.features.export.exportPNGSeq();
     };
   }
   
   const btnExportMP4 = document.getElementById('btnExportMP4');
   if (btnExportMP4) {
-    btnExportMP4.onclick = exportMP4;
+    btnExportMP4.onclick = () => SKFE.features.export.exportMP4();
   }
 
   /* 导出图片 */
@@ -11786,14 +11018,14 @@ function togglePin(part) {
       cssW = camShot.w * (camShot.scale || 1);
       cssH = camShot.h * (camShot.scale || 1);
       cropRot = (camShot.rot || 0) * Math.PI / 180;
-    } else if (canvasBoundsEnabled) {
-      cropCX = canvasBounds.x + canvasBounds.w / 2;
-      cropCY = canvasBounds.y + canvasBounds.h / 2;
-      cssW = canvasBounds.w;
-      cssH = canvasBounds.h;
-      cropRot = canvasBounds.rotation || 0;
+    } else if (AppState.canvasBoundsEnabled) {
+      cropCX = AppState.canvasBounds.x + AppState.canvasBounds.w / 2;
+      cropCY = AppState.canvasBounds.y + AppState.canvasBounds.h / 2;
+      cssW = AppState.canvasBounds.w;
+      cssH = AppState.canvasBounds.h;
+      cropRot = AppState.canvasBounds.rotation || 0;
     } else {
-      const bbox = computeContentBounds(objects);
+      const bbox = computeContentBounds(AppState.objects);
       if (bbox) {
         cropCX = (bbox.minX + bbox.maxX) / 2;
         cropCY = (bbox.minY + bbox.maxY) / 2;
@@ -11801,8 +11033,8 @@ function togglePin(part) {
         cssW = cssH = Math.max(10, Math.round(s));
       } else {
         cssW = canvas.clientWidth; cssH = canvas.clientHeight;
-        cropCX = (cssW / 2 - viewOffset.x) / viewScale;
-        cropCY = (cssH / 2 - viewOffset.y) / viewScale;
+        cropCX = (cssW / 2 - AppState.viewOffset.x) / AppState.viewScale;
+        cropCY = (cssH / 2 - AppState.viewOffset.y) / AppState.viewScale;
       }
     }
     const origW = canvas.width, origH = canvas.height;
@@ -11838,7 +11070,7 @@ function togglePin(part) {
           const file = new File([u8], filename, { type: mime });
           if (navigator.canShare({ files: [file] })) {
             navigator.share({ files: [file], title: filename }).catch(() => {});
-            render(); return;
+            EventBus.emit('need:render'); return;
           }
         } catch (_) {}
       }
@@ -11852,7 +11084,7 @@ function togglePin(part) {
         }, 300);
       }
     }
-    render();
+    EventBus.emit('need:render');
   }
 
   /* ==================================================================
@@ -11998,32 +11230,65 @@ function togglePin(part) {
   /* 滚轮缩放摄像机时，延迟刷新缩略图与历史（避免滚动过程卡顿） */
   let camWheelThumbTimer = null;
 
-  function makeCamera(x, y) {
-    return {
-      id: ++uid, type: 'camera', name: 'Camera',
-      x, y, w: 640, h: 360, scale: 1, rot: 0, alpha: 1,
-      locked: false, layer: 9000, eraser: []
-    };
-  }
+  /* ---------------- 摄像机功能（已迁移至 js/systems/camera.js） ---------------- */
+  SKFE.systems.camera.init({
+    AppState,
+    EventBus,
+    TRACK_ALL_ID,
+    getCtx: () => ctx,
+    setCtx: (c) => { ctx = c; },
+    getCanvas: () => canvas,
+    pushRenderQueue: (item) => renderQueue.push(item),
+    renderScene,
+    getCombinedObjectsForRender,
+    getTrackObjectsAt,
+    getTrackFrame,
+    getSpawnPoint, addObjectToFrames, generateName,
+    syncMainLengthFromTracks, refreshSubTrackOptions, setGlobalProp,
+    isSubTrackMode,
+    nextUid: () => ++uid,
+    invalidateAllFrameThumbs, updateFrameBar, syncAdvToggles,
+    drawGroundLine,
+    getObjectsForFrameAt,
+    isCameraTrackId,
+    getCurrentCameraObject,
+    getActiveViewScale: () => SKFE.systems.eraser.getActiveViewScale(),
+    // 环境
+    isMobile,
+    getUiPanel: () => uiPanel,
+    getTimelineEl: () => timelineEl,
+    getTimelineDock: () => timelineDock,
+    getIsPlaying: () => isPlaying,
+    isGlobalEdit: () => globalEditEnabled,
+    getOnionEnabled: () => onionEnabled,
+    getOnionBefore: () => onionBefore,
+    getOnionAfter: () => onionAfter,
+    isGroundLineEnabled: () => groundLineEnabled,
+    ONION_ALPHA, ONION_COLOR_BEFORE, ONION_COLOR_AFTER,
+    // 摄像机视图状态 getter/setter（状态仍留在 app.js，供指针交互直接读写）
+    getCamViewZoom: () => camViewZoom,
+    setCamViewZoom: (v) => { camViewZoom = v; },
+    getCamViewOffset: () => camViewOffset,
+    setCamViewOffset: (v) => { camViewOffset = v; },
+    isCameraPreviewVisible: () => cameraPreviewVisible,
+    setCameraPreviewVisible: (v) => { cameraPreviewVisible = v; },
+    resetView: () => { camViewZoom = 1; camViewOffset = { x: 0, y: 0 }; },
+    getPageBgColor: () => pageBgColor,
+    getPageBgAlpha: () => pageBgAlpha,
+    requestRender: () => EventBus.emit('need:render'),
+    requestSyncUI: () => EventBus.emit('need:syncUI'),
+  });
 
-  function findCameraObject() {
-    for (const id in tracks) {
-      const t = tracks[id];
-      if (!t || !t.frames) continue;
-      const hit = t.frames.find(d => d && d.type === 'camera');
-      if (hit) return hit;
-    }
-    return objects.find(o => o && o.type === 'camera') || null;
-  }
+
 
   function isCameraTrackId(id) {
     if (id == null) return false;
-    const t = tracks[String(id)];
+    const t = AppState.tracks[String(id)];
     return !!(t && t.frames && t.frames.some(d => d && d.type === 'camera'));
   }
 
   function getCameraAtFrame(idx) {
-    for (const id in tracks) {
+    for (const id in AppState.tracks) {
       const d = getTrackFrame(id, idx);
       if (d && d.type === 'camera') return d;
     }
@@ -12031,45 +11296,11 @@ function togglePin(part) {
   }
 
   function getCurrentCameraObject() {
-    return getCameraAtFrame(currentFrameIndex) || findCameraObject();
+    return getCameraAtFrame(AppState.currentFrameIndex) || SKFE.systems.camera.findCameraObject();
   }
 
-  function getCameraViewObject() {
-    if (!isSubTrackMode()) return null;
-    const t = tracks[activeTrackId];
-    if (!t || !t.frames) return null;
-    const d = getTrackFrame(activeTrackId, currentFrameIndex);
-    if (d && d.type === 'camera') return d;
-    const any = t.frames.find(x => x && x.type === 'camera');
-    return any || null;
-  }
 
-  function getCameraViewTransform(cam) {
-    const cw = canvas.clientWidth || window.innerWidth || 1;
-    const ch = canvas.clientHeight || window.innerHeight || 1;
-    const camW = Math.max(1, cam.w * (cam.scale || 1));
-    const camH = Math.max(1, cam.h * (cam.scale || 1));
-    const baseFit = Math.max(0.0001, Math.min(cw / camW, ch / camH) * 0.92);
-    const fit = baseFit * camViewZoom;
-    const viewW = camW * fit, viewH = camH * fit;
-    const cx = cw / 2 + camViewOffset.x;
-    const cy = ch / 2 + camViewOffset.y;
-    return {
-      fit, cx, cy,
-      rot: (cam.rot || 0) * Math.PI / 180,
-      camW, camH, cw, ch, viewW, viewH,
-      left: cx - viewW / 2, top: cy - viewH / 2
-    };
-  }
 
-  function cameraScreenToWorld(screen, cam, t) {
-    const dx = screen.x - t.cx, dy = screen.y - t.cy;
-    const c = Math.cos(t.rot), s = Math.sin(t.rot);
-    return {
-      x: cam.x + (dx * c - dy * s) / t.fit,
-      y: cam.y + (dx * s + dy * c) / t.fit
-    };
-  }
 
   function cameraToCrop(cam, outW, outH) {
     const rad = (cam.rot || 0) * Math.PI / 180;
@@ -12078,875 +11309,72 @@ function togglePin(part) {
     return { cx: cam.x, cy: cam.y, scale: Math.min(outW / cw, outH / ch), rotation: rad };
   }
 
-  function pointInCameraRect(cam, p, pad) {
-    pad = pad || 0;
-    const w = cam.w * (cam.scale || 1) + pad * 2;
-    const h = cam.h * (cam.scale || 1) + pad * 2;
-    const dx = p.x - cam.x, dy = p.y - cam.y;
-    const rot = (cam.rot || 0) * Math.PI / 180;
-    const c = Math.cos(-rot), s = Math.sin(-rot);
-    const lx = dx * c - dy * s;
-    const ly = dx * s + dy * c;
-    return Math.abs(lx) <= w / 2 && Math.abs(ly) <= h / 2;
-  }
 
-  function pointNearCameraBorder(cam, p, tol) {
-    const w = cam.w * (cam.scale || 1), h = cam.h * (cam.scale || 1);
-    const dx = p.x - cam.x, dy = p.y - cam.y;
-    const rot = (cam.rot || 0) * Math.PI / 180;
-    const c = Math.cos(-rot), s = Math.sin(-rot);
-    const lx = dx * c - dy * s;
-    const ly = dx * s + dy * c;
-    if (Math.abs(lx) > w / 2 + tol || Math.abs(ly) > h / 2 + tol) return false;
-    return Math.min(Math.abs(Math.abs(lx) - w / 2), Math.abs(Math.abs(ly) - h / 2)) <= tol;
-  }
 
-  function findCameraHit(p) {
-    const list = objects.filter(o => o && o.type === 'camera' && !o.locked);
-    const tol = 14 / Math.max(0.01, getActiveViewScale());
-    for (let i = list.length - 1; i >= 0; i--) {
-      const c = list[i];
-      if (pointNearCameraBorder(c, p, tol)) return c;
-      if (c === selected && pointInCameraRect(c, p, 0)) return c;
-    }
-    return null;
-  }
 
   /* 摄像机参考框：编辑时显示，导出时完全不绘制 */
-  function queueCamera(cam, isSel, isExporting, opts) {
-    if (isExporting || (opts && opts.isGhost)) return;
-    const s = cam.scale || 1;
-    const w = cam.w * s, h = cam.h * s;
-    const rot = (cam.rot || 0) * Math.PI / 180;
-    renderQueue.push({
-      level: 50000,
-      draw: () => {
-        ctx.save();
-        ctx.translate(cam.x, cam.y);
-        ctx.rotate(rot);
-        ctx.fillStyle = isSel ? 'rgba(74,144,255,.10)' : 'rgba(74,144,255,.045)';
-        ctx.fillRect(-w / 2, -h / 2, w, h);
-        ctx.setLineDash([10 / viewScale, 7 / viewScale]);
-        ctx.lineWidth = 2 / viewScale;
-        ctx.strokeStyle = isSel ? 'rgba(74,144,255,.95)' : 'rgba(74,144,255,.55)';
-        ctx.strokeRect(-w / 2, -h / 2, w, h);
-        ctx.setLineDash([]);
-        ctx.lineWidth = 1 / viewScale;
-        ctx.strokeStyle = 'rgba(74,144,255,.28)';
-        for (let i = 1; i <= 2; i++) {
-          ctx.beginPath(); ctx.moveTo(-w / 2 + w * i / 3, -h / 2); ctx.lineTo(-w / 2 + w * i / 3, h / 2); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(-w / 2, -h / 2 + h * i / 3); ctx.lineTo(w / 2, -h / 2 + h * i / 3); ctx.stroke();
-        }
-        const fs = 13 / viewScale;
-        ctx.font = `600 ${fs}px system-ui, sans-serif`;
-        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-        const label = '🎥 ' + (cam.name || 'Camera');
-        const tw = ctx.measureText(label).width;
-        ctx.fillStyle = 'rgba(15,23,42,.72)';
-        ctx.fillRect(-w / 2, -h / 2 - fs * 2.1, Math.min(w, tw + fs), fs * 1.7);
-        ctx.fillStyle = '#fff';
-        ctx.fillText(label, -w / 2 + fs * 0.4, -h / 2 - fs * 1.25);
-        ctx.restore();
-      }
-    });
-  }
 
-  function renderCameraViewScene(cam, trackAlphaOpts) {
-    const t = getCameraViewTransform(cam);
-    const list = getCombinedObjectsForRender().filter(o => o && o.type !== 'camera');
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(t.left, t.top, t.viewW, t.viewH);
-    ctx.clip();
-    ctx.translate(t.cx, t.cy);
-    ctx.rotate(-t.rot);
-    ctx.scale(t.fit, t.fit);
-    ctx.translate(-cam.x, -cam.y);
-
-    if (groundLineEnabled) drawGroundLine();
-
-    if (onionEnabled && !isPlaying) {
-      for (let d = onionBefore; d >= 1; d--) {
-        const idx = currentFrameIndex - d;
-        if (idx < 0 || idx >= frames.length) continue;
-        const a = ONION_ALPHA * Math.pow(0.85, d - 1);
-        renderScene(getTrackObjectsAt(idx), Object.assign({ alphaMul: a, tint: ONION_COLOR_BEFORE, isGhost: true }, trackAlphaOpts));
-      }
-      for (let d = onionAfter; d >= 1; d--) {
-        const idx = currentFrameIndex + d;
-        if (idx < 0 || idx >= frames.length) continue;
-        const a = ONION_ALPHA * Math.pow(0.85, d - 1);
-        renderScene(getTrackObjectsAt(idx), Object.assign({ alphaMul: a, tint: ONION_COLOR_AFTER, isGhost: true }, trackAlphaOpts));
-      }
-    }
-
-    renderScene(list, Object.assign({ isExporting: false }, trackAlphaOpts));
-    ctx.restore();
-
-    /* 取景框外遮罩 */
-    ctx.save();
-    ctx.fillStyle = 'rgba(15,23,42,.55)';
-    ctx.beginPath();
-    ctx.rect(0, 0, t.cw, t.ch);
-    ctx.rect(t.left, t.top, t.viewW, t.viewH);
-    ctx.fill('evenodd');
-    ctx.restore();
-
-    /* 取景框 + 安全框 + 提示 */
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,.92)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(t.left, t.top, t.viewW, t.viewH);
-    ctx.strokeStyle = 'rgba(74,144,255,.85)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([6, 4]);
-    ctx.strokeRect(t.left + t.viewW * 0.05, t.top + t.viewH * 0.05, t.viewW * 0.9, t.viewH * 0.9);
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(15,23,42,.72)';
-    const label = '🎥 摄像机视角 · 拖动画面平移';
-    ctx.font = '600 12px system-ui, sans-serif';
-    const tw = ctx.measureText(label).width + 18;
-    ctx.fillRect(t.left + 10, t.top + 10, tw, 26);
-    ctx.fillStyle = '#fff';
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillText(label, t.left + 19, t.top + 24);
-    ctx.restore();
-  }
 
   /* 摄像机预览浮窗 */
-  function updateCameraPreview() {
-    const el = document.getElementById('cameraPreviewFloat');
-    const cvs = document.getElementById('cameraPreviewCanvas');
-    if (!el || !cvs) return;
-    if (!cameraPreviewVisible) { el.style.display = 'none'; return; }
-    const cam = getCurrentCameraObject();
-    if (!cam) { el.style.display = 'none'; return; }
-    el.style.display = 'block';
-    const wrapW = Math.max(120, (el.clientWidth || 260) - 16);
-    const aspect = Math.max(0.05, cam.w / Math.max(1, cam.h));
-    let pw = wrapW;
-    let ph = Math.round(pw / aspect);
-    const maxH = Math.max(100, Math.round(window.innerHeight * 0.42));
-    if (ph > maxH) { ph = maxH; pw = Math.round(ph * aspect); }
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const needW = Math.max(2, Math.round(pw * dpr));
-    const needH = Math.max(2, Math.round(ph * dpr));
-    if (cvs.width !== needW) cvs.width = needW;
-    if (cvs.height !== needH) cvs.height = needH;
-    cvs.style.height = ph + 'px';
-    const pc = cvs.getContext('2d');
-    pc.setTransform(dpr, 0, 0, dpr, 0, 0);
-    pc.clearRect(0, 0, pw, ph);
-    pc.fillStyle = pageBgAlpha < 1 ? themeHexToRgba(pageBgColor, pageBgAlpha) : pageBgColor;
-    pc.fillRect(0, 0, pw, ph);
-    const fit = Math.min(pw / Math.max(1, cam.w * (cam.scale || 1)), ph / Math.max(1, cam.h * (cam.scale || 1)));
-    const saved = ctx;
-    ctx = pc;
-    try {
-      pc.save();
-      pc.translate(pw / 2, ph / 2);
-      pc.rotate(-(cam.rot || 0) * Math.PI / 180);
-      pc.scale(fit, fit);
-      pc.translate(-cam.x, -cam.y);
-      const list = getCombinedObjectsForRender().filter(o => o && o.type !== 'camera');
-      renderScene(list, { isExporting: true });
-      pc.restore();
-    } catch (_) {
-    } finally {
-      ctx = saved;
-    }
-  }
 
-  function initCameraPreviewFloat() {
-    const el = document.getElementById('cameraPreviewFloat');
-    const head = document.getElementById('cameraPreviewHead');
-    const closeBtn = document.getElementById('btnCloseCameraPreview');
-    if (!el) return;
-    el.style.right = '20px';
-    el.style.bottom = '120px';
-    if (closeBtn) closeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      cameraPreviewVisible = false;
-      const cb = document.getElementById('cameraPreviewCheck');
-      if (cb) cb.checked = false;
-      syncAdvToggles();
-      updateCameraPreview();
-    });
-    if (!head) return;
-    let st = null;
-    head.addEventListener('pointerdown', (e) => {
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      const r = el.getBoundingClientRect();
-      el.style.left = r.left + 'px';
-      el.style.top = r.top + 'px';
-      el.style.right = 'auto';
-      el.style.bottom = 'auto';
-      st = { x: e.clientX, y: e.clientY, left: r.left, top: r.top };
-      try { head.setPointerCapture(e.pointerId); } catch (_) {}
-      e.preventDefault();
-    });
-    head.addEventListener('pointermove', (e) => {
-      if (!st) return;
-      el.style.left = Math.max(0, Math.min(window.innerWidth - 80, st.left + e.clientX - st.x)) + 'px';
-      el.style.top = Math.max(0, Math.min(window.innerHeight - 40, st.top + e.clientY - st.y)) + 'px';
-    });
-    const end = (e) => {
-      if (!st) return;
-      st = null;
-      try { head.releasePointerCapture(e.pointerId); } catch (_) {}
-    };
-    head.addEventListener('pointerup', end);
-    head.addEventListener('pointercancel', end);
-  }
 
   /* 让当前摄像机取景框自动居中到"UI 面板 / 时间轴"之外的可用区域 */
-  function fitCameraViewToAvailableArea() {
-    const cam = getCameraViewObject();
-    if (!cam) return;
 
-    const cw = canvas.clientWidth || window.innerWidth || 1;
-    const ch = canvas.clientHeight || window.innerHeight || 1;
-    const camW = Math.max(1, cam.w * (cam.scale || 1));
-    const camH = Math.max(1, cam.h * (cam.scale || 1));
-    const baseFit = Math.max(0.0001, Math.min(cw / camW, ch / camH) * 0.92);
+  /* ---------------- 圆形笔刷矢量橡皮擦（已迁移至 js/systems/eraser.js） ---------------- */
+  SKFE.systems.eraser.init({
+    AppState,
+    EventBus,
+    getCanvas: () => canvas,
+    getSnapshot, pushPreSnapshot, markCurrentFrameModified,
+    invalidateAllFrameThumbs, setGlobalProp, hideHandles,
+    isGlobalEdit: () => globalEditEnabled,
+    getBindTransform, getBoundFigureTransform, getAnchorOffset,
+    jointData, segments, imageBounds, hitObj,
+    distToSeg, worldToFigureLocal,
+    getInkLocalMatrix, // brush-v5.1.1: 画笔遮罩裁剪需要 ink 的局部→世界矩阵
+    getCameraViewObject: () => SKFE.systems.camera.getCameraViewObject(),
+    getCameraViewTransform: (cam) => SKFE.systems.camera.getCameraViewTransform(cam),
+  });
 
-    /* 计算可用区域（避开左侧 UI 面板和上/下时间轴） */
-    const timelineVisible = getComputedStyle(timelineEl).display !== 'none';
-    const uiRect = uiPanel.getBoundingClientRect();
-    const timelineRect = timelineEl.getBoundingClientRect();
-
-    let availLeft = 0, availRight = cw;
-    let availTop = 0, availBottom = ch;
-
-    if (isMobile) {
-      if (!uiPanel.classList.contains('hidden')) {
-        availBottom = Math.min(availBottom, uiRect.top);
-      }
-    } else {
-      availLeft = Math.max(availLeft, uiRect.right);
-    }
-    if (timelineVisible) {
-      if (timelineDock === 'top') {
-        availTop = Math.max(availTop, timelineRect.bottom);
-      } else {
-        availBottom = Math.min(availBottom, timelineRect.top);
-      }
-    }
-
-    const availW = Math.max(80, availRight - availLeft);
-    const availH = Math.max(80, availBottom - availTop);
-
-    /* 让 fit = baseFit * camViewZoom ≈ min(availW/camW, availH/camH) * 0.92 */
-    const desiredFit = Math.min(availW / camW, availH / camH) * 0.92;
-    camViewZoom = Math.max(0.05, Math.min(20, desiredFit / baseFit));
-
-    /* 让取景框中心落在可用区域中心 */
-    camViewOffset.x = (availLeft + availRight) / 2 - cw / 2;
-    camViewOffset.y = (availTop + availBottom) / 2 - ch / 2;
-  }
-
-  /* ---------------- 圆形笔刷矢量橡皮擦 ---------------- */
-  let eraserOn = false;
-  let eraserSize = 15;
-  let eraserDrag = null;
-  let eraserLineMode = false;
-
-  function getActiveViewScale() {
-    const cam = getCameraViewObject();
-    if (cam) return Math.max(0.0001, getCameraViewTransform(cam).fit);
-    return Math.max(0.0001, viewScale);
-  }
-
-  function hasEraserStrokes(o) {
-    if (!o) return false;
-    if (o.type === 'figure') {
-      if (!o.eraser || Array.isArray(o.eraser)) return false;
-      return Object.keys(o.eraser).some(k => o.eraser[k] && o.eraser[k].some(st => st.points && st.points.length));
-    }
-    return !!(o && o.type !== 'camera' && Array.isArray(o.eraser) && o.eraser.some(st => st.points && st.points.length));
-  }
-
-  function getEraserScale(o) {
-    if (!o) return 1;
-    if (o.type === 'figure' || o.type === 'image') return Math.max(0.0001, o.scale || 1);
-    if (o.type === 'acc' || o.type === 'shape' || o.type === 'bubble') {
-      const tr = getBindTransform(o);
-      return Math.max(0.0001, (o.scale || 1) * (tr.syncScale || 1));
-    }
-    return Math.max(0.0001, o.scale || 1);
-  }
-
-  /* 仿射矩阵：局部坐标 -> 世界坐标 */
-  function affId() { return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }; }
-  function affMul(m, n) {
-    return {
-      a: m.a * n.a + m.c * n.b,
-      b: m.b * n.a + m.d * n.b,
-      c: m.a * n.c + m.c * n.d,
-      d: m.b * n.c + m.d * n.d,
-      e: m.a * n.e + m.c * n.f + m.e,
-      f: m.b * n.e + m.d * n.f + m.f
-    };
-  }
-  function affTranslate(x, y) { return { a: 1, b: 0, c: 0, d: 1, e: x, f: y }; }
-  function affRotateDeg(deg) {
-    const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
-    return { a: c, b: s, c: -s, d: c, e: 0, f: 0 };
-  }
-  function affScale(x, y) { return { a: x, b: 0, c: 0, d: y, e: 0, f: 0 }; }
-  function affApply(m, p) {
-    return { x: m.a * p.x + m.c * p.y + m.e, y: m.b * p.x + m.d * p.y + m.f };
-  }
-  function affInvert(m) {
-    const det = m.a * m.d - m.b * m.c;
-    if (Math.abs(det) < 1e-9) return affId();
-    return {
-      a: m.d / det, b: -m.b / det,
-      c: -m.c / det, d: m.a / det,
-      e: (m.c * m.f - m.d * m.e) / det,
-      f: (m.b * m.e - m.a * m.f) / det
-    };
-  }
-
-  function objectEraserMatrix(o) {
-    let m = affId();
-    const s = getEraserScale(o);
-    if (o.type === 'figure') {
-      m = affMul(m, affTranslate(o.x, o.y));
-      if (o.rot) m = affMul(m, affRotateDeg(o.rot));
-      m = affMul(m, affScale(o.mirror ? -s : s, s));
-      m = affMul(m, affTranslate(-o.x, -o.y));
-    } else if (o.type === 'image') {
-      const { ax, ay } = getAnchorOffset(o, o.scale || 1);
-      m = affMul(m, affTranslate(o.x + ax, o.y + ay));
-      if (o.rot) m = affMul(m, affRotateDeg(o.rot));
-      m = affMul(m, affScale(s, s));
-    } else if (o.type === 'acc') {
-      const tr = getBindTransform(o);
-      const figTr = getBoundFigureTransform(o);
-      if (figTr) {
-        m = affMul(m, affTranslate(figTr.x, figTr.y));
-        if (figTr.rot) m = affMul(m, affRotateDeg(figTr.rot));
-        if (figTr.mirror) m = affMul(m, affScale(-1, 1));
-        m = affMul(m, affTranslate(-figTr.x, -figTr.y));
-      }
-      const { ax, ay } = getAnchorOffset(o, s);
-      m = affMul(m, affTranslate(tr.x + ax, tr.y + ay));
-      m = affMul(m, affRotateDeg(tr.angle * 180 / Math.PI));
-      m = affMul(m, affScale(s, s));
-    } else {
-      const tr = getBindTransform(o);
-      const figTr = getBoundFigureTransform(o);
-      if (figTr) {
-        m = affMul(m, affTranslate(figTr.x, figTr.y));
-        if (figTr.rot) m = affMul(m, affRotateDeg(figTr.rot));
-        if (figTr.mirror) m = affMul(m, affScale(-1, 1));
-        m = affMul(m, affTranslate(-figTr.x, -figTr.y));
-      }
-      const { ax, ay } = getAnchorOffset(o, s);
-      m = affMul(m, affTranslate(tr.x + ax, tr.y + ay));
-      m = affMul(m, affRotateDeg(tr.angle * 180 / Math.PI));
-      m = affMul(m, affTranslate(-ax, -ay));
-      m = affMul(m, affScale(s, s));
-    }
-    return m;
-  }
-
-  function worldToEraseLocal(o, p) {
-    return affApply(affInvert(objectEraserMatrix(o)), p);
-  }
-
-  function eraserHitObject(o, p) {
-    if (!o || o.locked || o.type === 'camera' || o.type === 'video') return false;
-    const hitR = 18 / getActiveViewScale();
-    if (o.type === 'figure') {
-      const pL = (o.rot || o.mirror) ? worldToFigureLocal(o, p) : p;
-      const j = jointData(o);
-      if (segments(j, o).some(([a, b]) => distToSeg(pL, a, b) < hitR)) return true;
-      return Math.hypot(pL.x - j.headC.x, pL.y - j.headC.y) < j.headR + hitR;
-    }
-    if (o.type === 'image') {
-      const b = imageBounds(o);
-      const { ax, ay } = getAnchorOffset(o, o.scale || 1);
-      const dx = p.x - (o.x + ax), dy = p.y - (o.y + ay);
-      const rot = (o.rot || 0) * Math.PI / 180;
-      const c = Math.cos(-rot), s = Math.sin(-rot);
-      const rx = dx * c - dy * s;
-      const ry = dx * s + dy * c;
-      return Math.abs(rx + ax) <= b.w / 2 + hitR && Math.abs(ry + ay) <= b.h / 2 + hitR;
-    }
-    return hitObj(o, p);
-  }
-
-  function getEraserTargetAt(p) {
-    // 橡皮擦只作用于当前选中的元件，不扫描其他元件，也不允许点击命中其他元件
-    if (selected && selected.type !== 'camera' && !selected.locked && eraserHitObject(selected, p)) {
-      return { obj: selected };
-    }
-    return null;
-  }
-
-  /* ============ 橡皮擦 v2：骨段级归一化局部坐标 ============ */
-  /* 每个肢体拆成两段（如 neck→elbow、elbow→hand），每段独立局部坐标系。
-     lx = 沿骨段方向的世界长度 / 骨段长度平方（允许 0~1 之外）
-     ly = 垂直方向的世界长度 / 骨段长度平方
-     这样：缩放时自动跟随、旋转时跟着骨段走、不会跨关节直线化。 */
-     function getLimbSegs(j, limb) {
-    switch (limb) {
-      case 'body': return [[j.pelvis, j.waistPoint], [j.waistPoint, j.neck]];
-      case 'armL': return [[j.neck, j.elbowL], [j.elbowL, j.handL]];
-      case 'armR': return [[j.neck, j.elbowR], [j.elbowR, j.handR]];
-      case 'legL': return [[j.pelvis, j.thighL], [j.thighL, j.footL]];
-      case 'legR': return [[j.pelvis, j.thighR], [j.thighR, j.footR]];
-    }
-    return [];
-  }
-
-  function pointToSegLocal(P, A, B) {
-    const dx = B.x - A.x, dy = B.y - A.y;
-    const L2 = dx * dx + dy * dy;
-    if (L2 < 1e-8) return { lx: 0, ly: 0 };
-    const px = P.x - A.x, py = P.y - A.y;
-    return {
-      lx: (px * dx + py * dy) / L2,
-      ly: (px * (-dy) + py * dx) / L2
-    };
-  }
-
-  function segLocalToWorld(local, A, B) {
-    const dx = B.x - A.x, dy = B.y - A.y;
-    return {
-      x: A.x + local.lx * dx + local.ly * (-dy),
-      y: A.y + local.lx * dy + local.ly * dx
-    };
-  }
-
-  function findNearestLimbSeg(P, j, maxDist) {
-    let best = null, bestD = maxDist;
-    const dHead = Math.abs(Math.hypot(P.x - j.headC.x, P.y - j.headC.y) - j.headR);
-    if (dHead < bestD) { bestD = dHead; best = { limb: 'head', seg: 0 }; }
-    const limbs = ['body', 'armL', 'armR', 'legL', 'legR'];
-    for (const limb of limbs) {
-      const segs = getLimbSegs(j, limb);
-      for (let i = 0; i < segs.length; i++) {
-        const d = distToSeg(P, segs[i][0], segs[i][1]);
-        if (d < bestD) { bestD = d; best = { limb, seg: i }; }
-      }
-    }
-    return best;
-  }
-
-  /* 把采样点追加到 eraserDrag（自动按当前最近骨段分桶，跨段时自动新开一笔） */
-  function addEraserPointToDrag(drag, pUse) {
-    const o = drag.o;
-    const j = jointData(o);
-    const vs = getActiveViewScale();
-    const tol = 24 / vs;
-
-    const hit = findNearestLimbSeg(pUse, j, tol);
-    if (!hit) {
-      drag.current = null;
-      drag.currentKey = null;
-      return;
-    }
-
-    const key = hit.limb + '_' + hit.seg;
-    let local;
-    if (hit.limb === 'head') {
-      local = { x: pUse.x - j.headC.x, y: pUse.y - j.headC.y };
-    } else {
-      const segs = getLimbSegs(j, hit.limb);
-      const [A, B] = segs[hit.seg];
-      local = pointToSegLocal(pUse, A, B);
-    }
-
-    /* 记录直线模式的起点 */
-    if (!drag.startLimb && hit.limb !== 'head') {
-      drag.startLimb = hit.limb;
-      drag.startSeg = hit.seg;
-      drag.startLocal = local;
-    }
-
-    /* 切换骨段 → 结束当前 stroke，新开一个 */
-    if (!drag.current || drag.currentKey !== key) {
-      const stroke = { size: drag.localSize, seg: hit.seg, points: [local] };
-      if (!o.eraser[hit.limb]) o.eraser[hit.limb] = [];
-      o.eraser[hit.limb].push(stroke);
-      drag.current = stroke;
-      drag.currentKey = key;
-      drag.currentLimb = hit.limb;
-      drag.currentSeg = hit.seg;
-      drag.hadNewStroke = true;
-      return;
-    }
-
-    /* 防抖（屏幕像素） */
-    const last = drag.current.points[drag.current.points.length - 1];
-    if (!last) { drag.current.points.push(local); return; }
-    let screenDist;
-    if (hit.limb === 'head') {
-      screenDist = Math.hypot(local.x - last.x, local.y - last.y) * vs;
-    } else {
-      const segs = getLimbSegs(j, hit.limb);
-      const [A, B] = segs[hit.seg];
-      const L = Math.hypot(B.x - A.x, B.y - A.y);
-      screenDist = Math.hypot(local.lx - last.lx, local.ly - last.ly) * L * vs;
-    }
-    if (screenDist < 0.6) return;
-    drag.current.points.push(local);
-  }
-
-  /* 计算点相对于肢体线段的局部坐标 (t为0-1进度, d为垂直距离) */
-  function worldToLimbLocal(P, pts) {
-    const A = pts[0], B = pts[pts.length - 1];
-    const vx = B.x - A.x, vy = B.y - A.y;
-    const len2 = vx * vx + vy * vy;
-    if (len2 < 1) return { t: 0, d: Math.hypot(P.x - A.x, P.y - A.y) };
-    let t = ((P.x - A.x) * vx + (P.y - A.y) * vy) / len2;
-    t = Math.max(0, Math.min(1, t));
-    const projx = A.x + vx * t, projy = A.y + vy * t;
-    const len = Math.sqrt(len2);
-    const nx = -vy / len, ny = vx / len;
-    const d = (P.x - projx) * nx + (P.y - projy) * ny;
-    return { t, d };
-  }
-
-  /* 将局部坐标还原为当前肢体的世界坐标 */
-  function limbLocalToWorld(lp, pts) {
-    const A = pts[0], B = pts[pts.length - 1];
-    const vx = B.x - A.x, vy = B.y - A.y;
-    const len = Math.hypot(vx, vy);
-    if (len < 0.01) return { x: A.x, y: A.y };
-    const projx = A.x + vx * lp.t, projy = A.y + vy * lp.t;
-    const nx = -vy / len, ny = vx / len;
-    return { x: projx + nx * lp.d, y: projy + ny * lp.d };
-  }
-
-  /* 判断点击落在了哪个肢体/骨段上（保留旧接口，内部走 findNearestLimbSeg） */
-  function getEraserLimbTarget(f, p) {
-    const j = jointData(f);
-    const hit = findNearestLimbSeg(p, j, 24 / getActiveViewScale());
-    return { limb: hit ? hit.limb : null, seg: hit ? hit.seg : -1, joint: j };
-  }
-
-  function computeEraserPoint(f, p) {
-    const j = jointData(f);
-    const limbsMap = {
-      body: [j.pelvis, j.waistPoint, j.neck],
-      armL: [j.neck, j.elbowL, j.handL],
-      armR: [j.neck, j.elbowR, j.handR],
-      legL: [j.pelvis, j.thighL, j.footL],
-      legR: [j.pelvis, j.thighR, j.footR]
-    };
-    
-    // 容差：距离肢体一定范围内吸附
-    const vs = getActiveViewScale();
-    const s = getEraserScale(f);
-    const tol = 20 / (vs * s); 
-
-    let bestLimb = null, bestD = tol;
-    const dHead = Math.abs(Math.hypot(p.x - j.headC.x, p.y - j.headC.y) - j.headR);
-    if (dHead < bestD) { bestLimb = 'head'; bestD = dHead; }
-
-    for (const k in limbsMap) {
-      const pts = limbsMap[k];
-      for (let i = 0; i < pts.length - 1; i++) {
-        const d = distToSeg(p, pts[i], pts[i+1]);
-        if (d < bestD) { bestD = d; bestLimb = k; }
-      }
-    }
-    
-    // 吸附到肢体
-    if (bestLimb) {
-      if (bestLimb === 'head') {
-        return { limb: 'head', x: p.x - j.headC.x, y: p.y - j.headC.y };
-      } else {
-        return { limb: bestLimb, ...worldToLimbLocal(p, limbsMap[bestLimb]) };
-      }
-    }
-    
-    // 没碰到肢体则用整体坐标（空白处涂鸦）
-    const local = worldToEraseLocal(f, p);
-    return { limb: 'global', x: local.x, y: local.y };
-  }
-
-  function resolveEraserPoint(f, pt) {
-    const j = jointData(f);
-    if (pt.limb === 'head') {
-      return { x: j.headC.x + pt.x, y: j.headC.y + pt.y };
-    }
-    if (pt.limb === 'global' || !pt.limb) {
-      const m = objectEraserMatrix(f);
-      return affApply(m, { x: pt.x, y: pt.y });
-    }
-    
-    const limbsMap = {
-      body: [j.pelvis, j.waistPoint, j.neck],
-      armL: [j.neck, j.elbowL, j.handL],
-      armR: [j.neck, j.elbowR, j.handR],
-      legL: [j.pelvis, j.thighL, j.footL],
-      legR: [j.pelvis, j.thighR, j.footR]
-    };
-    if (limbsMap[pt.limb]) {
-      return limbLocalToWorld(pt, limbsMap[pt.limb]);
-    }
-    return { x: f.x, y: f.y };
-  }
-
-  function startEraserStroke(p, e) {
-    /* 只作用于当前选中对象；不再要求起点命中肢体，允许从空白起笔 */
-    const o = selected;
-    if (!o || o.locked || o.type === 'camera' || o.type === 'video') return false;
-
-    let pUse = p;
-    if (o.type === 'figure' && (o.rot || o.mirror)) {
-      pUse = worldToFigureLocal(o, p);
-    }
-
-    const vs = getActiveViewScale();
-    const s = getEraserScale(o);
-    /* size 存"figure 局部单位"，渲染时乘 f.scale 还原为世界单位 */
-    const localSize = Math.max(0.0001, eraserSize / (vs * s));
-
-    if (o.type === 'figure') {
-      if (Array.isArray(o.eraser) || !o.eraser) o.eraser = {};
-      for (const limb of ['head', 'body', 'armL', 'armR', 'legL', 'legR']) {
-        if (!o.eraser[limb]) o.eraser[limb] = [];
-      }
-      eraserDrag = {
-        o,
-        pre: getSnapshot(),
-        localSize,
-        current: null,
-        currentKey: null,
-        currentLimb: null,
-        currentSeg: -1,
-        startLimb: null,
-        startSeg: -1,
-        startLocal: null,
-        hadNewStroke: false
-      };
-      /* 起点若命中某段，立即开一笔；未命中就等拖到肢体上再开 */
-      addEraserPointToDrag(eraserDrag, pUse);
-    } else {
-      if (!Array.isArray(o.eraser)) o.eraser = [];
-      const local = worldToEraseLocal(o, p);
-      const stroke = { size: localSize, points: [local] };
-      o.eraser.push(stroke);
-      eraserDrag = {
-        o,
-        pre: getSnapshot(),
-        localSize,
-        current: stroke,
-        currentKey: 'global',
-        currentLimb: null,
-        currentSeg: -1,
-        startLimb: null,
-        startSeg: -1,
-        startLocal: local,
-        hadNewStroke: true
-      };
-    }
-
-    hideHandles();
-    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
-    render();
-    return true;
-  }
-
-  function updateEraserStroke(p) {
-    const d = eraserDrag;
-    if (!d) return;
-    const o = d.o;
-
-    let pUse = p;
-    if (o.type === 'figure' && (o.rot || o.mirror)) {
-      pUse = worldToFigureLocal(o, p);
-    }
-
-    if (o.type === 'figure') {
-      if (eraserLineMode) {
-        /* 直线模式：固定在起点所在骨段上，每帧替换为 [起点, 当前投影] */
-        if (!d.startLimb || !d.startLocal) return;
-        const j = jointData(o);
-        const segs = getLimbSegs(j, d.startLimb);
-        const seg = segs[d.startSeg];
-        if (!seg) return;
-        const currentLocal = pointToSegLocal(pUse, seg[0], seg[1]);
-        if (!d.current) {
-          const stroke = { size: d.localSize, seg: d.startSeg, points: [d.startLocal, currentLocal] };
-          o.eraser[d.startLimb].push(stroke);
-          d.current = stroke;
-          d.currentKey = d.startLimb + '_' + d.startSeg;
-          d.currentLimb = d.startLimb;
-          d.currentSeg = d.startSeg;
-          d.hadNewStroke = true;
-        } else {
-          d.current.points = [d.startLocal, currentLocal];
-        }
-      } else {
-        addEraserPointToDrag(d, pUse);
-      }
-    } else {
-      /* 非 figure：仍用 figure 局部坐标 (x,y) 存储 */
-      const local = worldToEraseLocal(o, p);
-      if (!d.current) {
-        const stroke = { size: d.localSize, points: [local] };
-        o.eraser.push(stroke);
-        d.current = stroke;
-        d.hadNewStroke = true;
-      } else {
-        const last = d.current.points[d.current.points.length - 1];
-        const vs = getActiveViewScale();
-        const s = getEraserScale(o);
-        if (last && Math.hypot(local.x - last.x, local.y - last.y) * vs * s < 0.6) {
-          render();
-          return;
-        }
-        d.current.points.push(local);
-      }
-    }
-    render();
-  }
-
-
-  function simplifyEraserPath(points, eps) {
-    if (!points || points.length <= 2) return points || [];
-    const sq = Math.max(0.000001, eps * eps);
-    const keep = new Array(points.length).fill(false);
-    keep[0] = keep[points.length - 1] = true;
-    const stack = [[0, points.length - 1]];
-    const distSq = (p, a, b) => {
-      const vx = b.x - a.x, vy = b.y - a.y;
-      const wx = p.x - a.x, wy = p.y - a.y;
-      const len2 = vx * vx + vy * vy;
-      let t = len2 > 0 ? (wx * vx + wy * vy) / len2 : 0;
-      t = Math.max(0, Math.min(1, t));
-      const dx = p.x - (a.x + vx * t), dy = p.y - (a.y + vy * t);
-      return dx * dx + dy * dy;
-    };
-    while (stack.length) {
-      const [start, end] = stack.pop();
-      let maxD = -1, idx = -1;
-      for (let i = start + 1; i < end; i++) {
-        const d = distSq(points[i], points[start], points[end]);
-        if (d > maxD) { maxD = d; idx = i; }
-      }
-      if (maxD > sq && idx > 0) {
-        keep[idx] = true;
-        stack.push([start, idx], [idx, end]);
-      }
-    }
-    return points.filter((_, i) => keep[i]);
-  }
-
-  function finishEraserStroke() {
-    const d = eraserDrag;
-    if (!d) return;
-    eraserDrag = null;
-    const o = d.o;
-    const vs = getActiveViewScale();
-    const epsWorld = 0.45 / vs;  /* 屏幕上约 0.45px */
-
-    /* 简化路径：head 用世界单位；骨段要除以骨段长度归一化 */
-    if (o.type === 'figure') {
-      const j = jointData(o);
-      for (const limb of ['head', 'body', 'armL', 'armR', 'legL', 'legR']) {
-        if (!o.eraser || !o.eraser[limb]) continue;
-        for (const st of o.eraser[limb]) {
-          if (!st.points || st.points.length < 3) continue;
-          if (limb === 'head') {
-            st.points = simplifyEraserPath(st.points, epsWorld);
-          } else {
-            const segs = getLimbSegs(j, limb);
-            const seg = segs[st.seg] || segs[0];
-            if (!seg) continue;
-            const L = Math.hypot(seg[1].x - seg[0].x, seg[1].y - seg[0].y);
-            const epsLocal = epsWorld / Math.max(0.001, L);
-            st.points = simplifyEraserPath(st.points, epsLocal);
-          }
-        }
-      }
-    } else if (Array.isArray(o.eraser)) {
-      const eps = epsWorld / Math.max(0.0001, getEraserScale(o));
-      for (const st of o.eraser) {
-        if (st.points && st.points.length >= 3) {
-          st.points = simplifyEraserPath(st.points, eps);
-        }
-      }
-    }
-
-    /* 如果一笔什么都没擦到，不记录历史 */
-    if (!d.hadNewStroke) {
-      render();
-      return;
-    }
-
-    if (globalEditEnabled) {
-      setGlobalProp(o, 'eraser', JSON.parse(JSON.stringify(o.eraser || [])));
-    }
-    invalidateAllFrameThumbs();
-    markCurrentFrameModified();
-    if (d.pre) pushPreSnapshot(d.pre, '橡皮擦除');
-    else saveHistory('橡皮擦除');
-    render();
-  }
-
-  function drawEraseMask(targetCtx, o) {
-    let strokes = [];
-    if (o.type === 'figure') {
-      if (Array.isArray(o.eraser)) strokes = o.eraser;
-      else if (o.eraser) {
-        if (o.eraser.any) strokes = o.eraser.any;
-        else {
-          for (const k in o.eraser) {
-            if (Array.isArray(o.eraser[k])) strokes = strokes.concat(o.eraser[k]);
-          }
-        }
-      }
-    } else {
-      strokes = o.eraser || [];
-    }
-    if (!strokes.length) return;
-    
-    for (const st of strokes) {
-      const pts = st && st.points;
-      if (!pts || !pts.length) continue;
-      const width = Math.max(0.0001, st.size || 1);
-      
-      targetCtx.save();
-      targetCtx.globalCompositeOperation = 'destination-out';
-      targetCtx.globalAlpha = 1;
-      
-      targetCtx.lineCap = 'round';
-      targetCtx.lineJoin = 'round';
-      targetCtx.lineWidth = width;
-      targetCtx.strokeStyle = '#000';
-      targetCtx.fillStyle = '#000';
-      
-      targetCtx.beginPath();
-      for (let i = 0; i < pts.length; i++) {
-        let P = { x: 0, y: 0 };
-        if (o.type === 'figure') {
-          P = resolveEraserPoint(o, pts[i]);
-        } else {
-          const m = objectEraserMatrix(o);
-          P = affApply(m, pts[i]);
-        }
-        
-        if (pts.length === 1) {
-          targetCtx.arc(P.x, P.y, width / 2, 0, TAU);
-          targetCtx.fill();
-        } else {
-          if (i === 0) targetCtx.moveTo(P.x, P.y);
-          else targetCtx.lineTo(P.x, P.y);
-        }
-      }
-      if (pts.length > 1) targetCtx.stroke();
-      targetCtx.restore();
-    }
-  }
+  /* ---------------- 画笔元件系统（brush-v5.1.0 · js/systems/brush.js） ---------------- */
+  SKFE.systems.brush.init({
+    AppState,
+    EventBus,
+    TRACK_ALL_ID,
+    getCanvas: () => canvas,
+    getSelected: () => AppState.selected,
+    getObjects: () => AppState.objects,
+    findFigureById: (id) => AppState.objects.find(o => o && o.id === id && o.type === 'figure'),
+    getViewScale: () => AppState.viewScale,
+    getViewOffset: () => AppState.viewOffset,
+    /* 屏幕 ↔ 世界：与指针交互共用 getPos 的换算（含摄像机子轨道视角） */
+    screenToWorld: (sx, sy) => getPos({ clientX: sx, clientY: sy }),
+    worldToScreen: (p) => worldToScreenPoint(p),
+    getInkLocalMatrix,
+    getBindTransform, getBoundFigureTransform, getBindBase, getAnchorOffset,
+    jointData,
+    nextUid: () => ++uid,
+    generateName: (type) => { const tmp = { type }; generateName(tmp); return tmp.name; },
+    addObjectToFrames,
+    select: (o) => select(o),
+    getSnapshot, pushPreSnapshot,
+    markCurrentFrameModified, invalidateAllFrameThumbs, setGlobalProp,
+    refreshUI: () => EventBus.emit('need:syncUI'),
+    showToast: (msg) => showHistoryToast(msg),
+    getUndoDepth: () => undoStack.length,
+    isPlaying: () => isPlaying,
+    pause: () => pause(),
+    isGlobalEdit: () => globalEditEnabled,
+    deleteInkOnCurrentFrame,
+    /* 橡皮擦（画笔模式下可临时切换到擦除笔迹） */
+    eraserSetOn: (on) => SKFE.systems.eraser.setOn(on),
+    eraserIsOn: () => SKFE.systems.eraser.isOn(),
+    eraserGetSize: () => SKFE.systems.eraser.size(),
+    eraserSetSize: (n) => SKFE.systems.eraser.setSize(n),
+    eraserSetLineMode: (b) => SKFE.systems.eraser.setLineMode(b),
+    eraserClearFrame: () => SKFE.systems.eraser.clearFrame(),
+    eraserClearAll: () => SKFE.systems.eraser.clearAll()
+  });
 
   function drawErasedObjectGroup(o, items) {
     const mainCtx = ctx;
@@ -12986,7 +11414,9 @@ function togglePin(part) {
       for (const item of items) {
         try { item.draw(); } catch (_) {}
       }
-      drawEraseMask(sctx, o);
+      /* brush-v5.1.2: ink 的遮罩已经在自己内部按落笔顺序画过了，这里不能再叠一次，
+         否则"擦除之后画上去"的笔迹会被整体擦掉。 */
+      if (o.type !== 'ink') SKFE.systems.eraser.drawMask(sctx, o);
     } finally {
       ctx = savedCtx;
     }
@@ -13006,188 +11436,15 @@ function togglePin(part) {
     else if (o.type === 'shape') queueShape(o, isSel, isExporting, opts);
     else if (o.type === 'bubble') queueBubble(o, isSel, isExporting, opts);
     else if (o.type === 'video') queueVideo(o, isSel, isExporting, opts);
+    else if (o.type === 'ink') queueInk(o, isSel, isExporting, opts); // brush-v5.1.0: §6.3.1
   }
 
-  function clearEraserFrame() {
-    const pre = getSnapshot();
-    const targets = (selected && selected.type !== 'camera') ? [selected] : objects.slice();
-    targets.forEach(o => {
-      if (!o || o.type === 'camera') return;
-      if (o.type === 'figure') o.eraser = {};
-      else o.eraser = [];
-    });
-    invalidateAllFrameThumbs();
-    markCurrentFrameModified();
-    pushPreSnapshot(pre, '清除本帧擦除');
-    render();
-  }
-
-  function clearEraserAll() {
-    const pre = getSnapshot();
-    const targetId = (selected && selected.type !== 'camera') ? String(selected.id) : null;
-    for (const id in tracks) {
-      const t = tracks[id];
-      if (!t || !t.frames) continue;
-      for (const data of t.frames) {
-        if (!data || data.type === 'camera') continue;
-        if (targetId && String(data.id) !== targetId) continue;
-        if (data.type === 'figure') data.eraser = {};
-        else data.eraser = [];
-      }
-    }
-    objects.forEach(o => {
-      if (!o || o.type === 'camera') return;
-      if (targetId && String(o.id) !== targetId) return;
-      if (o.type === 'figure') o.eraser = {};
-      else o.eraser = [];
-    });
-    invalidateAllFrameThumbs();
-    markCurrentFrameModified();
-    pushPreSnapshot(pre, '清除全部擦除');
-    render();
-  }
-
-  function setEraserOn(on) {
-    eraserOn = !!on;
-    document.body.classList.toggle('eraser-mode', eraserOn);
-    const btn = document.getElementById('btnEraserToggle');
-    if (btn) {
-      btn.textContent = eraserOn ? '🛑 关闭擦除' : '🧽 开启擦除';
-      btn.classList.toggle('on', eraserOn);
-    }
-    const state = document.getElementById('eraserState');
-    if (state) state.textContent = eraserOn ? '擦除中：在画布上按住拖动' : '擦除 = 隐藏，不破坏原像素';
-    const cursor = document.getElementById('eraserCursor');
-    if (cursor && !eraserOn) cursor.style.display = 'none';
-  }
-
-  function updateEraserCursor(e) {
-    const cursor = document.getElementById('eraserCursor');
-    if (!cursor) return;
-    if (!eraserOn) { cursor.style.display = 'none'; return; }
-    const t = e.target;
-    if (t && t.closest && (t.closest('#ui') || t.closest('#timeline') || t.closest('#floatControls') ||
-        t.closest('#historyControls') || t.closest('#cameraPreviewFloat'))) {
-      cursor.style.display = 'none';
-      return;
-    }
-    cursor.style.display = 'block';
-    cursor.style.width = eraserSize + 'px';
-    cursor.style.height = eraserSize + 'px';
-    cursor.style.left = e.clientX + 'px';
-    cursor.style.top = e.clientY + 'px';
-  }
-
-  function initEraserUI() {
-    const toggle = document.getElementById('btnEraserToggle');
-    if (toggle) toggle.addEventListener('click', () => setEraserOn(!eraserOn));
-    const lineModeCb = document.getElementById('eraserLineMode');
-    if (lineModeCb) {
-      lineModeCb.addEventListener('change', () => {
-        eraserLineMode = lineModeCb.checked;
-      });
-    }
-    const size = document.getElementById('eraserSize');
-    const sizeVal = document.getElementById('eraserSizeVal');
-    if (size) {
-      size.addEventListener('input', () => {
-        eraserSize = Math.max(1, Math.min(100, parseInt(size.value, 10) || 15));
-        if (sizeVal) sizeVal.textContent = eraserSize;
-      });
-    }
-    const cf = document.getElementById('btnEraserClearFrame');
-    if (cf) cf.addEventListener('click', clearEraserFrame);
-    const ca = document.getElementById('btnEraserClearAll');
-    if (ca) ca.addEventListener('click', clearEraserAll);
-    document.addEventListener('pointermove', updateEraserCursor, { passive: true });
-    document.addEventListener('pointerleave', () => {
-      const cursor = document.getElementById('eraserCursor');
-      if (cursor) cursor.style.display = 'none';
-    });
-
-    /* 橡皮擦开启后，点击以下位置保留擦除模式：
-       - 画布（继续作画）
-       - 撤销/恢复按钮（用户明确要求撤销时不关闭）
-       - "画笔"工具芯片（切换面板但不关闭擦除模式）
-       - 画笔工具面板内部（可继续调大小/直线/清除等）
-       其余任何 UI 点击都会关闭擦除模式，避免误擦。 */
-       document.addEventListener('pointerdown', (e) => {
-      if (!eraserOn) return;
-      if (e.target === canvas) return;
-      const t = e.target;
-      if (!t || !t.closest) return;
-      if (t.closest('#btnUndo') || t.closest('#btnRedo')) return;
-      if (t.closest('#toolChips .tool-chip[data-tool="eraser"]')) return;
-      if (t.closest('.tool-panel[data-tool="eraser"]')) return;
-      setEraserOn(false);
-    }, true);
-  }
-
-  function initCameraUI() {
-    const addBtn = document.getElementById('btnCamera');
-    if (addBtn) addBtn.addEventListener('click', () => {
-      const existing = findCameraObject();
-      if (existing) {
-        if (!confirm('当前项目中已存在摄像机，是否替换为新摄像机？')) return;
-        for (const id in tracks) {
-          const t = tracks[id];
-          if (t && t.frames && t.frames.some(d => d && d.type === 'camera')) delete tracks[id];
-        }
-        objects = objects.filter(o => o && o.type !== 'camera');
-        if (isCameraTrackId(activeTrackId)) activeTrackId = TRACK_ALL_ID;
-      }
-      const sp = getSpawnPoint();
-      const cam = makeCamera(sp.x, sp.y);
-      generateName(cam);
-      addObjectToFrames(cam);
-      syncMainLengthFromTracks();
-      if (isCameraTrackId(activeTrackId) || !isSubTrackMode()) {
-        activeTrackId = String(cam.id);
-      }
-      objects = getCombinedObjectsForRender();
-      selected = cam;
-      refreshSubTrackOptions();
-      render();
-      syncUI();
-      saveHistory('添加摄像机');
-    });
-
-    document.querySelectorAll('.camera-ratio-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const cam = (selected && selected.type === 'camera') ? selected : getCurrentCameraObject();
-        if (!cam) return;
-        const parts = (btn.dataset.ratio || '16:9').split(':').map(Number);
-        const rw = Math.max(1, parts[0] || 16);
-        const rh = Math.max(1, parts[1] || 9);
-        const longSide = 640;
-        let w, h;
-        if (rw >= rh) { w = longSide; h = Math.round(longSide * rh / rw); }
-        else { h = longSide; w = Math.round(longSide * rw / rh); }
-        cam.w = w; cam.h = h;
-        if (globalEditEnabled) {
-          setGlobalProp(cam, 'w', w);
-          setGlobalProp(cam, 'h', h);
-        }
-        invalidateAllFrameThumbs();
-        render();
-        syncUI();
-        saveHistory('切换摄像机比例');
-      });
-    });
-
-    const previewCb = document.getElementById('cameraPreviewCheck');
-    if (previewCb) {
-      previewCb.addEventListener('change', () => {
-        cameraPreviewVisible = !!previewCb.checked;
-        updateCameraPreview();
-      });
-    }
-  }
 
   initTimelineDock();
-  initCameraPreviewFloat();
-  initEraserUI();
-  initCameraUI();
+  SKFE.systems.camera.initPreviewFloat();
+  SKFE.systems.eraser.initUI();
+  SKFE.systems.brush.boot(); // brush-v5.1.0: 必须在 eraser.initUI 之后（复用圆形光标并接管其显示）
+  SKFE.systems.camera.initUI();
 
   /* ==================== 键盘快捷键 ==================== */
   window.addEventListener('keydown', e => {
@@ -13201,8 +11458,8 @@ function togglePin(part) {
     else if (k === 'delete' || k === 'backspace') { e.preventDefault(); deleteSelected(); }
     else if (k === 'r') { e.preventDefault(); resetPose(); }
     else if (k === ' ') { e.preventDefault(); togglePlay(); }
-    else if (k === 'arrowleft') { e.preventDefault(); goToFrame(currentFrameIndex - 1); }
-    else if (k === 'arrowright') { e.preventDefault(); goToFrame(currentFrameIndex + 1); }
+    else if (k === 'arrowleft') { e.preventDefault(); goToFrame(AppState.currentFrameIndex - 1); }
+    else if (k === 'arrowright') { e.preventDefault(); goToFrame(AppState.currentFrameIndex + 1); }
   });
 
   window.addEventListener('resize', () => {
@@ -13219,7 +11476,7 @@ function togglePin(part) {
   /* ==================== 语言切换后刷新界面 ==================== */
   window.SKFE_REFRESH_I18N = function () {
     updateFrameBar(); updatePresetListUI(); updateActionListUI();
-    updateThemePresetUI(); syncUI(); syncAdvToggles();
+    SKFE.features.theme.updateThemePresetUI(); EventBus.emit('need:syncUI'); syncAdvToggles();
     updateVideoUI(); updateMultiActions();
   };
 
@@ -13233,13 +11490,34 @@ function togglePin(part) {
   resize();
 
   (function init() {
-    viewOffset.x = canvas.clientWidth / 2;
-    viewOffset.y = canvas.clientHeight / 2;
-    frames = [{ id: 1, duration: Math.round(1000 / defaultFPS), isTween: false }];
-    tracks = {};
-    currentFrameIndex = 0;
-    activeTrackId = TRACK_ALL_ID;
-    objects = [];
+    // ==================== 注册 EventBus 监听 ====================
+    // 必须在 init 最前面注册，否则下面的首次渲染/预设加载 emit 出去会没人接（静默丢失）
+    EventBus.on('need:render', () => {
+      render(); // render() 内部已包含 renderCanvas(false) + SKFE.systems.camera.updateCameraPreview() 等全部子更新
+    });
+
+    EventBus.on('need:syncUI', () => {
+      syncUI();
+    });
+
+    EventBus.on('history:save', (label) => {
+      saveHistory(label);
+    });
+
+    // 低频综合更新：同时重绘、同步UI、记历史
+    EventBus.on('app:update', (label) => {
+      render();
+      syncUI();
+      if (label) saveHistory(label);
+    });
+
+    AppState.viewOffset.x = canvas.clientWidth / 2;
+    AppState.viewOffset.y = canvas.clientHeight / 2;
+    AppState.frames = [{ id: 1, duration: Math.round(1000 / defaultFPS), isTween: false }];
+    AppState.tracks = {};
+    AppState.currentFrameIndex = 0;
+    AppState.activeTrackId = TRACK_ALL_ID;
+    AppState.objects = [];
     if (presets.length > 0) {
       loadPreset(presets[0]);
     } else {
@@ -13255,13 +11533,13 @@ function togglePin(part) {
     syncPageAppearanceUI();
     syncCanvasMaskUI();
     syncAdvToggles();
-    loadSwatches();
-    enhanceColorInputs();
-    loadThemeConfig();
-    syncThemeUI();
-    applyThemeConfig(themeConfig);
+    SKFE.features.colorTools.loadSwatches();
+    SKFE.features.colorTools.enhanceColorInputs();
+    SKFE.features.theme.loadThemeConfig();
+    SKFE.features.theme.syncThemeUI();
+    SKFE.features.theme.applyThemeConfig();
     updateStickyHeaderHeight();
-    render();
+    EventBus.emit('need:render');
     updateUndoRedoButtons();
     syncPinViewBtn();
     syncResizeUI(); // 页面加载时，根据保存的状态刷新一下按钮文字和手柄

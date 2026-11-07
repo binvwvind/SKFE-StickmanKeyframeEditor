@@ -1,0 +1,105 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ---------- 1. 网页：同步 www/ 并发布到 GitHub Pages ----------
+  web:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: 同步前端产物
+        run: node scripts/sync-www.js
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: www
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+  # ---------- 2. 桌面：Windows / macOS / Linux 安装包 ----------
+  desktop:
+    needs: web
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: dist:win
+            artifact: release/*.exe
+            name: windows
+          - os: macos-latest
+            script: dist:mac
+            artifact: release/*.dmg
+            name: macos
+          - os: ubuntu-latest
+            script: dist:linux
+            artifact: release/*.AppImage
+            name: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: 打包（${{ matrix.name }}）
+        run: npm run ${{ matrix.script }}
+        env:
+          # macOS 未配置签名证书时跳过签名与公证
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skfe-${{ matrix.name }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: warn
+
+  # ---------- 3. 安卓：Capacitor + Gradle 出 APK ----------
+  android:
+    needs: web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - run: npm ci
+      - name: 生成原生工程（首次）
+        run: |
+          node scripts/sync-www.js
+          if [ ! -d android ]; then npx cap add android; fi
+          npx cap sync android
+      - name: 构建 Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skfe-android
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn

@@ -613,14 +613,7 @@ function syncDistortToAllFrames(obj) {
       canvasMaskBgColor, canvasMaskGridColor, // 新增
     };
     const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'skfe_project_' + Date.now() + '.json';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    SKFE.platform.save(blob, 'skfe_project_' + Date.now() + '.json');
   }
 
   function applyLoadedProject(data) {
@@ -1305,14 +1298,7 @@ function syncDistortToAllFrames(obj) {
     frames: preset.frames
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = safeName + '_' + Date.now() + '.json';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  SKFE.platform.save(blob, safeName + '_' + Date.now() + '.json');
 }
 
   /* ==================== 动作保存/应用：辅助函数 ==================== */
@@ -1783,12 +1769,7 @@ function syncDistortToAllFrames(obj) {
     return;
   }
   const blob = new Blob([JSON.stringify(actionPresets, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'tco_actions.json';
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
+  SKFE.platform.save(blob, 'tco_actions.json');
 }
 
 function importActionPresets() {
@@ -2106,13 +2087,19 @@ function importActionPresets() {
   if (isMobile) {
     btnToggleUI.style.display = 'block';
     uiPanel.classList.add('hidden');
+    /* v6.0：面板默认收起，必须同时给出「展开」入口，否则手机上找不到设置面板 */
+    if (btnMobileExpand) btnMobileExpand.style.display = 'flex';
     uiPanel.addEventListener('click', (e) => {
-      if (e.target.closest('#uiDragHandle') || e.target.closest('button') || e.target.closest('input') ||
-          e.target.closest('select') || e.target.closest('details') || e.target.closest('label')) return;
-      if (uiPanel.classList.contains('hidden')) {
+      const collapsed = uiPanel.classList.contains('hidden');
+      /* 收起状态下点拖动条/空白处都应展开；展开状态下这些区域交给拖动逻辑，不抢事件 */
+      if (!collapsed && (e.target.closest('#uiDragHandle') || e.target.closest('button') || e.target.closest('input') ||
+          e.target.closest('select') || e.target.closest('details') || e.target.closest('label'))) return;
+      if (collapsed) {
         uiPanel.classList.remove('hidden');
         btnToggleUI.textContent = '收起';
         btnMobileExpand.style.display = 'none';
+        document.body.classList.add('ui-open');   /* 展开时让底部浮动按钮让位 */
+        setTimeout(resize, 0);                    /* 让 70vh 的面板高度规则立即生效 */
       }
     });
     btnToggleUI.addEventListener('click', (e) => {
@@ -2120,12 +2107,15 @@ function importActionPresets() {
       uiPanel.classList.add('hidden');
       btnToggleUI.textContent = '展开';
       btnMobileExpand.style.display = 'flex';
+      document.body.classList.remove('ui-open');
     });
     btnMobileExpand.addEventListener('click', (e) => {
       e.stopPropagation();
       uiPanel.classList.remove('hidden');
       btnToggleUI.textContent = '收起';
       btnMobileExpand.style.display = 'none';
+      document.body.classList.add('ui-open');
+      setTimeout(resize, 0);
     });
     setTimeout(resize, 100);
     const tip = document.createElement('div');
@@ -7960,12 +7950,7 @@ function importActionPresets() {
       
       // 用延迟防止浏览器将连续下载判定为恶意弹窗
       setTimeout(() => {
-        const a = document.createElement('a');
-        a.href = dataUrl;
-        a.download = `frame_${String(safeIdx + 1).padStart(3, '0')}.jpg`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
+        SKFE.platform.save(dataUrl, `frame_${String(safeIdx + 1).padStart(3, '0')}.jpg`);
       }, index * 150);
     });
   }
@@ -12230,6 +12215,12 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     }
     if (dataURL) {
       const filename = 'stickman_' + Date.now() + (format === 'png' ? '.png' : '.jpg');
+      /* v6.0：手机原生壳（Capacitor）里 <a download> 无效，走 Filesystem + 系统分享 */
+      if (SKFE.platform && SKFE.platform.isNative && SKFE.platform.isNative()) {
+        SKFE.platform.saveDataURL(dataURL, filename);
+        EventBus.emit('need:render');
+        return;
+      }
       const isIOS = /iP(ad|hone|od)/i.test(navigator.userAgent);
       if (isIOS && navigator.canShare) {
         try {

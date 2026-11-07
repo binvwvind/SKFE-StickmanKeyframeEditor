@@ -1415,6 +1415,14 @@
     #ui.hidden { transform: translateY(calc(100% - 64px)); } /* 隐藏状态：向下平移，只留出顶部拖动条高度 */
     #ui.hidden .bar { background: var(--text-sub); } /* 隐藏状态下拖动条颜色变深 */
     #ui.hidden::after { display: none; } /* 隐藏状态下的伪元素隐藏 */
+
+    /* v6.0 触控友好：滑条/数字输入加大可点区域（原生滑条高度决定触摸热区） */
+    #ui input[type=range] { height: 30px; }
+    #ui .row.slider { min-height: 34px; }
+    #ui .btn-xs { min-height: 28px; padding-left: 10px; padding-right: 10px; }
+
+    /* 底部抽屉展开时，右下角「帧动画面板」浮钮让位，避免压在面板按钮上 */
+    body.ui-open #btnShowTimeline { display: none !important; }
     #watermark { text-align: center; margin-bottom: 8px; } /* 移动端水印居中，下边距 */
 
     #timeline { padding: 4px 6px; border-radius: 18px 18px 0 0; } /* 移动端时间轴：内边距，圆角 */

@@ -1,0 +1,17 @@
+{
+  "appId": "com.skfe.editor",
+  "appName": "SKFE",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "backgroundColor": "#f3f7ef",
+    "allowMixedContent": false
+  },
+  "ios": {
+    "backgroundColor": "#f3f7ef",
+    "contentInset": "always"
+  }
+}

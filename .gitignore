@@ -1,0 +1,16 @@
+# 依赖与构建产物
+node_modules/
+www/
+release/
+android/
+ios/
+dist/
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+*.log
+
+# 临时测试
+_*.png
+_*.js

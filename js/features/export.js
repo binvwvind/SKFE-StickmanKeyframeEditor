@@ -54,12 +54,7 @@ SKFE.features.export = (function () {
 
       if (btn) btn.textContent = '生成 ZIP...';
       const blob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'stickman_frames_' + Date.now() + '.zip';
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      SKFE.platform.save(blob, 'stickman_frames_' + Date.now() + '.zip');
       
     } catch (err) {
       console.warn('ZIP打包失败，降级为逐个下载', err);
@@ -73,10 +68,7 @@ SKFE.features.export = (function () {
       });
       urls.forEach((u, i) => {
         setTimeout(() => {
-          const a = document.createElement('a');
-          a.href = u.url;
-          a.download = `frame_${String(u.label).padStart(3, '0')}.png`;
-          document.body.appendChild(a); a.click(); a.remove();
+          SKFE.platform.save(u.url, `frame_${String(u.label).padStart(3, '0')}.png`);
         }, i * 150);
       });
     } finally {
@@ -225,12 +217,7 @@ SKFE.features.export = (function () {
         };
         reader.readAsDataURL(blob);
       } else {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'stickman_anim_' + Date.now() + (transparent ? '_transparent' : '') + '.gif';
-        document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        SKFE.platform.save(blob, 'stickman_anim_' + Date.now() + (transparent ? '_transparent' : '') + '.gif');
       }
     } catch (e) {
       alert('GIF 导出失败：' + e.message);
@@ -297,12 +284,7 @@ SKFE.features.export = (function () {
       D.EventBus.emit('need:render');
     }
     const blob = await blobPromise;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'stickman_video_' + Date.now() + '.webm';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    SKFE.platform.save(blob, 'stickman_video_' + Date.now() + '.webm');
   }
 
   /* ==================== MP4 ==================== */
@@ -422,12 +404,7 @@ SKFE.features.export = (function () {
     }
     const blob = await blobPromise;
     if (!blob || blob.size === 0) { alert('MP4 导出失败：未生成视频数据'); return; }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'stickman_video_' + Date.now() + '.mp4';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    SKFE.platform.save(blob, 'stickman_video_' + Date.now() + '.mp4');
   }
 
   function exportPNGSeq() {

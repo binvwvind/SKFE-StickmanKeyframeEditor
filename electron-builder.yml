@@ -1,0 +1,50 @@
+appId: com.skfe.editor
+productName: SKFE
+copyright: Copyright © 2026 binvwvind
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - electron/**
+  - www/**
+  - package.json
+
+asar: true
+compression: maximum
+
+# 直接使用 node_modules 里已安装好的 Electron 二进制，避免打包时再从 GitHub 下载
+# （CI 上 npm ci 之后同样适用，可显著加快构建并绕过网络限制）
+electronDist: node_modules/electron/dist
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+  artifactName: SKFE-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: SKFE
+  deleteAppDataOnUninstall: false
+
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  icon: build/icon.png
+  category: public.app-category.graphics-design
+  artifactName: SKFE-${version}-${arch}.${ext}
+
+linux:
+  target:
+    - AppImage
+  icon: build/icon.png
+  category: Graphics
+  artifactName: SKFE-${version}.${ext}

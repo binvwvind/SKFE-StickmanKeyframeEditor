@@ -1,5 +1,9 @@
 # SKFE-Stickman-Keyframe-Editor---
 SKFE | Stickman Keyframe Editor -火柴人关键帧动画编辑器 For the Alan Becker stick figure fandom
+
+> 开发者请看 **`项目结构.md`**：哪个文件该改、一键出包在哪、哪些目录别碰，都写在那里。
+> 下面这份是给最终用户看的操作教程。
+
 # SKFE 火柴人帧动画编辑器 v4.6.0 完全使用教程
 
 欢迎使用 SKFE！这是一款轻量且支持多轨道的火柴人帧动画编辑器。

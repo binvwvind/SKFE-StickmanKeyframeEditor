@@ -48,6 +48,7 @@ if (fs.existsSync(pwaDir)) {
 // 注入 manifest / 图标 / SW 注册
 const headInject = [
   '  <link rel="manifest" href="./manifest.webmanifest">',
+  '  <link rel="icon" type="image/png" href="./icons/icon-192.png">',
   '  <meta name="theme-color" content="#2f7d4f">',
   '  <meta name="apple-mobile-web-app-capable" content="yes">',
   '  <meta name="apple-mobile-web-app-status-bar-style" content="default">',

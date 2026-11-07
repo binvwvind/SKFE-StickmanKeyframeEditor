@@ -1,7 +1,7 @@
 /* SKFE locale: English */
 window.SKFE_LOCALES = window.SKFE_LOCALES || {};
 window.SKFE_LOCALES['en'] = {
-  "app.title": "SKFE | Stickman Keyframe Editor v5.0.0",
+  "app.title": "SKFE | Stickman Keyframe Editor v5.1.0",
   "tbox.move": "Drag to move the whole object",
   "tbox.scale": "Drag to scale proportionally (enable Free Stretch to scale X/Y separately)",
   "tbox.rotate": "Drag to rotate",
@@ -23,7 +23,7 @@ window.SKFE_LOCALES['en'] = {
   "cameraPreview.closeTitle": "Close preview",
   "cameraPreview.hint": "Always shows the camera export view for the current frame",
   "timeline.show": "🎬 Frame panel",
-  "watermark.title": "SKFE | Stickman Keyframe Editor v5.0.0",
+  "watermark.title": "SKFE | Stickman Keyframe Editor v5.1.0",
   "watermark.author": "Author: binvwvind · QQ group: 1121039855",
   "panel.title": "Control panel",
   "lang.toggle": "🌐 EN/中",

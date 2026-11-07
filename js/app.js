@@ -124,6 +124,9 @@
   /* ==================== v4.7.0 变换框系统状态 ==================== */
   let transformBoxOn = false;
   let freeStretchOn = false;
+  /* v5.5.2：四角扭曲的「编辑模式」—— 只控制 8 个控制点显不显示，与变换框同一套逻辑。
+     变形本身是否生效看 obj.distort.enabled，由「关闭扭曲」按钮控制。 */
+  let distortEditOn = false;
   try { transformBoxOn = localStorage.getItem('skfe_transform_box_v1') === '1'; } catch (_) {}
   try { freeStretchOn = localStorage.getItem('skfe_free_stretch_v1') === '1'; } catch (_) {}
   /* 画布边界的虚拟选中目标（与普通对象区分） */
@@ -227,6 +230,50 @@ function setGlobalPropForBound(obj, path, value) {
         AppState.selected.y = tr.y;
       }
     }
+  }
+}
+
+/* v5.3.0 全局属性：四角扭曲也要跨帧同步。
+   注意必须【深拷贝】corners —— setGlobalProp 是按引用赋值，直接传数组会让所有帧
+   共用一个 corners，在某一帧拖一个角点，其它帧会同时被改掉并留下脏数据。 */
+function cloneDistortField(src) {
+  if (!src) return src;
+  const out = {
+    enabled: !!src.enabled,
+    corners: Array.isArray(src.corners) ? src.corners.map(c => ({ x: c.x, y: c.y })) : null,
+    baseW: src.baseW || 0,
+    baseH: src.baseH || 0
+  };
+  /* v5.6.1：冻结的变形框架必须一起带走，否则换帧后框架丢失 → 骨盆又开始漂 */
+  if (src.frame0) {
+    out.frame0 = {
+      w: src.frame0.w || 0, h: src.frame0.h || 0,
+      dx: src.frame0.dx || 0, dy: src.frame0.dy || 0,
+      scale0: src.frame0.scale0 || 1
+    };
+  }
+  return out;
+}
+
+function syncDistortToAllFrames(obj) {
+  if (!globalEditEnabled) return;
+  if (!obj || !obj.distort) return;
+  const targetId = String(obj.id);
+  const snap = cloneDistortField(obj.distort);
+  for (const id in AppState.tracks) {
+    const t = AppState.tracks[id];
+    if (!t || !t.frames) continue;
+    for (let i = 0; i < t.frames.length; i++) {
+      const data = t.frames[i];
+      if (!data || String(data.id) !== targetId) continue;
+      if (data === obj) continue;
+      if (multiSelectMode && !multiSelectedFrames.has(i)) continue;
+      data.distort = cloneDistortField(snap);
+    }
+  }
+  /* 当前帧对象若与帧数据不是同一个实例，也补写一次（保持一致） */
+  if (AppState.selected && String(AppState.selected.id) === targetId) {
+    AppState.selected.distort = cloneDistortField(snap);
   }
 }
 
@@ -1396,6 +1443,147 @@ function setGlobalPropForBound(obj, path, value) {
     alert('动作已保存');
   }
 
+  /* 这条轨道里「绑在 fid 身上的元件」的样本数据；不是绑定轨道就返回 null */
+  function boundSampleOf(track, fid) {
+    if (!track || !track.frames) return null;
+    let sample = null;
+    for (let i = 0; i < track.frames.length; i++) {
+      const d = track.frames[i];
+      if (d && d.bindTo && d.bindTo !== 'none' && String(d.targetId) === fid) sample = d;
+    }
+    return sample;
+  }
+
+  /* v5.4.1：把这个火柴人身上「绑定」的元件（配饰 / 图形 / 对话框 / 画笔）一起铺到动作覆盖的每一帧。
+     不这么做的话：动作有 20 帧、配饰轨道只有 1 帧，从第 2 帧起配饰就"掉了"；
+     反过来火柴人某帧离场（动作该帧为 null）时，配饰也得跟着离场，否则会留在原地飘着。
+     配饰的位置是渲染时按 offX/offY + 当前帧火柴人关节实时算的，所以这里只需要补帧，不用改坐标。 */
+  function syncBoundChildrenFrames(figId, startIndex, count, hasFigureAt) {
+    const fid = String(figId);
+    let touched = 0;
+    for (const tid in AppState.tracks) {
+      if (String(tid) === fid) continue;
+      const tr = AppState.tracks[tid];
+      if (!tr || !tr.frames) continue;
+
+      /* 这条轨道是不是"绑在这个火柴人身上的元件" */
+      const sample = boundSampleOf(tr, fid);
+      if (!sample) continue;
+
+      /* 优先拿当前帧那份当克隆源，保证颜色/尺寸/挂载点是用户最后看到的状态 */
+      const cur = tr.frames[startIndex];
+      const src = (cur && cur.bindTo && cur.bindTo !== 'none' && String(cur.targetId) === fid) ? cur : sample;
+
+      let changed = false;
+      for (let i = 0; i < count; i++) {
+        const idx = startIndex + i;
+        while (tr.frames.length <= idx) tr.frames.push(null);
+        if (!hasFigureAt[i]) {
+          if (tr.frames[idx]) { tr.frames[idx] = null; changed = true; }
+          continue;
+        }
+        if (!tr.frames[idx]) {
+          tr.frames[idx] = cloneObjectKeepImg(src);
+          changed = true;
+        }
+      }
+      if (changed) {
+        touched++;
+        for (let i = 0; i < count; i++) invalidateFrameThumb(startIndex + i, tid);
+      }
+    }
+    return touched;
+  }
+
+  /* v5.4.2：子轨道补间在火柴人轨道里「插入」帧时，绑定元件的轨道必须在同一位置插入等量空帧。
+     否则从那之后整条时间线就错位了 —— 配饰的帧还停在旧索引上，越往后偏得越远。
+     这里只插入空占位，具体内容随后交给 tweenBoundChildren 填。 */
+  function spliceBoundChildrenFrames(figId, at, count) {
+    if (!(count > 0)) return 0;
+    const fid = String(figId);
+    let touched = 0;
+    for (const tid in AppState.tracks) {
+      if (String(tid) === fid) continue;
+      const tr = AppState.tracks[tid];
+      if (!boundSampleOf(tr, fid)) continue;
+      while (tr.frames.length < at) tr.frames.push(null);
+      tr.frames.splice(at, 0, ...new Array(count).fill(null));
+      for (let i = at; i < tr.frames.length; i++) invalidateFrameThumb(i, tid);
+      touched++;
+    }
+    return touched;
+  }
+
+  /**
+   * 先把「绑定元件」的补间数据算好：每条轨道一份长度 count 的数组。
+   * 必须在火柴人插帧之前调用 —— 插帧会让 f2Idx 指向别的帧，之后再算就取不到正确的首尾关键帧。
+   * 内容优先用该元件自己的补间结果（offX/offY/缩放/旋转都会插值），取不到就退回克隆当前帧那份。
+   */
+  function buildBoundChildTweens(figId, startIdx, f2Idx, count) {
+    const fid = String(figId);
+    const map = {};
+    for (const tid in AppState.tracks) {
+      if (String(tid) === fid) continue;
+      const tr = AppState.tracks[tid];
+      if (!tr || !tr.frames) continue;
+      const sample = boundSampleOf(tr, fid);
+      if (!sample) continue;
+
+      let tws = null;
+      try {
+        tws = buildTweenFrames(AppState.frames[startIdx], AppState.frames[f2Idx], count, tid, startIdx, f2Idx);
+      } catch (_) { tws = null; }
+
+      const fallback = tr.frames[startIdx] || sample;
+      const out = [];
+      for (let i = 0; i < count; i++) {
+        const tw = tws && tws[i];
+        const src = (tw && tw.objects) ? (tw.objects.find(o => String(o.id) === String(tid)) || null) : null;
+        const base = src || fallback;
+        if (!base) { out.push(null); continue; }
+        const c = cloneObjectKeepImg(base);
+        c.id = base.id;
+        out.push(c);
+      }
+      map[tid] = out;
+    }
+    return map;
+  }
+
+  /**
+   * 把上面算好的补间帧填进绑定元件的轨道。
+   * 落点严格复用火柴人那套：前 used 个填进已存在的空档 slots[]，其余随插帧落到 f2Idx 之后，逐帧对齐。
+   */
+  function tweenBoundChildren(figId, startIdx, f2Idx, count, used, slots, childTweens) {
+    const fid = String(figId);
+    let touched = 0;
+    for (const tid in childTweens) {
+      const tr = AppState.tracks[tid];
+      if (!tr || !tr.frames) continue;
+      const data = childTweens[tid];
+      let changed = false;
+      for (let i = 0; i < count; i++) {
+        const idx = (i < used) ? slots[i] : (f2Idx + (i - used));
+        while (tr.frames.length <= idx) tr.frames.push(null);
+        if (!getTrackFrame(fid, idx)) {           /* 火柴人这一帧不在，配饰也不该在 */
+          if (tr.frames[idx]) { tr.frames[idx] = null; changed = true; }
+          continue;
+        }
+        if (!tr.frames[idx] && data[i]) {
+          tr.frames[idx] = data[i];
+          changed = true;
+        }
+      }
+      if (changed) {
+        touched++;
+        for (let i = 0; i < count; i++) {
+          invalidateFrameThumb((i < used) ? slots[i] : (f2Idx + (i - used)), tid);
+        }
+      }
+    }
+    return touched;
+  }
+
   function applyActionPreset(preset) {
     if (!AppState.selected || AppState.selected.type !== 'figure') return alert('请先选中一个火柴人');
     const targetId = String(AppState.selected.id);
@@ -1416,6 +1604,9 @@ function setGlobalPropForBound(obj, path, value) {
     const templateFig = cloneObjectKeepImg(AppState.selected);
     const startIndex = AppState.currentFrameIndex;                     /* 17A */
     const t = ensureTrack(targetId, AppState.selected.name);
+
+    /* 每写一帧记录一下「这一帧有没有火柴人」，用来同步绑定配饰 */
+    const figPresent = [];
 
     preset.frames.forEach((data, i) => {
       const frameIdx = startIndex + i;
@@ -1565,10 +1756,14 @@ function setGlobalPropForBound(obj, path, value) {
 
       /* 26=null：源动作该帧为空，目标该帧也置空（角色"离场"） */
       t.frames[frameIdx] = fig;
+      figPresent.push(!!fig);
 
       invalidateFrameThumb(frameIdx, targetId);
       if (AppState.frames[frameIdx]) AppState.frames[frameIdx].isTween = false;
     });
+
+    /* v5.4.1：身上的绑定配饰/图形一起铺满动作覆盖到的帧，跟着火柴人同生同灭 */
+    const syncedChildren = syncBoundChildrenFrames(targetId, startIndex, preset.frames.length, figPresent);
 
     syncMainLengthFromTracks();
     trimTrailingEmptyFrames();
@@ -1576,7 +1771,9 @@ function setGlobalPropForBound(obj, path, value) {
     AppState.selected = isSubTrackMode() ? getActiveTrackObject() : (AppState.objects.find(o => String(o.id) === targetId) || null);
     updateFrameBar();
     EventBus.emit('app:update', '应用动作');
-    alert('动作已应用');
+    alert(syncedChildren > 0
+      ? `动作已应用（${syncedChildren} 个绑定元件已同步到 ${preset.frames.length} 帧）`
+      : '动作已应用');
   }
 
   function exportActionPresets() {
@@ -1975,6 +2172,13 @@ function importActionPresets() {
   /* ==================== 对象工厂 ==================== */
   function makeFigure(x, y, color, lw) {
     return {
+      /* v5.7：透视 = 每条线（躯干/双臂/双腿）独立的头、尾粗细倍率。
+         骨盆端（body.start + 双腿 start）与脖子端（body.end + 双臂 start）在 UI 层自动同步。
+         旧版 11 关节 z 模型已废弃。 */
+      spatial: {
+        strength: 0,
+        lines: SKFE.systems.spatial.defaultLines()
+      },
       id: ++uid, type: 'figure', name: 'Stickman',
       x, y, color: color || '#111111', lw: lw || 11,
       alpha: 1, scale: 1.67, locked: false,
@@ -1996,6 +2200,9 @@ function importActionPresets() {
       },
       depth: { enabled: false, useCustom: false, customColor: '#555555' },
       ikEnabled: false,
+      /* v5.2.0 四角扭曲（8 点透视变形）：corners 为相对于对象盒中心、以盒宽高为单位的
+         像素偏移（TL/TR/BR/BL）。null 表示尚未初始化，开启时按当前 OBB 现场生成。 */
+      distort: { enabled: false, corners: null, baseW: 0, baseH: 0 },
       pinned: { footL: false, footR: false, handL: false, handR: false, pelvis: false },
       pinnedPos: { footL: null, footR: null, handL: null, handR: null, pelvis: null },
       layer: { body: 1, head: 2, armL: 1, armR: 1, legL: 1, legR: 1 },
@@ -2015,7 +2222,7 @@ function importActionPresets() {
     let h = img.naturalHeight || img.height;
     const r = Math.min(1, maxW / w);
     w *= r; h *= r;
-    return { id: ++uid, type: 'image', name: 'Image', img, x, y, w, h, alpha: 1, scale: 1, layer: 1, locked: false, rot: 0, mirror: false, ax: 0, ay: 0 };
+    return { id: ++uid, type: 'image', name: 'Image', img, x, y, w, h, alpha: 1, scale: 1, layer: 1, locked: false, rot: 0, mirror: false, ax: 0, ay: 0, distort: makeDistortField() };
   }
 
   function makeShape(shapeType, x, y) {
@@ -2023,7 +2230,8 @@ function importActionPresets() {
       id: ++uid, type: 'shape', shape: shapeType, name: 'Shape',
       x, y, w: 60, h: 60, alpha: 1, scale: 1, layer: 1, locked: false,
       fillColor: '#ff6b6b', strokeColor: '#333333', strokeWidth: 0,
-      bindTo: 'none', targetId: null, offX: 0, offY: 0, rot: 0, ax: 0, ay: 0, mirror: false
+      bindTo: 'none', targetId: null, offX: 0, offY: 0, rot: 0, ax: 0, ay: 0, mirror: false,
+      distort: makeDistortField()
     };
   }
 
@@ -2036,7 +2244,8 @@ function importActionPresets() {
     return {
       id: ++uid, type: 'acc', name: 'Accessory',
       img, x, y, w, h, alpha: 1, scale: 1, layer: 1, locked: false,
-      bindTo: 'none', targetId: null, offX: 0, offY: 0, rot: 0, ax: 0, ay: 0, mirror: false
+      bindTo: 'none', targetId: null, offX: 0, offY: 0, rot: 0, ax: 0, ay: 0, mirror: false,
+      distort: makeDistortField()
     };
   }
 
@@ -2048,8 +2257,14 @@ function importActionPresets() {
       textColor: '#000000', isGradient: false, gradientColor: '#4a90ff',
       fontSize: 20, fillColor: '#ffffff', strokeColor: '#000000', strokeWidth: 2,
       isMirrored: false, customSize: false, customW: 180, customH: 90,
-      bindTo: 'none', targetId: null, offX: 0, offY: 0, rot: 0, ax: 0, ay: 0
+      bindTo: 'none', targetId: null, offX: 0, offY: 0, rot: 0, ax: 0, ay: 0,
+      distort: makeDistortField()
     };
+  }
+
+  /* v5.2.0 四角扭曲默认字段（corners 为 null 时在开启瞬间按 OBB 生成） */
+  function makeDistortField() {
+    return { enabled: false, corners: null, baseW: 0, baseH: 0 };
   }
 
   function generateName(obj) {
@@ -2310,6 +2525,23 @@ function importActionPresets() {
     }
   }
 
+  /* ==================== v5.3.1 挂载贴膜（bound skinning） ==================== */
+  /* 父火柴人被四角扭曲后，挂在它身上的元件（配饰/图形/对话框/画笔）必须一起走。
+     做法不是"给配饰单独算一个近似变换"，而是让它【继承父级的单应性】：
+     distort.getMapping(child) 会把父级的 H 换到子对象自己的盒空间里再做一次合成，
+     于是配饰的每一个像素和火柴人身体走的是同一个投影 —— 视觉上就是"整张图一起变形"。
+     这里只负责告诉 distort 模块"我的父级是谁、它现在是什么映射"。 */
+  function getParentWarp(obj) {
+    const DZ = SKFE.systems.distort;
+    if (!DZ || !obj || obj.type === 'figure') return null;
+    if (!DZ.supports(obj)) return null;              /* 不支持的元件不参与，避免白算 */
+    if (obj.bindTo === 'none' || !obj.targetId) return null;
+    const list = _renderList || AppState.objects;
+    const fig = list.find(o => o.id === obj.targetId && o.type === 'figure');
+    if (!fig || !DZ.isActive(fig)) return null;
+    return DZ.getMapping(fig);
+  }
+
   function getBindTransform(obj) {
     if (obj.bindTo === 'none' || !obj.targetId) {
       return { x: obj.x, y: obj.y, angle: (obj.rot || 0) * Math.PI / 180, syncScale: 1 };
@@ -2380,7 +2612,11 @@ function importActionPresets() {
     const offX = obj.offX * g, offY = obj.offY * g;
     const finalX = baseX + Math.cos(baseAngle) * offX - Math.sin(baseAngle) * offY;
     const finalY = baseY + Math.sin(baseAngle) * offX + Math.cos(baseAngle) * offY;
-    return { x: finalX, y: finalY, angle: baseAngle + (obj.rot || 0) * Math.PI / 180, syncScale: g };
+    return {
+      x: finalX, y: finalY,
+      angle: baseAngle + (obj.rot || 0) * Math.PI / 180,
+      syncScale: g
+    };
   }
 
   function getHandles(j, f) {
@@ -2680,15 +2916,166 @@ function importActionPresets() {
     return a;
   }
 
+  /* v5.4.0 ── 变形中的火柴人：整体离屏渲染 + 网格贴膜 ─────────────────────
+     旧做法是把 16 个关节点逐个过单应性再重新描线，三个副作用：
+       1) 线宽是全局常数，拉长的小腿变成"细长线"，看着像换了动作；
+       2) 头部半径按「盒中心」缩放，和颈→头的实际距离不一致 → 头和身子分开；
+       3) 关节平滑半径 / 橡皮擦遮罩都在变形后的空间里重算，形状跑偏。
+     现在改成：先在【未变形】状态把火柴人画进离屏画布，再把这张图按同一个单应性
+     做网格贴膜。于是"只改形状、不改动作"，和配饰走的是同一套像素流，
+     导出 4x 时离屏画布也按导出的设备像素比例生成，清晰度不损失。 */
+  function queueFigureBitmapWarp(f, mp, isSel, isExporting, opts) {
+    if (!mp || !mp.frame) return false;
+    const DZ = SKFE.systems.distort;
+    const fr = mp.frame;
+
+    /* 画到盒外的元素（发光 / 描边偏移 / 地面投影）要留出余量，否则会被切掉。
+       余量只是把「源矩形」放大，单应性本身不变，所以控制点位置完全不受影响。 */
+    let margin = 8;
+    if (f.glow && f.glow.enabled && f.glow.blur > 0) margin += f.glow.blur;
+    if (f.light && f.light.enabled) margin += 2 * (f.light.size || 1) + 4;
+    if (groundShadowEnabled) margin += 48;
+
+    const ex = {
+      w: fr.w + margin * 2,
+      h: fr.h + margin * 2,
+      ux: fr.ux, uy: fr.uy, vx: fr.vx, vy: fr.vy, ox: fr.ox, oy: fr.oy
+    };
+    /* v5.6.1：框架冻结之后，姿势变化可能让火柴人长出冻结框之外（抬手、劈叉…）。
+       源矩形必须撑到「冻结框 ∪ 当前内容框」，否则超出的部分会被离屏画布直接裁掉。
+       注意只放大 w/h、不动 ox/oy —— 盒坐标原点仍在中心，H 本身完全不受影响。 */
+    if (mp.liveFrame) {
+      const lf = mp.liveFrame;
+      let hw = ex.w / 2, hh = ex.h / 2;
+      const lc = [
+        { x: -lf.w / 2, y: -lf.h / 2 }, { x: lf.w / 2, y: -lf.h / 2 },
+        { x: lf.w / 2, y: lf.h / 2 }, { x: -lf.w / 2, y: lf.h / 2 }
+      ];
+      for (const q of lc) {
+        const b = DZ.worldToBox(fr, DZ.boxToWorld(lf, q));
+        if (!isFinite(b.x) || !isFinite(b.y)) continue;
+        hw = Math.max(hw, Math.abs(b.x) + margin);
+        hh = Math.max(hh, Math.abs(b.y) + margin);
+      }
+      ex.w = hw * 2; ex.h = hh * 2;
+    }
+    const mpEx = { frame: ex, H: mp.H };
+
+    /* 世界 → 设备像素的倍率（导出时会自动变大，所以导出图不会有马赛克） */
+    let pxScale = 1;
+    try {
+      const tr = ctx.getTransform();
+      pxScale = Math.hypot(tr.a, tr.b) || 1;
+    } catch (_) {}
+    pxScale = Math.min(Math.max(pxScale, 0.5), 6);
+
+    let cw = Math.ceil(ex.w * pxScale);
+    let ch = Math.ceil(ex.h * pxScale);
+    const MAXPIX = 8e6;
+    if (cw * ch > MAXPIX) {
+      const k = Math.sqrt(MAXPIX / (cw * ch));
+      pxScale *= k;
+      cw = Math.ceil(ex.w * pxScale);
+      ch = Math.ceil(ex.h * pxScale);
+    }
+    if (!(cw > 1 && ch > 1)) return false;
+
+    const scratch = document.createElement('canvas');
+    scratch.width = cw; scratch.height = ch;
+    const sctx = scratch.getContext('2d');
+    if (!sctx) return false;
+
+    /* 世界 → 离屏像素：先按 frame 换到盒空间，再平移到 [0,w]×[0,h] */
+    const det = fr.ux * fr.vy - fr.uy * fr.vx;
+    if (Math.abs(det) < 1e-12) return false;
+    const Ba = fr.vy / det, Bb = -fr.uy / det;
+    const Bc = -fr.vx / det, Bd = fr.ux / det;
+    const Be = (fr.vx * fr.oy - fr.vy * fr.ox) / det;
+    const Bf = (fr.uy * fr.ox - fr.ux * fr.oy) / det;
+    sctx.setTransform(
+      pxScale * Ba, pxScale * Bb, pxScale * Bc, pxScale * Bd,
+      pxScale * (Be + ex.w / 2), pxScale * (Bf + ex.h / 2)
+    );
+
+    /* 把这一帧的火柴人按未变形状态画进离屏画布（内部可能再切 ctx，但会自己还原） */
+    const savedCtx = ctx;
+    const savedQueue = renderQueue;
+    let ok = true;
+    ctx = sctx;
+    renderQueue = [];
+    try {
+      queueFigure(f, false, isExporting, Object.assign({}, opts, { __noDistort: true }));
+      const items = renderQueue;
+      items.sort((a, b) => a.level - b.level);
+      for (const it of items) it.draw();
+    } catch (err) {
+      ok = false;
+      if (window.console && console.warn) console.warn('[distort] 火柴人整体贴膜失败，退回未变形绘制', err);
+    } finally {
+      ctx = savedCtx;
+      renderQueue = savedQueue;
+    }
+    if (!ok) return false;
+
+    const minOwnLayer = Math.min.apply(null, Object.values(f.layer));
+    renderQueue.push({
+      level: minOwnLayer,
+      draw: () => {
+        ctx.save();
+        DZ.drawWarpedBitmap(ctx, scratch, mpEx, { grid: Math.max(8, DZ.gridFor()) });
+        ctx.restore();
+        /* v5.6.1：这里【不再】补画一圈选中虚线框。
+           未变形的火柴人本来就只有关节点、没有框；变形后多画一圈框反而是特例，
+           看上去像「物体被这个框限制住了」。要框的时候：
+             · 开「变换框」→ drawTransformBox
+             · 开「四角扭曲」→ drawOverlay 的 8 点编辑框
+           两者都没开 = 纯预览态，只留关节点。 */
+      }
+    });
+
+    /* v5.5.0：变形状态下恢复关节手柄。
+       手柄画在「映射后」的位置（和用户看到的图像完全重合），
+       命中测试与拖拽则走逆单应性反算回源空间 —— 见 distortInvWorld()。
+       这两件事必须成对实现，只做一半就会出现「看得到点不到」。 */
+    if (isSel && !isExporting && !hideJointsEnabled) {
+      renderQueue.push({
+        level: 99999,
+        draw: () => {
+          let jj = null;
+          try { jj = jointData(f); } catch (_) { return; }
+          if (!jj) return;
+          /* v5.6.2：jointData 给的是「未旋转的本地坐标」，必须先过一遍人物自身的
+             刚性变换（绕 o.x,o.y 旋转 + 镜像）才变成世界坐标，然后再进单应性。
+             漏掉这一步会出现「火柴人转了、关节点没转」，点为量全飘在画外。
+             普通绘制那条路是靠 wrapFig() 的 ctx.rotate 顺带解决的，这里没有 ctx 变换，得自己算。 */
+          const rm = figureRigidMatrix(f);
+          paintJointDots(f, jj, (h) => {
+            const w = tboxMatApply(rm, h.p);
+            return DZ.mapWorld(mp, w);
+          });
+        }
+      });
+    }
+    return true;
+  }
+
   function queueFigure(f, isSel, isExporting, opts) {
     opts = opts || {};
+    /* v5.4.0：开启扭曲时改成整体贴膜，见 queueFigureBitmapWarp */
+    if (!opts.__noDistort) {
+      const dm = SKFE.systems.distort.getMapping(f);
+      if (dm && queueFigureBitmapWarp(f, dm, isSel, isExporting, opts)) return;
+    }
     const alphaMul = resolveAlphaMul(opts, f);
     const tint = opts.tint || null;
     const isGhost = !!opts.isGhost;
     const effColor = tint || f.color;
 
     const j = jointData(f);
-    const curLW = f.lw * f.scale;
+    let curLW = f.lw * f.scale;
+    /* v5.4.0：扭曲不再逐点映射关节再重新描线（那会让"动作"看起来变了），
+       而是整体贴膜 —— 走到这里一定是未变形状态。 */
+    const distMap = null;
     const smoothVal = (f.jointSmooth !== undefined) ? f.jointSmooth : 1;
     const radius = smoothVal <= 0.01 ? 0 : Math.max(curLW * 2.2 * smoothVal, 1);
     const minOwnLayer = Math.min(...Object.values(f.layer));
@@ -2707,6 +3094,7 @@ function importActionPresets() {
       return f.color;
     };
 
+    /* v5.4.0：旋转/镜像在这里照常烘焙进离屏画布，再由单应性整体贴膜 */
     const hasRot = !!(f.rot);
     const hasMirror = !!(f.mirror);
     const wrapFig = (fn) => {
@@ -2786,8 +3174,16 @@ function importActionPresets() {
         ctx.beginPath(); smoothPolyline([j.pelvis, j.waistPoint, j.neck], radius); ctx.stroke();
         ctx.restore();
       }
-      ctx.strokeStyle = effColor; ctx.lineWidth = curLW;
-      ctx.beginPath(); smoothPolyline([j.pelvis, j.waistPoint, j.neck], radius); ctx.stroke();
+      const spatial = SKFE.systems.spatial.getSpatialConfig(f);
+      if (spatial) {
+        SKFE.systems.spatial.drawZVariedLimb(
+          ctx, [j.pelvis, j.waistPoint, j.neck], radius, curLW, effColor,
+          { start: spatial.lines.body.start, end: spatial.lines.body.end }, spatial.strength
+        );
+      } else {
+        ctx.strokeStyle = effColor; ctx.lineWidth = curLW;
+        ctx.beginPath(); smoothPolyline([j.pelvis, j.waistPoint, j.neck], radius); ctx.stroke();
+      }
 
       if (needsMask) ctx.restore(); // 恢复躯干遮罩
       ctx.restore();
@@ -2844,10 +3240,18 @@ function importActionPresets() {
         drawLimbWithGradient(f, pts, radius, f.joint.len, (isGhost && tint) ? tint : null, baseColor);
       } else {
         const strokeColor = getLimbColor(limbName);
-        ctx.strokeStyle = strokeColor;
-        ctx.lineCap = 'round';
-        ctx.beginPath(); smoothPolyline(pts, radius); ctx.stroke();
-        drawLimbEndCaps(pts, curLW, strokeColor);
+          const spatial = SKFE.systems.spatial.getSpatialConfig(f);
+          if (spatial) {
+            /* v5.7：每条线独立的头/尾倍率（骨盆/脖子端在 UI 层已同步进 lines） */
+            const line = spatial.lines[limbName] || { start: 1, end: 1 };
+            SKFE.systems.spatial.drawZVariedLimb(ctx, pts, radius, curLW, strokeColor,
+              { start: line.start, end: line.end }, spatial.strength);
+          } else {
+          ctx.strokeStyle = strokeColor;
+          ctx.lineCap = 'round';
+          ctx.beginPath(); smoothPolyline(pts, radius); ctx.stroke();
+          drawLimbEndCaps(pts, curLW, strokeColor);
+        }
       }
       ctx.restore();
       if (needsMask) ctx.restore();
@@ -3017,33 +3421,42 @@ function importActionPresets() {
     renderQueue.push({ level: f.layer.body, draw: wrapFig(drawMaskedBody) });
 
     if (isSel && !isExporting && !hideJointsEnabled) {
-      renderQueue.push({ level: 99999, draw: wrapFig(() => {
-        for (const h of getHandles(j, f)) {
-          if (!isJointInGroup(h.name, isolatedJointName)) continue; // 隔离模式：只画选中的那一组
-          const isPinned = f.pinned && f.pinned[h.name];
-          let color = 'rgba(74,144,255,.85)';
-          if (isPinned) color = '#ef4444';
-          else if (jointColorDiff) {
-            if (h.name === 'head') color = '#f59e0b';
-            else if (['pelvis', 'waist', 'neck'].includes(h.name)) color = '#3b82f6';
-            else if (['elbowL', 'handL', 'wristL'].includes(h.name)) color = '#10b981';
-            else if (['elbowR', 'handR', 'wristR'].includes(h.name)) color = '#ef4444';
-            else if (['kneeL', 'footL', 'toeL'].includes(h.name)) color = '#8b5cf6';
-            else if (['kneeR', 'footR', 'toeR'].includes(h.name)) color = '#ec4899';
-          }
-          ctx.beginPath(); ctx.arc(h.p.x, h.p.y, jointSize, 0, TAU);
-          ctx.fillStyle = color;
-          ctx.fill();
-          ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
-          if (isPinned) {
-            ctx.font = '10px system-ui';
-            ctx.fillStyle = '#fff';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText('●', h.p.x, h.p.y + 1);
-          }
-        }
-      })});
+      renderQueue.push({ level: 99999, draw: wrapFig(() => paintJointDots(f, j, null)) });
+    }
+  }
+
+  /**
+   * 画关节手柄圆点。
+   * @param posOf 可选：把关节源坐标换成「实际要画的世界坐标」。
+   *              未变形时传 null（直接用 h.p）；变形时传 mapWorld 后的位置。
+   */
+  function paintJointDots(f, j, posOf) {
+    for (const h of getHandles(j, f)) {
+      if (!isJointInGroup(h.name, isolatedJointName)) continue; // 隔离模式：只画选中的那一组
+      const p = posOf ? posOf(h) : h.p;
+      if (!p || !isFinite(p.x) || !isFinite(p.y)) continue;
+      const isPinned = f.pinned && f.pinned[h.name];
+      let color = 'rgba(74,144,255,.85)';
+      if (isPinned) color = '#ef4444';
+      else if (jointColorDiff) {
+        if (h.name === 'head') color = '#f59e0b';
+        else if (['pelvis', 'waist', 'neck'].includes(h.name)) color = '#3b82f6';
+        else if (['elbowL', 'handL', 'wristL'].includes(h.name)) color = '#10b981';
+        else if (['elbowR', 'handR', 'wristR'].includes(h.name)) color = '#ef4444';
+        else if (['kneeL', 'footL', 'toeL'].includes(h.name)) color = '#8b5cf6';
+        else if (['kneeR', 'footR', 'toeR'].includes(h.name)) color = '#ec4899';
+      }
+      ctx.beginPath(); ctx.arc(p.x, p.y, jointSize, 0, TAU);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
+      if (isPinned) {
+        ctx.font = '10px system-ui';
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('●', p.x, p.y + 1);
+      }
     }
   }
 
@@ -3060,6 +3473,17 @@ function importActionPresets() {
     const b = imageBounds(im);
     const { ax, ay } = getAnchorOffset(im, im.scale);
     const rot = (im.rot || 0) * Math.PI / 180;
+    /* v5.2.0 四角扭曲：位图走 16x16 网格切片（Mesh Warping），绝不逐像素 CPU 插值 */
+    const distMap = SKFE.systems.distort.getMapping(im);
+    if (distMap) {
+      renderQueue.push({ level: im.layer, draw: () => {
+        ctx.save();
+        ctx.globalAlpha = im.alpha * alphaMul;
+        SKFE.systems.distort.drawWarpedBitmap(ctx, im.img, distMap);
+        ctx.restore();
+      }});
+      return;
+    }
     renderQueue.push({ level: im.layer, draw: () => {
       ctx.save();
       ctx.globalAlpha = im.alpha * alphaMul;
@@ -3098,6 +3522,23 @@ function importActionPresets() {
     ctx.translate(-tr.x, -tr.y);
   }
 
+  /* v5.3.1：变形对象的选中虚线框 —— 沿变形后的四边形走，而不是原始矩形 */
+  function strokeWarpQuad(mp, color) {
+    if (!mp) return;
+    const q = mp.dst.map(p => SKFE.systems.distort.boxToWorld(mp.frame, p));
+    if (!q.every(p => isFinite(p.x) && isFinite(p.y))) return;
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    for (let i = 0; i < 4; i++) { if (i === 0) ctx.moveTo(q[i].x, q[i].y); else ctx.lineTo(q[i].x, q[i].y); }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
   function queueAcc(acc, isSel, isExporting, opts) {
     opts = opts || {};
     const alphaMul = resolveAlphaMul(opts, acc);
@@ -3106,6 +3547,20 @@ function importActionPresets() {
     const finalScale = acc.scale * trans.syncScale;
     const w = acc.w * finalScale, h = acc.h * finalScale;
     const { ax, ay } = getAnchorOffset(acc, finalScale);
+    /* v5.2.0 四角扭曲：配饰同样是位图，走网格切片 */
+    const distMap = SKFE.systems.distort.getMapping(acc);
+    if (distMap) {
+      renderQueue.push({ level: acc.layer, draw: () => {
+        ctx.save();
+        ctx.globalAlpha = acc.alpha * alphaMul;
+        SKFE.systems.distort.drawWarpedBitmap(ctx, acc.img, distMap);
+        ctx.restore();
+        if (isSel && !isExporting && !transformBoxOn) {
+          strokeWarpQuad(distMap, acc.locked ? 'rgba(239, 68, 68, 0.95)' : 'rgba(255,165,0,.95)');
+        }
+      }});
+      return;
+    }
     renderQueue.push({ level: acc.layer, draw: () => {
       ctx.save();
       applyFigTransformCtx(figTr);
@@ -3139,6 +3594,35 @@ function importActionPresets() {
     const w = shape.w * finalScale, h = shape.h * finalScale;
     const lw = shape.strokeWidth * finalScale;
     const { ax, ay } = getAnchorOffset(shape, finalScale);
+    /* v5.2.0 四角扭曲：图形走「路径顶点映射」，填充/描边重新成路径，缩放不失真 */
+    const distMap = SKFE.systems.distort.getMapping(shape);
+    if (distMap) {
+      /* 盒空间多边形（形状的本地路径坐标与 OBB 的盒坐标完全对齐） */
+      let pts;
+      if (shape.shape === 'circle') {
+        pts = SKFE.systems.distort.ellipsePoints(w / 2, h / 2, 64);
+      } else if (shape.shape === 'rect') {
+        pts = [{ x: -w / 2, y: -h / 2 }, { x: w / 2, y: -h / 2 }, { x: w / 2, y: h / 2 }, { x: -w / 2, y: h / 2 }];
+      } else {
+        pts = [{ x: 0, y: -h / 2 }, { x: w / 2, y: h / 2 }, { x: -w / 2, y: h / 2 }];
+      }
+      const lwD = lw * SKFE.systems.distort.centerScale(distMap);
+      renderQueue.push({ level: shape.layer, draw: () => {
+        ctx.save();
+        ctx.globalAlpha = shape.alpha * alphaMul;
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        SKFE.systems.distort.tracePath(ctx, distMap, pts, true);
+        const fc = tint || shape.fillColor;
+        if (fc !== 'transparent' && fc !== '#00000000') { ctx.fillStyle = fc; ctx.fill(); }
+        if (lwD > 0) { ctx.lineWidth = lwD; ctx.strokeStyle = tint || shape.strokeColor; ctx.stroke(); }
+        ctx.restore();
+        if (isSel && !isExporting && !transformBoxOn) {
+          strokeWarpQuad(distMap, shape.locked ? 'rgba(239, 68, 68, 0.95)' : 'rgba(255,165,0,.95)');
+        }
+      }});
+      return;
+    }
     renderQueue.push({ level: shape.layer, draw: () => {
       ctx.save();
       applyFigTransformCtx(figTr);
@@ -3179,6 +3663,8 @@ function importActionPresets() {
     const fontSize = bubble.fontSize * finalScale;
     const { ax, ay } = getAnchorOffset(bubble, finalScale);
     renderQueue.push({ level: bubble.layer, draw: () => {
+      /* v5.2.0：扭曲分支需要回到「纯世界坐标」下重绘，这里先记下父级变换 */
+      const baseM = ctx.getTransform();
       ctx.save();
       applyFigTransformCtx(figTr);
       ctx.translate(trans.x + ax, trans.y + ay);
@@ -3217,6 +3703,53 @@ function importActionPresets() {
         h = Math.max(50 * finalScale, lines.length * lineHeight + paddingY * 2);
       }
       bubble.w = w / finalScale; bubble.h = h / finalScale;
+      /* v5.2.0 四角扭曲：轮廓按采样点逐点映射重绘；文字按盒中心的雅可比做局部仿射，
+         字号与倾角随透视自然变化，仍然是矢量文字而不是贴图。 */
+      const distMap = SKFE.systems.distort.getMapping(bubble);
+      if (distMap) {
+        const outline = SKFE.systems.distort.bubblePoints(w, h, 10);
+        const lwD = lw * SKFE.systems.distort.centerScale(distMap);
+        ctx.save();
+        ctx.setTransform(baseM.a, baseM.b, baseM.c, baseM.d, baseM.e, baseM.f);
+        ctx.globalAlpha = bubble.alpha * alphaMul;
+        ctx.beginPath();
+        SKFE.systems.distort.tracePath(ctx, distMap, outline, true);
+        if (bubble.fillColor !== 'transparent') { ctx.fillStyle = bubble.fillColor; ctx.fill(); }
+        if (lwD > 0) {
+          ctx.lineWidth = lwD; ctx.strokeStyle = bubble.strokeColor;
+          ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.stroke();
+        }
+        ctx.restore();
+
+        if (bubble.text) {
+          const A = SKFE.systems.distort.localAffine(distMap);
+          ctx.save();
+          ctx.setTransform(baseM.a, baseM.b, baseM.c, baseM.d, baseM.e, baseM.f);
+          ctx.globalAlpha = bubble.alpha * alphaMul;
+          ctx.transform(A.a, A.b, A.c, A.d, A.e, A.f);
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.font = `${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
+          const totalHeight = lines.length * lineHeight;
+          const startY = -totalHeight / 2 + lineHeight / 2;
+          lines.forEach((line, i) => {
+            const y = startY + i * lineHeight;
+            if (bubble.isGradient) {
+              const g = ctx.createLinearGradient(0, y - lineHeight / 2, 0, y + lineHeight / 2);
+              g.addColorStop(0, bubble.textColor); g.addColorStop(1, bubble.gradientColor);
+              ctx.fillStyle = g;
+            } else {
+              ctx.fillStyle = bubble.textColor;
+            }
+            ctx.fillText(line, 0, y);
+          });
+          ctx.restore();
+        }
+        ctx.restore();
+        if (isSel && !isExporting && !transformBoxOn) {
+          strokeWarpQuad(distMap, bubble.locked ? 'rgba(239, 68, 68, 0.95)' : 'rgba(255,165,0,.95)');
+        }
+        return;
+      }
       ctx.save();
       ctx.globalAlpha = bubble.alpha * alphaMul;
       if (bubble.isMirrored) ctx.scale(-1, 1);
@@ -3328,6 +3861,121 @@ function importActionPresets() {
   }
 
   /* 6.3.2 画笔元件渲染（边先芯后：同一笔内"边被芯覆盖"） */
+  /* ==================== v5.3.1 画笔 ink 的四角扭曲 ==================== */
+  /* 笔迹点逐个过单应性，线宽按该点的局部比例缩放；擦除遮罩走同一套映射，
+     保证"被擦掉的洞"跟着一起变形。挂载在火柴人身上时 mp 里已经合成父级单应性，
+     所以整条笔迹会和身体走同一个投影（而不是只在挂载点附近做一阶近似）。 */
+  function drawInkWarped(c, ink, mp, alphaMul) {
+    const DL = SKFE.systems.distort;
+    const LM = getInkLocalMatrix(ink);
+    const syncScale = (ink.scale || 1) * ((getBindTransform(ink).syncScale) || 1);
+    const alpha = (ink.alpha === undefined ? 1 : ink.alpha) * alphaMul;
+
+    /* 局部坐标 → 变形后的世界坐标 */
+    const toW = (x, y) => DL.mapWorld(mp, {
+      x: LM.a * x + LM.c * y + LM.e,
+      y: LM.b * x + LM.d * y + LM.f
+    });
+    /* 局部 1 单位在 (x,y) 处对应多长世界距离 */
+    const kAt = (x, y) => {
+      const a = toW(x, y), b = toW(x + 1, y);
+      const d = Math.hypot(b.x - a.x, b.y - a.y);
+      return isFinite(d) && d > 0 ? d : 0;
+    };
+
+    c.save();
+    c.globalAlpha = alpha;
+    c.lineCap = 'round';
+    c.lineJoin = 'round';
+
+    const inkErasers = ink.eraser || [];
+    let ordered = ink.strokes;
+    if (inkErasers.length) {
+      ordered = [];
+      for (const s of ink.strokes) ordered.push({ __inkMask: false, z: (typeof s.z === 'number' ? s.z : 0), s });
+      for (const er of inkErasers) ordered.push({ __inkMask: true, z: (typeof er.z === 'number' ? er.z : 1e9), er });
+      ordered.sort((a, b) => a.z - b.z);
+    }
+
+    for (const item of ordered) {
+      /* ---- 擦除遮罩 ---- */
+      if (item.__inkMask) {
+        const pts = item.er && item.er.points;
+        if (!pts || !pts.length) continue;
+        c.save();
+        c.globalCompositeOperation = 'destination-out';
+        c.globalAlpha = 1;
+        c.strokeStyle = '#000'; c.fillStyle = '#000';
+        if (unitsSafe(syncScale)) {
+          if (pts.length === 1) {
+            const p = toW(pts[0].x, pts[0].y);
+            const kk = kAt(pts[0].x, pts[0].y) / syncScale;
+            c.beginPath();
+            c.arc(p.x, p.y, Math.max((item.er.size || 1) * kk / 2, 0.3), 0, TAU);
+            c.fill();
+          } else {
+            for (let i = 1; i < pts.length; i++) {
+              const a = pts[i - 1], b = pts[i];
+              const pa = toW(a.x, a.y), pb = toW(b.x, b.y);
+              const kk = ((kAt(a.x, a.y) + kAt(b.x, b.y)) / 2) / syncScale;
+              c.lineWidth = Math.max(0.3, (item.er.size || 1) * kk);
+              c.beginPath(); c.moveTo(pa.x, pa.y); c.lineTo(pb.x, pb.y); c.stroke();
+            }
+          }
+        }
+        c.restore();
+        continue;
+      }
+
+      const s = item.__inkMask === false ? item.s : item;
+      const pts = s.points;
+      if (!pts || !pts.length) continue;
+
+      /* ---- 边 ---- */
+      if (s.borderWidth > 0 && s.borderColor) {
+        c.strokeStyle = s.borderColor;
+        c.fillStyle = s.borderColor;
+        if (pts.length === 1) {
+          const p = pts[0], q = toW(p.x, p.y);
+          const kk = kAt(p.x, p.y);
+          c.beginPath();
+          c.arc(q.x, q.y, Math.max(p.w * kk / 2, 0.4) + s.borderWidth * kk, 0, TAU);
+          c.fill();
+        } else {
+          for (let i = 1; i < pts.length; i++) {
+            const a = pts[i - 1], b = pts[i];
+            const qa = toW(a.x, a.y), qb = toW(b.x, b.y);
+            const kk = (kAt(a.x, a.y) + kAt(b.x, b.y)) / 2;
+            c.lineWidth = Math.max(0.5, ((a.w + b.w) / 2) * kk + s.borderWidth * 2 * kk);
+            c.beginPath(); c.moveTo(qa.x, qa.y); c.lineTo(qb.x, qb.y); c.stroke();
+          }
+        }
+      }
+
+      /* ---- 芯 ---- */
+      c.strokeStyle = s.color;
+      c.fillStyle = s.color;
+      if (pts.length === 1) {
+        const p = pts[0], q = toW(p.x, p.y);
+        const kk = kAt(p.x, p.y);
+        c.beginPath();
+        c.arc(q.x, q.y, Math.max(p.w * kk / 2, 0.4), 0, TAU);
+        c.fill();
+      } else {
+        for (let i = 1; i < pts.length; i++) {
+          const a = pts[i - 1], b = pts[i];
+          const qa = toW(a.x, a.y), qb = toW(b.x, b.y);
+          const kk = (kAt(a.x, a.y) + kAt(b.x, b.y)) / 2;
+          c.lineWidth = Math.max(0.4, ((a.w + b.w) / 2) * kk);
+          c.beginPath(); c.moveTo(qa.x, qa.y); c.lineTo(qb.x, qb.y); c.stroke();
+        }
+      }
+    }
+    c.restore();
+  }
+
+  function unitsSafe(v) { return isFinite(v) && Math.abs(v) > 1e-9; }
+
   function queueInk(ink, isSel, isExporting, opts) {
     opts = opts || {};
     if (!ink || !ink.strokes || !ink.strokes.length) return;
@@ -3345,6 +3993,15 @@ function importActionPresets() {
     const alpha = (ink.alpha === undefined ? 1 : ink.alpha);
 
     renderQueue.push({ level: ink.layer, draw: () => {
+      /* v5.3.1：有扭曲时（自身的，或挂载继承父火柴人的）回到世界坐标逐点映射重绘 */
+      const distInk = SKFE.systems.distort.getMapping(ink);
+      if (distInk) {
+        drawInkWarped(ctx, ink, distInk, alphaMul);
+        if (isSel && !isExporting && !transformBoxOn) {
+          strokeWarpQuad(distInk, ink.locked ? 'rgba(239, 68, 68, 0.95)' : 'rgba(255,165,0,.95)');
+        }
+        return;
+      }
       ctx.save();
       applyFigTransformCtx(figTr);
       ctx.globalAlpha = alpha * alphaMul;
@@ -3560,7 +4217,44 @@ function importActionPresets() {
   }
 
   /* ---------- 各类型对象的 OBB（与 queueXxx 渲染矩阵严格一致） ---------- */
-  function getObjectOBB(o) {
+  /* v5.3.1：挂在该火柴人身上的所有元件的整体范围（换算到火柴人自己的「未旋转局部坐标」）。
+     用于把控制点框从"光秃秃的火柴人"扩到"整个角色"，避免配饰被外推到盒外。 */
+  function getMountedExtent(fig) {
+    if (!fig) return null;
+    const list = _renderList || AppState.objects;
+    if (!list || !list.length) return null;
+    const fid = String(fig.id);
+    const rot = (fig.rot || 0) * Math.PI / 180;
+    const cs = Math.cos(-rot), sn = Math.sin(-rot);
+    let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity, hit = false;
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      if (!c || c === fig) continue;
+      if (c.type !== 'acc' && c.type !== 'shape' && c.type !== 'bubble' && c.type !== 'ink') continue;
+      if (c.bindTo === 'none' || !c.targetId || String(c.targetId) !== fid) continue;
+      const obb = getSourceOBB(c);
+      if (!obb || !obb.corners) continue;
+      for (let k = 0; k < 4; k++) {
+        const p = obb.corners[k];
+        if (!p || !isFinite(p.x) || !isFinite(p.y)) continue;
+        /* 世界 → 火柴人未旋转局部坐标（T·R·M·T⁻¹ 的逆） */
+        let dx = p.x - fig.x, dy = p.y - fig.y;
+        if (fig.rot) { const nx = dx * cs - dy * sn; const ny = dx * sn + dy * cs; dx = nx; dy = ny; }
+        if (fig.mirror) dx = -dx;
+        const lx = fig.x + dx, ly = fig.y + dy;
+        if (lx < l) l = lx;
+        if (lx > r) r = lx;
+        if (ly < t) t = ly;
+        if (ly > b) b = ly;
+        hit = true;
+      }
+    }
+    return hit ? { l, r, t, b } : null;
+  }
+
+  /* v5.3.1：这是「原始（未变形）」的 OBB —— distort 模块要靠它反算盒空间，
+     所以绝不能做变形，否则 getMapping 会自己递归自己。展示用的版本在 getObjectOBB。 */
+  function getSourceOBB(o, skipMounted) {
     if (!o) return null;
     if (o === CANVAS_BOUNDS_TARGET) {
       const w = AppState.canvasBounds.w, h = AppState.canvasBounds.h;
@@ -3570,11 +4264,20 @@ function importActionPresets() {
     }
     if (o.type === 'figure') {
       const j = jointData(o);
-      const xs = [j.headC.x, j.pelvis.x, j.neck.x, j.handL.x, j.handR.x, j.footL.x, j.footR.x, j.wristL.x, j.wristR.x, j.toeL.x, j.toeR.x];
+      /* v5.5.2：X 方向必须带上头部半径。以前这里只放了 headC.x 一个「点」，
+         而 Y 方向是 ±headR 的「范围」—— 结果脑袋比盒子宽出一大截
+         （实测头半径 54.4、盒子半宽 45.8，两侧各溢出 18.3px），
+         控制点框切着脑袋过去；超出 margin 的部分还会被离屏画布裁掉。 */
+      const xs = [j.headC.x - j.headR, j.headC.x + j.headR, j.pelvis.x, j.neck.x, j.handL.x, j.handR.x, j.footL.x, j.footR.x, j.wristL.x, j.wristR.x, j.toeL.x, j.toeR.x];
       const ys = [j.headC.y - j.headR, j.headC.y + j.headR, j.pelvis.y, j.neck.y, j.handL.y, j.handR.y, j.footL.y, j.footR.y, j.wristL.y, j.wristR.y, j.toeL.y, j.toeR.y];
-      const pad = (o.lw * o.scale) / 2 + 4;
-      const l = Math.min.apply(null, xs) - pad, r = Math.max.apply(null, xs) + pad;
-      const t = Math.min.apply(null, ys) - pad, b = Math.max.apply(null, ys) + pad;
+      const pad = (o.lw * o.scale * SKFE.systems.spatial.maxLimbWidthFactor(o)) / 2 + 4;
+      let l = Math.min.apply(null, xs) - pad, r = Math.max.apply(null, xs) + pad;
+      let t = Math.min.apply(null, ys) - pad, b = Math.max.apply(null, ys) + pad;
+      /* v5.3.1：把「挂在这具火柴人身上的元件」一起并进来。
+         否则控制点只框住火柴人那个很窄的盒子，配饰被外推到盒外十几倍，投影会直接飞掉。
+         并进来之后，4 个控制点框住的是【整个角色】，整张图才像一个整体。 */
+      const ext = skipMounted ? null : getMountedExtent(o);
+      if (ext) { l = Math.min(l, ext.l); r = Math.max(r, ext.r); t = Math.min(t, ext.t); b = Math.max(b, ext.b); }
       let m = tboxMatMul(tboxMatT(o.x, o.y), tboxMatR((o.rot || 0) * Math.PI / 180));
       if (o.mirror) m = tboxMatMul(m, tboxMatS(-1, 1));
       m = tboxMatMul(m, tboxMatT(-o.x, -o.y));
@@ -3591,6 +4294,7 @@ function importActionPresets() {
       const trans = getBindTransform(o);
       const figTr = getBoundFigureTransform(o);
       const finalScale = o.scale * trans.syncScale;
+      /* v5.3.0：父火柴人变形时，残差必须并进 OBB，否则手柄/命中框会留在没变形的位置 */
       let m = tboxMatIdentity();
       if (figTr) {
         m = tboxMatMul(tboxMatT(figTr.x, figTr.y), tboxMatR(figTr.rot * Math.PI / 180));
@@ -3632,6 +4336,127 @@ function importActionPresets() {
       return tboxObbFromCorners(tboxQuadFromMatrix(m, -w / 2, -h / 2, w / 2, h / 2));
     }
     return null;
+  }
+
+  /* ==================== v5.6.1 冻结变形框架 ====================
+   *
+   * 问题：火柴人的 OBB 是【每次渲染按当前姿势现算】的。distort 用 OBB 建「盒空间」，
+   * 又把用户拖出来的 4 个角点按 sx = 当前盒宽 / baseW 做「角点自适应缩放」再贴回去。
+   * 于是姿势一变（抬手 → 盒宽 136→315）→ sx 翻倍 → 变形结果整体被放大 →
+   * 骨盆跟着漂 18~33px。用户看到的现象是「转个关节，盆骨就跑了」。
+   *
+   * 注意：这跟「画不画包围框」完全无关 —— getSourceOBB 是渲染管线里必然要算的，
+   * 不显示框只是少描一层虚线，盒子照样每帧在算。所以「关掉包围框就能钉住骨盆」不成立。
+   *
+   * 解法：把变形框架「冻结」成一份与姿势无关的快照 d.frame0：
+   *   - w/h     冻结时的盒宽高（之后不再随姿势变）
+   *   - dx/dy   冻结时「盒中心 - 骨盆」在盒坐标轴上的分量
+   *   - scale0  冻结时的 o.scale（关节长度按 scale 以骨盆为原点缩放，要同步跟上）
+   *
+   * 每帧还原框架时：轴线（ux/uy/vx/vy）用当前的（自动跟住 rot / mirror），
+   * 中心 = 当前骨盆 + (dx·û + dy·v̂)·k。因为 rigid 变换对「骨盆 + 偏移」是线性的，
+   * 这个式子天然跟住平移、旋转、镜像；而姿势变化只会改变【现算的盒子】，
+   * 骨盆本身不动 → 框架不动 → 变形结果不动 → 盆骨钉死。
+   *
+   * frame0 全部是「相对骨盆 + 尺寸」，不含任何绝对世界坐标，所以存档 / 跨帧同步都安全。
+   */
+
+  /** 火柴人自身的刚性矩阵（绕 o.x,o.y 旋转 + 镜像），与 getSourceOBB 里那段保持一致 */
+  function figureRigidMatrix(o) {
+    let m = tboxMatMul(tboxMatT(o.x, o.y), tboxMatR((o.rot || 0) * Math.PI / 180));
+    if (o.mirror) m = tboxMatMul(m, tboxMatS(-1, 1));
+    return tboxMatMul(m, tboxMatT(-o.x, -o.y));
+  }
+
+  /** 从当前姿势的盒子 + 骨盆，生成（或重设）冻结框架。不碰 baseW/baseH，保证角点形状不被改。 */
+  function captureWarpFrame(o) {
+    if (!o || o.type !== 'figure' || !o.distort) return;
+    const obb = getSourceOBB(o);
+    if (!obb || !obb.corners || obb.corners.length < 4) return;
+    const q = obb.corners, TL = q[0], TR = q[1], BL = q[3];
+    const w = Math.hypot(TR.x - TL.x, TR.y - TL.y);
+    const h = Math.hypot(BL.x - TL.x, BL.y - TL.y);
+    if (!(w > 1e-4) || !(h > 1e-4)) return;
+    const ux = (TR.x - TL.x) / w, uy = (TR.y - TL.y) / w;
+    const vx = (BL.x - TL.x) / h, vy = (BL.y - TL.y) / h;
+    const ox = TL.x + ux * (w / 2) + vx * (h / 2);
+    const oy = TL.y + uy * (w / 2) + vy * (h / 2);
+    let j = null;
+    try { j = jointData(o); } catch (_) { return; }
+    if (!j || !j.pelvis) return;
+    const pw = tboxMatApply(figureRigidMatrix(o), j.pelvis);
+    const ddx = ox - pw.x, ddy = oy - pw.y;
+    o.distort.frame0 = {
+      w, h,
+      dx: ddx * ux + ddy * uy,
+      dy: ddx * vx + ddy * vy,
+      scale0: o.scale || 1
+    };
+  }
+
+  /** 还原当前该用的变形框架；没有冻结快照（旧存档 / 非火柴人）就返回 null，退回老逻辑 */
+  function getFrozenFrame(o) {
+    if (!o || o.type !== 'figure') return null;
+    const d = o.distort;
+    if (!d) return null;
+    /* v5.6.1：老存档里没有 frame0（但扭曲是开着的）——首次渲染补拍一张，之后固定。
+       getMapping 只在 ownOn 时才会问到这儿，所以不用再判 enabled。 */
+    if (!d.frame0) {
+      captureWarpFrame(o);
+      if (!d.frame0) return null;
+    }
+    const f0 = d.frame0;
+    if (!(f0.w > 1e-4) || !(f0.h > 1e-4)) return null;
+    const obb = getSourceOBB(o);
+    if (!obb || !obb.corners || obb.corners.length < 4) return null;
+    const q = obb.corners, TL = q[0], TR = q[1], BL = q[3];
+    const lw = Math.hypot(TR.x - TL.x, TR.y - TL.y);
+    const lh = Math.hypot(BL.x - TL.x, BL.y - TL.y);
+    if (!(lw > 1e-4) || !(lh > 1e-4)) return null;
+    /* 轴线永远取「当前」的 —— 旋转 / 镜像时框架跟着一起转，不用额外写分支 */
+    const ux = (TR.x - TL.x) / lw, uy = (TR.y - TL.y) / lw;
+    const vx = (BL.x - TL.x) / lh, vy = (BL.y - TL.y) / lh;
+    let j = null;
+    try { j = jointData(o); } catch (_) { return null; }
+    if (!j || !j.pelvis) return null;
+    const pw = tboxMatApply(figureRigidMatrix(o), j.pelvis);
+    const k = (f0.scale0 > 0) ? Math.max(0.02, (o.scale || 1) / f0.scale0) : 1;
+    const ax = (f0.dx * ux + f0.dy * vx) * k;
+    const ay = (f0.dx * uy + f0.dy * vy) * k;
+    return {
+      w: f0.w * k, h: f0.h * k,
+      ux, uy, vx, vy,
+      ox: pw.x + ax, oy: pw.y + ay
+    };
+  }
+
+  /* v5.3.1 展示用 OBB：对象有扭曲（自身开启，或挂载继承父火柴人）时返回变形后的四边形，
+     让选中框 / 变换框跟着一起变形，而不是留在没变形的旧位置。 */
+  function getObjectOBB(o) {
+    const src = getSourceOBB(o);
+    if (!src || o === CANVAS_BOUNDS_TARGET) return src;
+    const mp = SKFE.systems.distort.getMapping(o);
+    if (!mp) return src;
+    const corners = mp.dst.map(p => SKFE.systems.distort.boxToWorld(mp.frame, p));
+    if (!corners.every(c => isFinite(c.x) && isFinite(c.y))) return src;
+    return tboxObbFromCorners(corners);
+  }
+
+  /* v5.5.0：变形的逆映射 —— 世界坐标（变形后）→ 世界坐标（源态）。
+     拖动关节时指针落在变形后的图像上，必须反算回未变形空间才能改姿势；
+     命中测试同理（否则「看到的位置点不到」）。
+     getMapping 返回 null（未变形 / 类型不支持）时原样返回，零行为变化。 */
+  function distortInvWorld(o, p) {
+    const DZ = SKFE.systems.distort;
+    if (!o || !p || !DZ) return p;
+    const mp = DZ.getMapping(o);
+    if (!mp) return p;
+    const b = DZ.worldToBox(mp.frame, p);
+    const inv = DZ.invertHomography(mp.H);
+    if (!inv) return p;
+    const q = DZ.applyHomography(b.x, b.y, inv);
+    if (!isFinite(q.x) || !isFinite(q.y)) return p;
+    return DZ.boxToWorld(mp.frame, q);
   }
 
   /* ---------- 世界坐标 → 屏幕坐标（普通视图 / 摄像机子轨道视角） ---------- */
@@ -3684,24 +4509,36 @@ function importActionPresets() {
     const vx = fx / h, vy = fy / h;
     const vw = Math.max(80, w), vh = Math.max(80, h);
     const hw = vw / 2, hh = vh / 2;
-    const corners = [
-      { x: cx - ux * hw - vx * hh, y: cy - uy * hw - vy * hh }, /* 左上 */
-      { x: cx + ux * hw - vx * hh, y: cy + uy * hw - vy * hh }, /* 右上 */
-      { x: cx + ux * hw + vx * hh, y: cy + uy * hw + vy * hh }, /* 右下 */
-      { x: cx - ux * hw + vx * hh, y: cy - uy * hw + vy * hh }  /* 左下 */
-    ];
-    return { target, obb, cx, cy, w: vw, h: vh, angle: Math.atan2(uy, ux), corners };
+
+    /* v5.5.0：目标开着扭曲时，框体必须用「变形后的真实四边形」。
+       原来的做法是从质心 + 两条边向量重建成平行四边形 —— 透视四边形不是平行四边形，
+       重建出来的角会明显偏离真实角点（实测能偏 9px 以上），
+       于是按钮被推到边中点上，跟扭曲控制点撞在一起。
+       直接取 obb.corners（getObjectOBB 对变形对象返回的就是变形后的四角）即可，
+       框线也和扭曲外轮廓完全重合。太小的对象仍按 80px 等比放大，保证按钮不挤。 */
+    const hasDistort = !!(target !== CANVAS_BOUNDS_TARGET && target &&
+                          SKFE.systems.distort.isActive(target));
+    let corners;
+    if (hasDistort) {
+      const k = Math.min(w, h) < 80 ? 80 / Math.max(1, Math.min(w, h)) : 1;
+      corners = pts.map(p => ({ x: cx + (p.x - cx) * k, y: cy + (p.y - cy) * k }));
+    } else {
+      corners = [
+        { x: cx - ux * hw - vx * hh, y: cy - uy * hw - vy * hh }, /* 左上 */
+        { x: cx + ux * hw - vx * hh, y: cy + uy * hw - vy * hh }, /* 右上 */
+        { x: cx + ux * hw + vx * hh, y: cy + uy * hw + vy * hh }, /* 右下 */
+        { x: cx - ux * hw + vx * hh, y: cy - uy * hw + vy * hh }  /* 左下 */
+      ];
+    }
+    return { target, obb, cx, cy, w: vw, h: vh, angle: Math.atan2(uy, ux), corners, hasDistort };
   }
 
   /* 屏幕点是否落在视觉框内 */
   function pointInTransformBoxScreen(screen) {
     const g = getTransformBoxGeometry();
     if (!g) return false;
-    const dx = screen.x - g.cx, dy = screen.y - g.cy;
-    const c = Math.cos(-g.angle), s = Math.sin(-g.angle);
-    const lx = dx * c - dy * s;
-    const ly = dx * s + dy * c;
-    return Math.abs(lx) <= g.w / 2 + 2 && Math.abs(ly) <= g.h / 2 + 2;
+    /* v5.5.0：变形对象的框是任意四边形，用多边形判定（矩形时结果与原来的旋转矩形判定等价） */
+    return pointInQuad(screen, g.corners);
   }
 
   /* ---------- 绘制框体（屏幕坐标系，导出时不绘制） ---------- */
@@ -3709,6 +4546,10 @@ function importActionPresets() {
     if (!transformBoxOn || window.__isExporting) return;
     const g = getTransformBoxGeometry();
     if (!g) return;
+    /* v5.5.0 曾经在这里 `if (hasDistort) return` —— 理由是「扭曲叠加层已经画了同一圈轮廓」。
+       v5.6.2：叠加层现在只在 四角扭曲编辑模式 下画，而 activeTarget() 判定里
+       `if (transformBoxOn) return null` —— 也就是说【开着变换框时叠加层必然不画】，
+       两边互斥，再让位就变成谁都不画了。所以这里必须照常描出来。 */
     const dpr = window.devicePixelRatio || 1;
     ctx.save();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -3734,6 +4575,7 @@ function importActionPresets() {
     if (!g) { wrap.style.display = 'none'; return; }
     wrap.style.display = 'block';
     const rect = canvas.getBoundingClientRect();
+
     const place = (id, p) => {
       const btn = document.getElementById(id);
       if (!btn) return;
@@ -4071,6 +4913,9 @@ function importActionPresets() {
         e.preventDefault(); e.stopPropagation();
         transformBoxOn = !transformBoxOn;
         try { localStorage.setItem('skfe_transform_box_v1', transformBoxOn ? '1' : '0'); } catch (_) {}
+        /* v5.5.2：开变换框就把扭曲的编辑模式让出去（两套手柄都在四角，同时显示必然打架）。
+           注意只关「编辑模式」，不动 obj.distort.enabled —— 变形照常生效。 */
+        if (transformBoxOn) distortEditOn = false;
         if (!transformBoxOn) cancelTransformBoxDrag();
         EventBus.emit('need:syncUI');
         EventBus.emit('need:render');
@@ -4088,6 +4933,135 @@ function importActionPresets() {
       });
     }
   })();
+
+  /* ==================== v5.2.0 四角扭曲（8 点透视变形）接线 ==================== */
+
+  (function initDistortSystem() {
+    const DZ = SKFE.systems.distort;
+    if (!DZ) return;
+
+    /* 把主程序的世界坐标能力注入系统，避免 distort.js 反向依赖 app.js 内部作用域 */
+    DZ.setHooks({
+      getObbCorners: (o) => {
+        const obb = getSourceOBB(o);   /* 必须是未变形的，否则 getMapping 会自递归 */
+        return (obb && obb.corners) ? obb.corners : null;
+      },
+      /* v5.6.1：火柴人的变形框架要冻结，否则姿势一变骨盆就漂（详见 captureWarpFrame 注释） */
+      getFrozenFrame: (o) => getFrozenFrame(o),
+      captureFrame: (o) => captureWarpFrame(o),
+      /* v5.3.1：挂载元件继承父火柴人的单应性 —— 整个角色像一张图一起变形 */
+      getParentWarp: (o) => getParentWarp(o),
+      /* v5.5.1：变换框开着时，8 个扭曲控制点让位（按钮和角点天然互斥，不再错位） */
+      isTransformBoxOn: () => !!transformBoxOn,
+      /* v5.5.2：扭曲的编辑模式开关 —— 只有它为 true 才画控制点和网格 */
+      isDistortEditOn: () => !!distortEditOn,
+      worldToScreen: (p) => tboxWorldToScreen(p),
+      screenToWorld: (sx, sy) => {
+        const camView = SKFE.systems.camera.getCameraViewObject();
+        if (camView) {
+          const t = SKFE.systems.camera.getCameraViewTransform(camView);
+          return SKFE.systems.camera.cameraScreenToWorld({ x: sx, y: sy }, camView, t);
+        }
+        return {
+          x: (sx - AppState.viewOffset.x) / AppState.viewScale,
+          y: (sy - AppState.viewOffset.y) / AppState.viewScale
+        };
+      },
+      getSelected: () => AppState.selected,
+      getCanvasRect: () => canvas.getBoundingClientRect(),
+      requestRender: () => EventBus.emit('need:render'),
+      syncUI: () => EventBus.emit('need:syncUI'),
+      markModified: () => { markCurrentFrameModified(); invalidateAllFrameThumbs(); updateFrameBar(); },
+      saveHistory: (label) => EventBus.emit('history:save', label),
+      syncGlobal: (o) => syncDistortToAllFrames(o),
+      isBlocked: () => isPlaying || !!window.__isExporting || !!SKFE.systems.camera.getCameraViewObject()
+    });
+
+    const btn = document.getElementById('btnDistort');
+    if (btn) {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (btn.disabled) return;
+        toggleDistortMode();
+      });
+    }
+    const btnOff = document.getElementById('btnDistortOff');
+    if (btnOff) {
+      btnOff.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (btnOff.disabled) return;
+        closeDistortMode();
+      });
+    }
+  })();
+
+  /* v5.5.2：编辑模式 —— 「四角扭曲」按钮只控制这 8 个控制点显不显示，
+     和变换框按钮的逻辑一致（点一下出现、再点一下消失）。变形本身不受影响。
+     真正的「取消变形」在旁边的「关闭扭曲」按钮。
+     （状态变量 distortEditOn 声明在文件上方的变换框状态区，避免 TDZ） */
+
+  /** 四角扭曲按钮：显示 / 隐藏 8 个控制点（首次点击会顺便开启变形，角点为恒等 = 视觉无变化） */
+  function toggleDistortMode() {
+    const DZ = SKFE.systems.distort;
+    const o = AppState.selected;
+    if (!o || o.locked || !DZ.supports(o)) return;
+    if (isPlaying) return;
+
+    const editingThis = distortEditOn && DZ.isActive(o);
+
+    if (editingThis) {
+      /* 再点一下：只隐藏控制点，已经做出来的变形保持原样 */
+      DZ.cancelDrag();
+      distortEditOn = false;
+      EventBus.emit('need:syncUI');
+      EventBus.emit('need:render');
+      return;
+    }
+
+    DZ.ensure(o);            /* 四个角点按当前 OBB 现场生成 */
+    DZ.setEnabled(o, true);  /* 首次开启时角点等于原矩形，画面不会有任何变化 */
+    distortEditOn = true;
+
+    /* 变换框和扭曲控制点都在四个角上，同时显示必然打架。
+       进入扭曲编辑时把变换框让出去 —— 否则点了按钮看起来「没反应」。 */
+    if (transformBoxOn) {
+      transformBoxOn = false;
+      try { localStorage.setItem('skfe_transform_box_v1', '0'); } catch (_) {}
+      cancelTransformBoxDrag();
+    }
+
+    /* 全局属性开启时：开关状态 + 四角坐标一起下发到该元件的所有帧 */
+    syncDistortToAllFrames(o);
+
+    markCurrentFrameModified();
+    invalidateAllFrameThumbs();
+    updateFrameBar();
+    EventBus.emit('need:syncUI');
+    EventBus.emit('need:render');
+    EventBus.emit('history:save', '编辑四角扭曲');
+  }
+
+  /** 关闭扭曲按钮：真的把变形关掉，对象恢复原状（角点数据保留，可再点「四角扭曲」继续调） */
+  function closeDistortMode() {
+    const DZ = SKFE.systems.distort;
+    const o = AppState.selected;
+    if (!o || !DZ.supports(o)) return;
+
+    DZ.cancelDrag();
+    DZ.setEnabled(o, false);
+    distortEditOn = false;
+
+    syncDistortToAllFrames(o);
+
+    markCurrentFrameModified();
+    invalidateAllFrameThumbs();
+    updateFrameBar();
+    EventBus.emit('need:syncUI');
+    EventBus.emit('need:render');
+    EventBus.emit('history:save', '关闭四角扭曲');
+  }
 
   /* ==================== 锚点标记 ==================== */
 
@@ -4225,7 +5199,29 @@ function importActionPresets() {
     return { left: minX, right: maxX, top: minY, bottom: maxY };
   }
 
+  /* v5.2.0 四角扭曲：单应性把直线映射成直线，所以变形后的外轮廓恰好就是 4 角围成的四边形，
+     把 4 个角点并进包围盒即可得到精确结果（导出裁剪、擦除局部画布都依赖它）。 */
+  function expandBoundsForDistort(o, b) {
+    if (!b) return b;
+    const mp = SKFE.systems.distort.getMapping(o);   /* 自身扭曲 or 继承父级扭曲 */
+    if (!mp) return b;
+    let { left, right, top, bottom } = b;
+    for (let i = 0; i < 4; i++) {
+      const p = SKFE.systems.distort.boxToWorld(mp.frame, mp.dst[i]);
+      if (!isFinite(p.x) || !isFinite(p.y)) continue;
+      if (p.x < left) left = p.x;
+      if (p.x > right) right = p.x;
+      if (p.y < top) top = p.y;
+      if (p.y > bottom) bottom = p.y;
+    }
+    return { left, right, top, bottom };
+  }
+
   function getObjectBounds(o) {
+    return expandBoundsForDistort(o, getObjectBoundsBase(o));
+  }
+
+  function getObjectBoundsBase(o) {
     if (!o) return { left: 0, right: 0, top: 0, bottom: 0 };
     let b;
     if (o.type === 'camera') {
@@ -4234,7 +5230,7 @@ function importActionPresets() {
     }
     if (o.type === 'figure') {
       const j = jointData(o);
-      const xs = [j.headC.x, j.pelvis.x, j.neck.x, j.handL.x, j.handR.x, j.footL.x, j.footR.x, j.wristL.x, j.wristR.x, j.toeL.x, j.toeR.x];
+      const xs = [j.headC.x - j.headR, j.headC.x + j.headR, j.pelvis.x, j.neck.x, j.handL.x, j.handR.x, j.footL.x, j.footR.x, j.wristL.x, j.wristR.x, j.toeL.x, j.toeR.x];
       const ys = [j.headC.y - j.headR, j.headC.y + j.headR, j.pelvis.y, j.neck.y, j.handL.y, j.handR.y, j.footL.y, j.footR.y, j.wristL.y, j.wristR.y, j.toeL.y, j.toeR.y];
       const pad = (o.lw * o.scale) / 2 + 4;
       b = { left: Math.min(...xs) - pad, right: Math.max(...xs) + pad, top: Math.min(...ys) - pad, bottom: Math.max(...ys) + pad };
@@ -4726,6 +5722,7 @@ function importActionPresets() {
 
       drawLayerNumbers();
       drawTransformBox();
+      SKFE.systems.distort.drawOverlay(ctx); /* v5.2.0 扭曲网格与轮廓（导出时不画） */
     }
   }
 
@@ -4955,6 +5952,7 @@ function importActionPresets() {
     updateFrameBar();
     updateCoordDisplay();
     updateTransformBoxDOM();
+    SKFE.systems.distort.updateUI(); /* v5.2.0 同步 8 个扭曲控制点的位置 */
     updateAnchorHandle();
     updatePosInputs();
     SKFE.systems.camera.updateCameraPreview();
@@ -7014,6 +8012,8 @@ function importActionPresets() {
         if (getTrackFrame(AppState.activeTrackId, i)) break;
         slots.push(i);
       }
+      /* v5.4.2：绑定配饰的补间数据必须在插帧之前算（插帧会改变 f2Idx 的含义） */
+      const childTweens = buildBoundChildTweens(trackKey, startIdx, f2Idx, count);
       let used = 0;
       for (; used < tweenFrames.length && used < slots.length; used++) {
         const tw = tweenFrames[used];
@@ -7022,6 +8022,7 @@ function importActionPresets() {
         if (c) c.id = src.id;
         setTrackFrame(AppState.activeTrackId, slots[used], c);
       }
+      let inserted = 0;
       if (used < tweenFrames.length) {
         const rest = tweenFrames.slice(used).map(tw => {
           const src = tw && tw.objects ? (tw.objects.find(o => String(o.id) === trackKey) || tw.objects[0] || null) : null;
@@ -7031,8 +8032,17 @@ function importActionPresets() {
         });
         while (t.frames.length < f2Idx) t.frames.push(null);
         t.frames.splice(f2Idx, 0, ...rest);
+        inserted = rest.length;
         syncMainLengthFromTracks();
       }
+
+      /* v5.4.2：子轨道补的是火柴人 → 身上绑定的配饰/图形要一起补。
+         插入帧的情况下先把子轨道在同一位置也撑开等量空帧，再把补间数据逐帧填进去，
+         索引才不会错位；配饰的 offX/offY/缩放/旋转也走同一套补间曲线，不是简单克隆。 */
+      const figTrackId = String(AppState.activeTrackId);
+      if (inserted > 0) spliceBoundChildrenFrames(figTrackId, f2Idx, inserted);
+      tweenBoundChildren(figTrackId, startIdx, f2Idx, count, used, slots, childTweens);
+
       return { ok: true };
     }
     if (startIdx >= AppState.frames.length - 1) return { ok: false, reason: 'last' };
@@ -7258,6 +8268,16 @@ function importActionPresets() {
         for (const p of pts) extend(p.x, p.y);
         extend(j.headC.x - j.headR, j.headC.y - j.headR);
         extend(j.headC.x + j.headR, j.headC.y + j.headR);
+        /* v5.2.0 扭曲后外轮廓 = 4 个变形角点围成的四边形，导出裁剪必须把它算进去 */
+        if (SKFE.systems.distort.isActive(o)) {
+          const dmp = SKFE.systems.distort.getMapping(o);
+          if (dmp) {
+            for (let i = 0; i < 4; i++) {
+              const dp = SKFE.systems.distort.boxToWorld(dmp.frame, dmp.dst[i]);
+              extend(dp.x, dp.y);
+            }
+          }
+        }
         const m = o.lw * o.scale / 2 + 4;
         minX -= m; minY -= m; maxX += m; maxY += m;
       } else if (o.type === 'image') {
@@ -8516,6 +9536,23 @@ function togglePin(part) {
       if (AppState.selected.light.size === undefined) AppState.selected.light.size = 1.0;
       if (AppState.selected.light.angle === undefined) AppState.selected.light.angle = 315;
       ensureExtremity(AppState.selected);
+// 透视面板同步（v5.7：头/尾倍率模型，骨盆/脖子两端自动同步）
+const sp = AppState.selected.spatial || { strength: 0, lines: SKFE.systems.spatial.defaultLines() };
+ensureSpatialLines(AppState.selected);
+const sEl = document.getElementById('spatialStrength');
+if (sEl) {
+  sEl.value = sp.strength || 0;
+  const sVal = document.getElementById('spatialStrengthVal');
+  if (sVal) sVal.textContent = (sp.strength || 0).toFixed(2);
+}
+const spatialGroupVals = spatialReadGroups(AppState.selected);
+['pelvis', 'neck', 'handL', 'handR', 'footL', 'footR'].forEach(g => {
+  const inp = document.getElementById('sp' + g.charAt(0).toUpperCase() + g.slice(1));
+  if (!inp) return;
+  inp.value = spatialGroupVals[g];
+  const lbl = document.getElementById('sp' + g.charAt(0).toUpperCase() + g.slice(1) + 'Val');
+  if (lbl) lbl.textContent = spatialGroupVals[g].toFixed(2);
+});
       updateLimbStatus();
       colorInput.value = AppState.selected.color;
       lwInput.value = AppState.selected.lw; lwVal.textContent = AppState.selected.lw;
@@ -8644,6 +9681,27 @@ function togglePin(part) {
       btnFree.setAttribute('aria-pressed', freeStretchOn ? 'true' : 'false');
     }
 
+    /* v5.5.2 四角扭曲按钮状态（选中不支持的类型时置灰）
+       「四角扭曲」= 编辑模式开关：只控制 8 个控制点显不显示，类似变换框按钮
+       「关闭扭曲」= 真正把变形关掉（画面回到原形，角点数据保留） */
+    const btnDistortEl = document.getElementById('btnDistort');
+    if (btnDistortEl && SKFE.systems.distort) {
+      const dzTarget = AppState.selected;
+      const dzOK = !hasCanvasSel && !!dzTarget && !dzTarget.locked && SKFE.systems.distort.supports(dzTarget);
+      const dzOn = !!(dzOK && dzTarget.distort && dzTarget.distort.enabled);
+      const dzEditing = !!(dzOn && distortEditOn);
+      btnDistortEl.disabled = !dzOK;
+      btnDistortEl.classList.toggle('on', dzEditing);
+      btnDistortEl.setAttribute('aria-pressed', dzEditing ? 'true' : 'false');
+      /* 文案不再随状态变化，交给 i18n 的 data-i18n 管，别在这里写死中文 */
+
+      const btnDistortOffEl = document.getElementById('btnDistortOff');
+      if (btnDistortOffEl) {
+        btnDistortOffEl.disabled = !dzOn;
+        btnDistortOffEl.classList.toggle('on', false);
+      }
+    }
+
     if (objXInput && objYInput && !hasCanvasSel) {
       objXInput.disabled = !AppState.selected || AppState.selected.locked;
       objYInput.disabled = !AppState.selected || AppState.selected.locked;
@@ -8671,6 +9729,79 @@ function togglePin(part) {
     syncObjNameInput();
   }
 
+  /* ==================== 透视滑条事件绑定（v5.7 头/尾倍率模型） ==================== */
+  /* 补齐/迁移 spatial 数据：旧版 z 关节模型直接废弃，全部按 1（原始线宽）处理 */
+  function ensureSpatialLines(f) {
+    if (!f.spatial || typeof f.spatial !== 'object') f.spatial = { strength: 0, lines: null };
+    if (!f.spatial.lines || typeof f.spatial.lines !== 'object') f.spatial.lines = SKFE.systems.spatial.defaultLines();
+    for (const k of ['body', 'armL', 'armR', 'legL', 'legR']) {
+      const l = f.spatial.lines[k] || (f.spatial.lines[k] = { start: 1, end: 1 });
+      if (typeof l.start !== 'number' || !isFinite(l.start)) l.start = 1;
+      if (typeof l.end !== 'number' || !isFinite(l.end)) l.end = 1;
+    }
+    return f.spatial;
+  }
+
+  /* 读六个滑条应显示的值（同步组取公共端点的值） */
+  function spatialReadGroups(f) {
+    ensureSpatialLines(f);
+    const L = f.spatial.lines;
+    return {
+      pelvis: L.body.start, neck: L.body.end,
+      handL: L.armL.end, handR: L.armR.end,
+      footL: L.legL.end, footR: L.legR.end
+    };
+  }
+
+  /* 写同步组：骨盆 = 躯干头 + 双腿头；脖子 = 躯干尾 + 双臂头；四肢末端各管各的 */
+  function setSpatialGroup(group, val) {
+    const f = AppState.selected;
+    if (!f || f.type !== 'figure') return;
+    ensureSpatialLines(f);
+    const L = f.spatial.lines;
+    const paths = [];
+    if (group === 'pelvis') { L.body.start = val; L.legL.start = val; L.legR.start = val; paths.push('spatial.lines.body.start', 'spatial.lines.legL.start', 'spatial.lines.legR.start'); }
+    else if (group === 'neck') { L.body.end = val; L.armL.start = val; L.armR.start = val; paths.push('spatial.lines.body.end', 'spatial.lines.armL.start', 'spatial.lines.armR.start'); }
+    else if (group === 'handL') { L.armL.end = val; paths.push('spatial.lines.armL.end'); }
+    else if (group === 'handR') { L.armR.end = val; paths.push('spatial.lines.armR.end'); }
+    else if (group === 'footL') { L.legL.end = val; paths.push('spatial.lines.legL.end'); }
+    else if (group === 'footR') { L.legR.end = val; paths.push('spatial.lines.legR.end'); }
+    paths.forEach(p => setGlobalProp(f, p, val));
+  }
+
+  function bindSpatialEvents() {
+    const strengthEl = document.getElementById('spatialStrength');
+    if (strengthEl) {
+      strengthEl.addEventListener('input', (e) => {
+        if (!AppState.selected || AppState.selected.type !== 'figure') return;
+        ensureSpatialLines(AppState.selected);
+        AppState.selected.spatial.strength = +e.target.value;
+        const v = document.getElementById('spatialStrengthVal');
+        if (v) v.textContent = AppState.selected.spatial.strength.toFixed(2);
+        setGlobalProp(AppState.selected, 'spatial.strength', AppState.selected.spatial.strength);
+        EventBus.emit('need:render');
+        markCurrentFrameModified();
+      });
+      strengthEl.addEventListener('change', () => EventBus.emit('history:save', '调整透视强度'));
+    }
+
+    const groupMap = { Pelvis: 'pelvis', Neck: 'neck', HandL: 'handL', HandR: 'handR', FootL: 'footL', FootR: 'footR' };
+    Object.keys(groupMap).forEach(k => {
+      const el = document.getElementById('sp' + k);
+      if (!el) return;
+      el.addEventListener('input', (e) => {
+        if (!AppState.selected || AppState.selected.type !== 'figure') return;
+        const val = +e.target.value;
+        setSpatialGroup(groupMap[k], val);
+        const lbl = document.getElementById('sp' + k + 'Val');
+        if (lbl) lbl.textContent = val.toFixed(2);
+        EventBus.emit('need:render');
+        markCurrentFrameModified();
+      });
+      el.addEventListener('change', () => EventBus.emit('history:save', '调整透视粗细'));
+    });
+  }
+
   function select(f) {
     /* 子轨道下从图层列表等位置选择其他元件时，自动把轨道切到该元件，保持隔离 */
     if (isSubTrackMode() && f && String(f.id) !== AppState.activeTrackId) {
@@ -8681,6 +9812,7 @@ function togglePin(part) {
     AppState.selected = f;
     isolatedJointName = null; // 切换对象自动退出隔离模式
     cancelTransformBoxDrag();
+    SKFE.systems.distort.cancelDrag(); // v5.2.0 切换对象时放弃未完成的扭曲拖拽
     anchorModeOn = false;
     if (f && f.type === 'camera') { anchorModeOn = false; }
     updateJointSliders();
@@ -8708,12 +9840,37 @@ function togglePin(part) {
     };
   }
 
+  /* v5.2.0：点是否落在任意四边形内（凸/凹都适用，用射线交叉奇偶判定） */
+  function pointInQuad(p, q) {
+    let inside = false;
+    for (let i = 0, j = q.length - 1; i < q.length; j = i++) {
+      const xi = q[i].x, yi = q[i].y, xj = q[j].x, yj = q[j].y;
+      if (((yi > p.y) !== (yj > p.y)) && (p.x < (xj - xi) * (p.y - yi) / (yj - yi) + xi)) inside = !inside;
+    }
+    return inside;
+  }
+
   function hitObj(o, p) {
+    /* v5.2.1 扭曲对象的命中区域 = 变形后的四边形（含挂载时继承父级的扭曲），而不是原始矩形 */
+    /* 火柴人的盒子会并进配饰（为了让整张图一起变形），但命中区不能跟着变大，
+       否则点配饰会误选到火柴人 —— 这里单独用「不含配饰」的盒子。 */
+    let dmp0;
+    if (o.type === 'figure') {
+      const src = getSourceOBB(o, true);
+      dmp0 = src ? SKFE.systems.distort.getMappingOnBox(o, src.corners) : null;
+    } else {
+      dmp0 = SKFE.systems.distort.getMapping(o);
+    }
+    if (dmp0) {
+      const quad = [];
+      for (let i = 0; i < 4; i++) quad.push(SKFE.systems.distort.boxToWorld(dmp0.frame, dmp0.dst[i]));
+      return pointInQuad(p, quad);
+    }
     let fig = null;
     if (o.bindTo !== 'none' && o.targetId) fig = AppState.objects.find(f => f.id === o.targetId && f.type === 'figure');
+    const tr = getBindTransform(o);
     let pp = p;
     if (fig && (fig.rot || fig.mirror)) pp = worldToFigureLocal(fig, p);
-    const tr = getBindTransform(o);
     const finalScale = o.scale * tr.syncScale;
     const w = o.w * finalScale, h = o.h * finalScale;
     const { ax, ay } = getAnchorOffset(o, finalScale);
@@ -8852,6 +10009,8 @@ function togglePin(part) {
 
   function onPointerDown(e) {
     if (isPlaying) return;
+    /* v5.2.0 正在拖拽扭曲控制点时，画布完全不参与选中/平移 */
+    if (SKFE.systems.distort.isDragging()) return;
     snapLines = { x: null, y: null }; /* 点击时清空线 */
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 2) {
@@ -9009,7 +10168,10 @@ function togglePin(part) {
       if (!o || o.locked) continue;
 
       if (o.type === 'figure') {
-        const pLocal = (o.rot || o.mirror) ? worldToFigureLocal(o, p) : p;
+        /* v5.5.0：变形状态下，指针要先逆映射回源态，才能和「源态关节坐标」比较。
+           未变形时 distortInvWorld 原样返回，等于没有这段。 */
+        const pSrc = distortInvWorld(o, p);
+        const pLocal = (o.rot || o.mirror) ? worldToFigureLocal(o, pSrc) : pSrc;
         if (groundShadowEnabled && shadowEditMode && o === AppState.selected) {
           const jS = jointData(o);
           const lowestY = Math.max(jS.footL.y, jS.footR.y, jS.toeL.y, jS.toeR.y);
@@ -9231,6 +10393,9 @@ function togglePin(part) {
   function onPointerMove(e) {
     if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
+    /* v5.2.0 扭曲控制点拖拽期间，画布不响应移动（防止误触发平移/悬停高亮） */
+    if (SKFE.systems.distort.isDragging()) return;
+
     if (SKFE.systems.eraser.isDragging()) {
       SKFE.systems.eraser.updateStroke(getPos(e));
       return;
@@ -9439,7 +10604,10 @@ function togglePin(part) {
         snapLines.x = snap.lineX;
         snapLines.y = snap.lineY;
       } else {
-        const pLocal = (o.rot || o.mirror) ? worldToFigureLocal(o, p) : p;
+        /* v5.5.0：关节类拖拽走逆映射，指针在变形后的图像上，关节按源态算。
+           整体平移（pelvis）仍用原始 p，因为平移对象时变形结果也是平移，天然 1:1。 */
+        const pSrc = distortInvWorld(o, p);
+        const pLocal = (o.rot || o.mirror) ? worldToFigureLocal(o, pSrc) : pSrc;
         
         //完全由 stretchJoint 接管位置和角度
         if (jointStretchOn && drag.part !== 'pelvis' && drag.part !== 'head' && drag.part !== 'neck') {
@@ -9556,6 +10724,8 @@ function togglePin(part) {
   }
 
   function onPointerUp(e) {
+    /* v5.2.0 扭曲控制点的 pointerup 由控制点自己接管，画布不做收尾 */
+    if (SKFE.systems.distort.isDragging()) return;
     if (SKFE.systems.eraser.isDragging()) {
       SKFE.systems.eraser.finishStroke();
       pointers.delete(e.pointerId);
@@ -11539,6 +12709,7 @@ function togglePin(part) {
     SKFE.features.theme.syncThemeUI();
     SKFE.features.theme.applyThemeConfig();
     updateStickyHeaderHeight();
+    bindSpatialEvents();
     EventBus.emit('need:render');
     updateUndoRedoButtons();
     syncPinViewBtn();
@@ -11547,5 +12718,4 @@ function togglePin(part) {
     if (typeof window.SKFE_REFRESH_I18N === 'function') window.SKFE_REFRESH_I18N();
     saveHistory('初始化');
   })();
-
 })();

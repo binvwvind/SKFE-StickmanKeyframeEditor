@@ -3,7 +3,7 @@
 <head> <!-- 网页头部，包含元数据和外部引用 -->
 <meta charset="UTF-8"> <!-- 设置字符编码为 UTF-8，防止中文乱码 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover"> <!-- 移动端视口设置：宽度同设备，允许缩放，适配刘海屏 -->
-<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v5.0.0</title> <!-- 网页标题，带有多语言属性 -->
+<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v6.0.0</title> <!-- 网页标题，带有多语言属性 -->
 <link rel="stylesheet" href="./style.css"> <!-- 引入外部样式表 -->
 </head> <!-- 头部结束 -->
 <body> <!-- 网页主体开始 -->
@@ -91,7 +91,7 @@
   <div id="uiDragHandle"><div class="bar"></div></div> <!-- 面板顶部的拖拽把手 -->
 
   <div id="watermark"> <!-- 控制面板顶部的作者/版本水印 -->
-    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v5.0.0</div> <!-- 软件名称及版本 -->
+    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v6.0.0</div> <!-- 软件名称及版本 -->
     <div class="author" data-i18n="watermark.author">Author: binvwvind qq交流分享群:1121039855</div> <!-- 作者信息及群号 -->
   </div> <!-- 水印结束 -->
 
@@ -279,6 +279,10 @@
   <div class="row" style="margin-top:4px;"> <!-- 自由拉伸功能开关行 -->
     <button id="btnFreeStretch" class="btn-xs" style="flex:1; font-weight:600;" title="开启后拖动右下角按钮可按 X/Y 分别拉伸" data-i18n="stretch.btn" data-i18n-title="stretch.btnTitle">⇱ 自由拉伸</button> <!-- 开启/关闭自由拉伸模式 -->
   </div> <!-- 行结束 -->
+  <div class="row" style="margin-top:4px;"> <!-- 四角扭曲：左侧=编辑模式开关（显示/隐藏控制点），右侧=关闭变形 -->
+    <button id="btnDistort" class="btn-xs" style="flex:1; font-weight:600; padding-left:4px; padding-right:4px;" title="点击显示 8 个控制点（4 角 + 4 边中点），再点一下隐藏。可做 8 点透视变形" data-i18n="distort.btn" data-i18n-title="distort.btnTitle">🎭 四角扭曲</button> <!-- 显示/隐藏 8 点透视变形控制点 -->
+    <button id="btnDistortOff" class="btn-xs" style="flex:1; font-weight:600; padding-left:4px; padding-right:4px;" title="关掉透视变形，对象恢复原状（角点数据保留，再点左侧按钮可继续调整）" data-i18n="distort.off" data-i18n-title="distort.offTitle">✕ 关闭扭曲</button> <!-- 关闭透视变形 -->
+  </div> <!-- 行结束 -->
 
   <div class="divider"></div> <!-- 分割线 -->
 
@@ -333,6 +337,34 @@
       <button id="btnLegRFront" class="btn-xs">⬆ +1</button> <!-- 上移 -->
     </div> <!-- 行结束 -->
     <div class="hint" style="margin-top:6px;" data-i18n="layer.hint">提示：若想让该肢体交叠到别的火柴人身上，只需将这里的数字调整得比对方大即可。</div> <!-- 操作提示 -->
+
+  <!-- ==================== 插入到层级 (data-tool="layer") 面板内 ==================== -->
+  <div class="divider" style="margin: 8px 0;"></div>
+
+  <details class="add-details" id="spatialDetails">
+    <summary data-i18n="spatial.title">🎭 透视（近大远小）</summary>
+
+    <div class="row slider" style="margin-top:8px;">
+      <label data-i18n="spatial.strength">强度</label>
+      <input type="range" id="spatialStrength" min="0" max="1" step="0.01" value="0">
+      <span class="val" id="spatialStrengthVal">0.00</span>
+    </div>
+    <div class="hint" style="margin-top:4px;" data-i18n="spatial.hint">每条线的头/尾粗细 = 基准线宽 × 倍率，从头到尾水滴过渡。骨盆端（躯干头+双腿头）与脖子端（躯干尾+双臂头）自动同步。</div>
+
+    <div class="section-title" style="margin-top:10px;" data-i18n="spatial.gPelvis">骨盆（躯干起点 + 双腿起点）</div>
+    <div class="row slider"><label data-i18n="spatial.pelvis">骨盆</label><input type="range" id="spPelvis" min="0.3" max="2" step="0.01" value="1"><span class="val" id="spPelvisVal">1.00</span></div>
+
+    <div class="section-title" style="margin-top:8px;" data-i18n="spatial.gNeck">脖子（躯干终点 + 双臂起点）</div>
+    <div class="row slider"><label data-i18n="spatial.neck">脖子</label><input type="range" id="spNeck" min="0.3" max="2" step="0.01" value="1"><span class="val" id="spNeckVal">1.00</span></div>
+
+    <div class="section-title" style="margin-top:8px;" data-i18n="spatial.gLimbs">四肢终点</div>
+    <div class="row slider"><label data-i18n="spatial.handL">左手</label><input type="range" id="spHandL" min="0.3" max="2" step="0.01" value="1"><span class="val" id="spHandLVal">1.00</span></div>
+    <div class="row slider"><label data-i18n="spatial.handR">右手</label><input type="range" id="spHandR" min="0.3" max="2" step="0.01" value="1"><span class="val" id="spHandRVal">1.00</span></div>
+    <div class="row slider"><label data-i18n="spatial.footL">左脚</label><input type="range" id="spFootL" min="0.3" max="2" step="0.01" value="1"><span class="val" id="spFootLVal">1.00</span></div>
+    <div class="row slider"><label data-i18n="spatial.footR">右脚</label><input type="range" id="spFootR" min="0.3" max="2" step="0.01" value="1"><span class="val" id="spFootRVal">1.00</span></div>
+  </details>
+  <!-- ==================== 插入结束 ==================== -->    
+
   </div> <!-- 肢体层级面板结束 -->
 
   <div class="tool-panel" data-tool="proportion"> <!-- ==================== 身体比例面板 ==================== -->
@@ -1002,6 +1034,8 @@
 
 <script src="./js/systems/autosave.js"></script>
 <script src="./js/systems/eraser.js"></script>
+<script src="./js/systems/spatial.js"></script>
+<script src="./js/systems/distort.js"></script> <!-- 四角扭曲（8 点透视变形）系统 v1.0.0 -->
 <script src="./js/systems/brush.js"></script> <!-- 画笔元件系统 v5.1.0（矢量笔迹绘制） -->
 <script src="./js/systems/camera.js"></script>
 

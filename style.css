@@ -951,6 +951,45 @@
   #tbBtnRotate { cursor: grab; } /* 旋转按钮：抓取指针 */
   #tbBtnMirror { cursor: pointer; } /* 镜像按钮：普通点击指针 */
 
+  /* ==================== v5.2.0 四角扭曲（8 点透视变形）控制点 ==================== */
+  #distortUI { /* 8 个控制点的容器：同样铺满全屏，但不拦截画布事件 */
+    position: fixed; inset: 0; z-index: 149; /* 层级高于变换框，低于手柄 */
+    pointer-events: none; display: none; /* 容器本身不接收指针，只有控制点接收 */
+  } /* 容器样式结束 */
+  #distortUI .dpt { /* 单个控制点（4 角 + 4 边中点共用基础样式） */
+    position: fixed; width: 13px; height: 13px; padding: 0; /* 小方块，绝对定位 */
+    box-sizing: border-box; /* 边框计入尺寸 */
+    border-radius: 3px; border: 1.5px solid #fff; /* 小圆角方块，白色描边保证任意底色可见 */
+    background: var(--color-primary); /* 继承主题主色 */
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .35); /* 轻微悬浮阴影 */
+    transform: translate(-50%, -50%); /* 以中心点定位 */
+    pointer-events: auto; touch-action: none; /* 关键：允许被拖拽，且禁用浏览器手势 */
+    user-select: none; -webkit-user-select: none; /* 禁止选中文字 */
+    cursor: crosshair; /* 十字光标，提示可自由拖动 */
+    transition: transform .08s ease, background .12s ease; /* 悬浮/拖拽的微动效 */
+  } /* 控制点基础样式结束 */
+  #distortUI .dpt-corner { /* 4 个角点：略大于边中点，便于区分主次 */
+    width: 15px; height: 15px;
+    background: var(--color-primary); border-color: #fff;
+  } /* 角点样式结束 */
+  #distortUI .dpt-edge { /* 4 个边中点：小一号、半透明，视觉上退到次级 */
+    width: 11px; height: 11px; border-radius: 50%; /* 圆形，和角点区分 */
+    background: var(--color-primary-soft-hover); border-color: var(--color-primary);
+    opacity: .95;
+  } /* 边中点样式结束 */
+  #distortUI .dpt:hover { /* 悬浮：放大并提亮 */
+    transform: translate(-50%, -50%) scale(1.18);
+    background: var(--color-primary-hover);
+  } /* 悬浮态结束 */
+  #distortUI .dpt.dragging { /* 拖拽中：进一步放大，给出明确反馈 */
+    transform: translate(-50%, -50%) scale(1.28);
+    background: var(--color-primary-hover);
+    box-shadow: 0 0 0 3px var(--color-primary-soft-hover); /* 外发光环 */
+  } /* 拖拽态结束 */
+  body.distort-dragging { cursor: crosshair !important; } /* 拖拽期间全局十字光标 */
+  body.distort-dragging #distortUI .dpt { cursor: crosshair; } /* 拖拽期间控制点保持十字 */
+  body.brush-mode #distortUI { display: none !important; } /* 画笔模式下不显示，避免抢事件 */
+
   #anchorHandle { /* 锚点拖动手柄 */
     position: fixed; display: none; z-index: 150; /* 固定定位，默认隐藏，层级 150 */
     transform: translate(-50%, -50%); /* 中心点定位 */

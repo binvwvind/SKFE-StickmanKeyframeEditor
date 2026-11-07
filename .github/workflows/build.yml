@@ -137,5 +137,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" out/* --title "SKFE ${GITHUB_REF_NAME}" --generate-notes \
-            || gh release upload "${GITHUB_REF_NAME}" out/* --clobber
+          # 本 job 没有 checkout，gh 拿不到 git 上下文，必须显式 -R 指定仓库
+          gh release create "${GITHUB_REF_NAME}" out/* -R "${GITHUB_REPOSITORY}" \
+            --title "SKFE ${GITHUB_REF_NAME}" --generate-notes \
+            || gh release upload "${GITHUB_REF_NAME}" out/* -R "${GITHUB_REPOSITORY}" --clobber

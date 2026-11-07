@@ -70,7 +70,7 @@ jobs:
         with:
           name: skfe-${{ matrix.name }}
           path: ${{ matrix.artifact }}
-          if-no-files-found: warn
+          if-no-files-found: error
 
   # ---------- 3. 安卓：Capacitor + Gradle 出 APK ----------
   android:
@@ -85,8 +85,17 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          # Capacitor 6 的 Gradle 8.2.1 / AGP 8.2.1 只支持到 JDK 17，用 21 会报 class file major version 65
+          java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          # 新版 cmdline-tools 已移除 "tools" 包，默认值会让 action 直接崩，这里只装 platform-tools
+          packages: 'platform-tools'
+          accept-android-sdk-licenses: true
+      - name: 补齐 SDK 组件
+        # 允许失败：runner 镜像通常已预装，Gradle 也能按需自动下载
+        continue-on-error: true
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
       - run: npm ci
       - name: 生成原生工程（首次）
         run: |
@@ -102,4 +111,27 @@ jobs:
         with:
           name: skfe-android
           path: android/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: warn
+          if-no-files-found: error
+
+  # ---------- 4. 打 tag（v*）时把四类产物汇总成一个 Release，链接永久可用 ----------
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [desktop, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: 汇总产物
+        run: |
+          mkdir -p out
+          find dist -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.apk' \) -exec cp {} out/ \;
+          ls -lh out
+      - name: 创建 / 更新 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" out/* --title "SKFE ${GITHUB_REF_NAME}" --generate-notes \
+            || gh release upload "${GITHUB_REF_NAME}" out/* --clobber

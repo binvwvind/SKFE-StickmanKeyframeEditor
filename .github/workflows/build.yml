@@ -104,6 +104,9 @@ jobs:
           node scripts/sync-www.js
           if [ ! -d android ]; then npx cap add android; fi
           npx cap sync android
+      - name: 覆盖安卓启动图标
+        # Capacitor 模板自带蓝色默认图标，不会读 build/icon.png，必须按密度覆盖 mipmap
+        run: cp -r native/android-res/. android/app/src/main/res/ && ls android/app/src/main/res/mipmap-xxxhdpi/
       - name: 构建 Debug APK
         run: |
           cd android

@@ -127,7 +127,9 @@ jobs:
       - name: 汇总产物
         run: |
           mkdir -p out
-          find dist -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.apk' \) -exec cp {} out/ \;
+          find dist -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.AppImage' \) -exec cp {} out/ \;
+          # APK 原名 app-debug.apk，发给别人看不懂，改名带上产品名与版本
+          find dist -type f -name '*.apk' -exec cp {} "out/SKFE-${GITHUB_REF_NAME}-android-debug.apk" \;
           ls -lh out
       - name: 创建 / 更新 Release
         env:

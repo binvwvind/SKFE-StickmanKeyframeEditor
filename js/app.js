@@ -4,6 +4,11 @@
 
   /* ==================== 外部模块解构（SKFE.core） ==================== */
   const { P, TAU, displayY, TRACK_ALL_ID } = SKFE.core.constants;
+
+  /* v6.1.0：画布视角缩放范围（原来的 0.2~5 太窄，滚轮/双指稍微一拉就到头）。
+     下限放小到 2%，上限放到 80 倍，基本等于不限制。 */
+  const VIEW_SCALE_MIN = 0.02;
+  const VIEW_SCALE_MAX = 80;
   const { EventBus } = SKFE.core.eventBus;
   const { darkenColor, hexToRgb, rgbToHex, lerpColor, themeHexToRgba, themeMixHex } = SKFE.core.colorUtils;
   const { along, norm, distToSeg, worldToFigureLocal } = SKFE.core.geometry;
@@ -141,7 +146,9 @@
 
 
   /* ==================== 全局属性修改 ==================== */
-  let globalEditEnabled = true;
+  /* v6.1.0：默认关闭。以前默认开启，新建元件时会自动把属性铺满所有帧，
+     用户改一帧却动了全部，很容易误操作，所以改成默认关、需要时再开。 */
+  let globalEditEnabled = false;
 
   /* ==================== 导出时画布优先 ==================== */
   let exportCanvasFirst = false;
@@ -582,7 +589,8 @@ function syncDistortToAllFrames(obj) {
       }));
       for (const id in data.tracks) {
         const t = data.tracks[id] || {};
-        const arr = (t.frames || []).map(d => d || null);
+        /* v6.1.0：老项目文件里可能混进了参考视频的轨道（video 不该进轨道），读入时直接丢弃 */
+        const arr = (t.frames || []).map(d => (!d || d.type === 'video') ? null : d);
         newTracks[id] = { name: t.name || id, frames: arr };
         restoreTrackObjectImages(arr, promises);
       }
@@ -795,10 +803,12 @@ function syncDistortToAllFrames(obj) {
           if (onionBefore > 12) { onionBefore = 12; onionAfter = 0; }
           else onionAfter = 12 - onionBefore;
         }
-        if (data.globalEditEnabled !== undefined) {
-          globalEditEnabled = !!data.globalEditEnabled;
+        /* v6.1.0：全局属性修改改为默认关闭，所以恢复自动存档时不再沿用旧开关状态，
+           避免老存档把它悄悄又打开（用户会觉得“明明关了还是动全部帧”）。 */
+        globalEditEnabled = false;
+        {
           const geEl = document.getElementById('globalEdit');
-          if (geEl) geEl.checked = globalEditEnabled;
+          if (geEl) geEl.checked = false;
         }
         if (data.frameThumbMode !== undefined) {
           frameThumbMode = !!data.frameThumbMode;
@@ -1052,6 +1062,25 @@ function syncDistortToAllFrames(obj) {
     updateVideoUI();
   };
 
+  /* v6.1.0：移除参考视频（选中视频图层后按删除键 / 点删除按钮走这里）
+     以前 deleteSelected 遇到 video 直接 return，所以视频永远删不掉。 */
+  function removeReferenceVideo() {
+    const had = !!(videoObj || refVideo);
+    if (AppState.selected && AppState.selected.type === 'video') AppState.selected = null;
+    if (refVideo) { try { refVideo.pause(); } catch (_) {} refVideo = null; }
+    if (refVideoUrl) { try { URL.revokeObjectURL(refVideoUrl); } catch (_) {} refVideoUrl = null; }
+    videoCache = {};
+    refVideoPlaying = false;
+    refVideoVisible = false;
+    videoObj = null;
+    if (videoLoadToken) videoLoadToken++; /* 让还在路上的加载回调作废 */
+    hideVideoProgress();
+    updateVideoUI();
+    EventBus.emit('need:render');
+    EventBus.emit('need:syncUI');
+    return had;
+  }
+
   /* ==================== 颜色工具 ==================== */
 
   /* ==================== 预设 ==================== */
@@ -1153,7 +1182,9 @@ function syncDistortToAllFrames(obj) {
     const boundAccs = AppState.objects.filter(o => o.type === 'acc' && o.targetId === AppState.selected.id);
     const accessories = boundAccs.map(acc => ({
       imgSrc: acc.img.src, w: acc.w, h: acc.h, alpha: acc.alpha, scale: acc.scale,
-      layer: acc.layer, bindTo: acc.bindTo, offX: acc.offX, offY: acc.offY, rot: acc.rot
+      layer: acc.layer, bindTo: acc.bindTo, offX: acc.offX, offY: acc.offY, rot: acc.rot,
+      /* v6.1.0：镜像 / 旋转轴心也要存进预设，否则重新载入后配饰会左右翻回去，位置和旋转都对不上 */
+      mirror: !!acc.mirror, ax: acc.ax || 0, ay: acc.ay || 0
     }));
     presets.push({ name, data, accessories });
     savePresetsToStorage();
@@ -1204,7 +1235,7 @@ function syncDistortToAllFrames(obj) {
               w: accData.w, h: accData.h, alpha: accData.alpha, scale: accData.scale,
               layer: accData.layer, bindTo: accData.bindTo, targetId: f.id,
               offX: accData.offX, offY: accData.offY, rot: accData.rot, locked: false,
-              ax: 0, ay: 0, mirror: false
+              ax: accData.ax || 0, ay: accData.ay || 0, mirror: !!accData.mirror
             };
             generateName(acc);
             addObjectToFrames(acc);
@@ -1550,11 +1581,12 @@ function syncDistortToAllFrames(obj) {
       let changed = false;
       for (let i = 0; i < count; i++) {
         const idx = (i < used) ? slots[i] : (f2Idx + (i - used));
-        while (tr.frames.length <= idx) tr.frames.push(null);
         if (!getTrackFrame(fid, idx)) {           /* 火柴人这一帧不在，配饰也不该在 */
-          if (tr.frames[idx]) { tr.frames[idx] = null; changed = true; }
+          if (idx < tr.frames.length && tr.frames[idx]) { tr.frames[idx] = null; changed = true; }
           continue;
         }
+        /* v6.1.0：只有确实要写内容时才把轨道撑到 idx，否则会留下一串尾部空帧 */
+        while (tr.frames.length <= idx) tr.frames.push(null);
         if (!tr.frames[idx] && data[i]) {
           tr.frames[idx] = data[i];
           changed = true;
@@ -5563,7 +5595,8 @@ function importActionPresets() {
     if (videoObj) list.push(videoObj);
     for (const id in AppState.tracks) {
       const data = getTrackFrame(id, idx);
-      if (data) list.push(data);
+      /* v6.1.0：轨道里理论上不该有参考视频；万一有（老项目文件），也不要重复加入 */
+      if (data && data !== videoObj) list.push(data);
     }
     return list;
   }
@@ -5976,6 +6009,10 @@ function importActionPresets() {
     }
     const sorted = [...AppState.objects].sort((a, b) => (b.layer.body || b.layer) - (a.layer.body || a.layer));
     sorted.forEach(o => {
+      /* v6.1.0：参考视频在 AppState.objects 里也会出现一份（渲染合并视图需要它），
+         但列表顶部已经单独渲染了 🎥 那一行。这里必须跳过，否则会多出一个
+         图标兜底成 ❓、又因为视频不允许 delete 而删不掉的幽灵元件。 */
+      if (o.type === 'video' || o === videoObj) return;
       if (o.locked === undefined) o.locked = false;
       const btn = document.createElement('div');
       btn.className = 'layer-btn' + (o === AppState.selected ? ' active' : '') + (o.locked ? ' locked' : '');
@@ -5987,6 +6024,7 @@ function importActionPresets() {
       else if (o.type === 'bubble') icon = '💬';
       else if (o.type === 'ink') icon = '🖌'; // brush-v5.1.0: §6.3.9
       else if (o.type === 'camera') icon = '🎥';
+      else if (o.type === 'video') icon = '🎞'; /* 兜底：万一别处把视频带进来，也不要显示 ❓ */
       btn.innerHTML = `<span>${icon}</span><span class="idx">${idx++}</span>`;
       attachLayerName(btn, o);
       btn.onclick = () => { select(o); EventBus.emit('need:render'); };
@@ -6091,11 +6129,19 @@ function importActionPresets() {
     return out;
   }
 
+  /* 主时间轴长度 = 所有轨道里「最后一个有内容的帧」的下标 + 1。
+     v6.1.0：以前取的是 frames.length 的最大值，一旦某条轨道被补过尾部空占位
+     （补间插帧、绑定元件对齐、套动作时自动补帧都会留下），空帧就会把主时间轴顶长，
+     表现就是「在其他元件的时间轴补间后，后面多出一截空白帧」。 */
   function getMainLength() {
     let max = 1;
     for (const id in AppState.tracks) {
       const t = AppState.tracks[id];
-      if (t && t.frames && t.frames.length > max) max = t.frames.length;
+      if (!t || !t.frames) continue;
+      const arr = t.frames;
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (arr[i]) { if (i + 1 > max) max = i + 1; break; }
+      }
     }
     return max;
   }
@@ -7866,6 +7912,7 @@ function importActionPresets() {
       return;
     }
     syncMainLengthFromTracks();
+    trimTrailingEmptyFrames(); /* v6.1.0：多选补间后同样清掉尾部空帧 */
     multiSelectedFrames.clear();
     invalidateAllFrameThumbs();
     AppState.objects = getCombinedObjectsForRender();
@@ -8028,6 +8075,9 @@ function importActionPresets() {
       if (inserted > 0) spliceBoundChildrenFrames(figTrackId, f2Idx, inserted);
       tweenBoundChildren(figTrackId, startIdx, f2Idx, count, used, slots, childTweens);
 
+      /* v6.1.0：补间过程中各轨道可能被补上尾部空占位，收尾统一清掉，
+         避免主时间轴后面多出一截空白帧 */
+      trimTrailingEmptyFrames();
       return { ok: true };
     }
     if (startIdx >= AppState.frames.length - 1) return { ok: false, reason: 'last' };
@@ -8046,6 +8096,8 @@ function importActionPresets() {
       insertPos++;
       syncMainLengthFromTracks();
     }
+    /* v6.1.0：收尾清掉可能残留的尾部空帧 */
+    trimTrailingEmptyFrames();
     return { ok: true };
   }
 
@@ -8999,7 +9051,7 @@ function importActionPresets() {
       const targetW = availW * 0.9;
       const targetH = availH * 0.9;
       const newScale = Math.min(targetW / AppState.canvasBounds.w, targetH / AppState.canvasBounds.h);
-      AppState.viewScale = Math.max(0.1, Math.min(5, newScale));
+      AppState.viewScale = Math.max(VIEW_SCALE_MIN, Math.min(VIEW_SCALE_MAX, newScale));
 
       const cbCx = AppState.canvasBounds.x + AppState.canvasBounds.w / 2;
       const cbCy = AppState.canvasBounds.y + AppState.canvasBounds.h / 2;
@@ -10392,8 +10444,12 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       const c = Math.cos(drag.camRot), s = Math.sin(drag.camRot);
       const wx = (dx * c - dy * s) / drag.fit;
       const wy = (dx * s + dy * c) / drag.fit;
-      drag.o.x = drag.camX + wx;
-      drag.o.y = drag.camY + wy;
+      /* v6.1.0：摄像机拖动也要走全局属性，否则只动当前帧 */
+      const nx = drag.camX + wx, ny = drag.camY + wy;
+      drag.o.x = nx;
+      drag.o.y = ny;
+      setGlobalProp(drag.o, 'x', nx);
+      setGlobalProp(drag.o, 'y', ny);
       EventBus.emit('need:render');
       return;
     }
@@ -10478,8 +10534,11 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
             const worldAfter = SKFE.systems.camera.cameraScreenToWorld({ x: midX, y: midY }, camViewObj, ctAfter);
             camViewObj.x += worldPt.x - worldAfter.x;
             camViewObj.y += worldPt.y - worldAfter.y;
+            /* v6.1.0：位置也要跟着全局写，不然缩放后逐帧位置会漂 */
             if (globalEditEnabled) {
               setGlobalProp(camViewObj, 'scale', newScale);
+              setGlobalProp(camViewObj, 'x', camViewObj.x);
+              setGlobalProp(camViewObj, 'y', camViewObj.y);
             }
           }
         }
@@ -10509,7 +10568,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       /* 非摄像机视角：原有逻辑 */
       if (lastDist > 0) {
         const zoomFactor = dist / lastDist;
-        let newScale = Math.min(5, Math.max(0.2, AppState.viewScale * zoomFactor));
+        let newScale = Math.min(VIEW_SCALE_MAX, Math.max(VIEW_SCALE_MIN, AppState.viewScale * zoomFactor));
         if (viewPinned && pinnedView) {
           newScale = Math.max(newScale, pinnedView.scale);
         }
@@ -11233,7 +11292,11 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
 
   function deleteSelected() {
     if (!AppState.selected) return;
-    if (AppState.selected.type === 'video') return;
+    if (AppState.selected.type === 'video') {
+      /* v6.1.0：选中参考视频时删除 = 移除参考视频（以前是直接 return，删不掉） */
+      removeReferenceVideo();
+      return;
+    }
     const id = AppState.selected.id;
     const isFigure = AppState.selected.type === 'figure';
     const shouldRemove = (o) => {
@@ -11435,7 +11498,10 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
         camViewObj.x += worldPt.x - worldAfter.x;
         camViewObj.y += worldPt.y - worldAfter.y;
         if (globalEditEnabled) {
+          /* v6.1.0：缩放 + 锚点位移一起走全局，逐帧都是同一份取景框 */
           setGlobalProp(camViewObj, 'scale', newScale);
+          setGlobalProp(camViewObj, 'x', camViewObj.x);
+          setGlobalProp(camViewObj, 'y', camViewObj.y);
         }
         markCurrentFrameModified();
         EventBus.emit('need:render');
@@ -11462,7 +11528,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     }
 
     const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-    let newScale = Math.min(5, Math.max(0.2, AppState.viewScale * zoomFactor));
+    let newScale = Math.min(VIEW_SCALE_MAX, Math.max(VIEW_SCALE_MIN, AppState.viewScale * zoomFactor));
     if (viewPinned && pinnedView) {
       newScale = Math.max(newScale, pinnedView.scale);
     }

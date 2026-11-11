@@ -3,7 +3,7 @@
 <head> <!-- 网页头部，包含元数据和外部引用 -->
 <meta charset="UTF-8"> <!-- 设置字符编码为 UTF-8，防止中文乱码 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover"> <!-- 移动端视口设置：宽度同设备，允许缩放，适配刘海屏 -->
-<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v6.0.3</title> <!-- 网页标题，带有多语言属性 -->
+<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v6.1.0</title> <!-- 网页标题，带有多语言属性 -->
 <link rel="stylesheet" href="./style.css"> <!-- 引入外部样式表 -->
 </head> <!-- 头部结束 -->
 <body> <!-- 网页主体开始 -->
@@ -91,7 +91,7 @@
   <div id="uiDragHandle"><div class="bar"></div></div> <!-- 面板顶部的拖拽把手 -->
 
   <div id="watermark"> <!-- 控制面板顶部的作者/版本水印 -->
-    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v6.0.3</div> <!-- 软件名称及版本 -->
+    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v6.1.0</div> <!-- 软件名称及版本 -->
     <div class="author" data-i18n="watermark.author">Author: binvwvind qq交流分享群:1121039855</div> <!-- 作者信息及群号 -->
   </div> <!-- 水印结束 -->
 
@@ -879,7 +879,7 @@
     </div> <!-- 头部结束 -->
 
     <!-- 隐藏的 checkbox 状态存储，供 JS 读取 -->
-    <input type="checkbox" id="globalEdit" checked style="display:none"> <!-- 全局编辑状态 -->
+    <input type="checkbox" id="globalEdit" style="display:none"> <!-- 全局编辑状态（v6.1.0：默认关闭） -->
     <input type="checkbox" id="onionCheck" checked style="display:none"> <!-- 洋葱皮开关状态 -->
     <input type="checkbox" id="autoCollapseTimeline" style="display:none"> <!-- 自动收起时间轴状态 -->
     <input type="checkbox" id="frameThumbMode" checked style="display:none"> <!-- 缩略图显示状态 -->
@@ -899,7 +899,7 @@
     </div> <!-- 行结束 -->
 
     <div class="adv-row"> <!-- 各种切换按钮与导出参数设置 -->
-      <button class="adv-toggle on" data-toggle="globalEdit">全局属性修改</button> <!-- 全局属性修改开关 -->
+      <button class="adv-toggle" data-toggle="globalEdit">全局属性修改</button> <!-- 全局属性修改开关（v6.1.0：默认关闭） -->
       <span id="globalEditHelpBtn" style="font-size:11px;color:var(--color-primary);text-decoration:underline;cursor:pointer;user-select:none;padding:0 2px;" data-i18n="adv.help">说明</span> <!-- 全局属性说明按钮 -->
       <button class="adv-toggle on" data-toggle="onionCheck" data-i18n="adv.onion">洋葱皮</button> <!-- 洋葱皮开关 -->
       <span class="adv-fps-group">FPS <input type="range" id="fpsSlider" min="1" max="30" value="12"><span id="fpsVal">12</span></span> <!-- 播放帧率设置 -->

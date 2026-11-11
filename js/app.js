@@ -344,7 +344,7 @@ function syncDistortToAllFrames(obj) {
   let historyToastEl = null;
   let historyToastTimer = null;
 
-  function showHistoryToast(msg, type) {
+  function showHistoryToast(msg, type, ms) {
     if (!historyToastEl) {
       historyToastEl = document.createElement('div');
       historyToastEl.className = 'ui-toast history-toast';
@@ -358,7 +358,7 @@ function syncDistortToAllFrames(obj) {
     historyToastTimer = setTimeout(() => {
       historyToastEl.style.opacity = '0';
       historyToastEl.style.transform = 'translate(-50%, -8px)';
-    }, 1700);
+    }, ms || 1700);
   }
 
   function getSnapshot() {
@@ -1166,6 +1166,7 @@ function syncDistortToAllFrames(obj) {
       headFilled: AppState.selected.headFilled,
       headFillCustom: !!AppState.selected.headFillCustom,
       headFillColor: AppState.selected.headFillColor || '#111111',
+      headShape: AppState.selected.headShape || 'circle',   /* v6.4.0 */
       bodyScale: JSON.parse(JSON.stringify(AppState.selected.bodyScale)),
       headAngle: AppState.selected.headAngle,
       light: JSON.parse(JSON.stringify(AppState.selected.light)),
@@ -1206,6 +1207,9 @@ function syncDistortToAllFrames(obj) {
     f.headFilled = d.headFilled;
     f.headFillCustom = !!d.headFillCustom;
     f.headFillColor = d.headFillColor || '#111111';
+    /* v6.4.0：旧预设没有这个字段 → 正圆；拿不到对应头型数据也退回正圆 */
+    const wantShape = d.headShape || 'circle';
+    f.headShape = (wantShape !== 'circle' && !(SKFE.systems.headShapes && SKFE.systems.headShapes.has(wantShape))) ? 'circle' : wantShape;
     f.bodyScale = JSON.parse(JSON.stringify(d.bodyScale));
     f.headAngle = d.headAngle;
     f.light = JSON.parse(JSON.stringify(d.light));
@@ -1766,9 +1770,14 @@ function syncDistortToAllFrames(obj) {
           fig.scale = Math.max(0.05, Math.min(4, targetBase.scale * data.scaleRatio));
         }
 
-        /* 旋转累计差（1A） */
+        /* 旋转（v6.2.0）：改为完全套用动作自身的绝对角度。
+           rotTotal 是「该帧相对动作首帧」的增量，所以 savedBase.rot + rotTotal
+           就等于源动作这一帧的原始角度 —— 首帧自然落在动作首帧的角度上，
+           不再叠加目标火柴人应用前的旋转（1A 的旧行为）。
+           v1 老动作没有 savedBase，继续沿用「叠加目标当前角度」以免破坏老数据。 */
         if (data.rotTotal !== undefined && isFinite(data.rotTotal)) {
-          fig.rot = targetBase.rot + data.rotTotal;
+          const rotBase = (isV2 && isFinite(savedBase.rot)) ? savedBase.rot : targetBase.rot;
+          fig.rot = rotBase + data.rotTotal;
         }
       }
 
@@ -2132,6 +2141,8 @@ function importActionPresets() {
         btnMobileExpand.style.display = 'none';
         document.body.classList.add('ui-open');   /* 展开时让底部浮动按钮让位 */
         setTimeout(resize, 0);                    /* 让 70vh 的面板高度规则立即生效 */
+        setTimeout(refreshTimelineDockOffsets, 120);
+        setTimeout(refreshTimelineDockOffsets, 340);
       }
     });
     btnToggleUI.addEventListener('click', (e) => {
@@ -2140,6 +2151,11 @@ function importActionPresets() {
       btnToggleUI.textContent = '展开';
       btnMobileExpand.style.display = 'flex';
       document.body.classList.remove('ui-open');
+      /* v6.3.0：抽屉收起时元件浮窗一起关掉，别让它孤零零浮在画布上 */
+      setLayerPopOpen(false);
+      /* v6.3.0：收起后把「🎬 帧动画面板」浮钮放回默认位置 */
+      refreshTimelineDockOffsets();
+      setTimeout(refreshTimelineDockOffsets, 340);
     });
     btnMobileExpand.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2148,6 +2164,9 @@ function importActionPresets() {
       btnMobileExpand.style.display = 'none';
       document.body.classList.add('ui-open');
       setTimeout(resize, 0);
+      /* 抽屉高度有 .3s 过渡，过渡结束后再量一次，浮钮才不会停在半路 */
+      setTimeout(refreshTimelineDockOffsets, 120);
+      setTimeout(refreshTimelineDockOffsets, 340);
     });
     setTimeout(resize, 100);
     const tip = document.createElement('div');
@@ -2207,8 +2226,10 @@ function importActionPresets() {
       rot: 0, mirror: false,
       shadowOffX: 0, shadowOffY: 0, shadowScaleX: 1, shadowScaleY: 1,
       headFilled: false, headFillCustom: false, headFillColor: '#111111',
-      bodyScale: { head: 1.83, arm: 1.06, leg: 1.16, torso: 0.62, foreArm: 0.37, shin: 0.49 },
-      headAngle: -Math.PI / 2,
+      headShape: 'circle',   /* v6.4.0：'circle' | 'Vic' | 'TCO' | 'TDL' | 'TSC' */
+      /* v6.3.0：初始预设改成用户调好的比例（手臂 0.98 / 小臂占比 0.41，其余不变） */
+      bodyScale: { head: 1.83, arm: 0.98, leg: 1.16, torso: 0.62, foreArm: 0.41, shin: 0.49 },
+      headAngle: -Math.PI / 2 - 15 * Math.PI / 180,
       headOffset: { x: 0, y: 0 },
       light: { enabled: false, color: '#ffbb66', size: 1.0, angle: 315 },
       glow: { enabled: false, color: '#ff9d3d', alpha: 0.8, blur: 18 },
@@ -2228,12 +2249,17 @@ function importActionPresets() {
       pinned: { footL: false, footR: false, handL: false, handR: false, pelvis: false },
       pinnedPos: { footL: null, footR: null, handL: null, handR: null, pelvis: null },
       layer: { body: 1, head: 2, armL: 1, armR: 1, legL: 1, legR: 1 },
+      /* v6.3.0：初始预设 = 基准姿势 + 用户在旋转面板里调好的偏移
+         （头部 -15°、左大腿 6°、左小腿 -7°、右大腿 -5°、右小腿 0°、
+           左大臂 33°、左小臂 94°、右大臂 -29°、右小臂 103°，腰部 0°、颈部随头部 -15°）
+         旋转面板显示的正是"相对下面这些基准值的偏移"，所以这里加上偏移后，
+         新建的火柴人一出来就是截图里的那组数字。 */
       a: {
         torso: -Math.PI / 2, waist: 0,
-        armL: { u: Math.PI + 0.18, f: 0.12 },
-        armR: { u: Math.PI - 0.18, f: -0.12 },
-        legL: { u: Math.PI + 0.10, f: -0.05 },
-        legR: { u: Math.PI - 0.10, f: 0.05 }
+        armL: { u: Math.PI + 0.18 + 33 * Math.PI / 180, f: 0.12 + 94 * Math.PI / 180 },
+        armR: { u: Math.PI - 0.18 - 29 * Math.PI / 180, f: -0.12 + 103 * Math.PI / 180 },
+        legL: { u: Math.PI + 0.10 + 6 * Math.PI / 180, f: -0.05 - 7 * Math.PI / 180 },
+        legR: { u: Math.PI - 0.10 - 5 * Math.PI / 180, f: 0.05 }
       }
     };
   }
@@ -2838,6 +2864,106 @@ function importActionPresets() {
 
   let renderQueue = [];
 
+  /* ==================== v6.4.0 手绘头型 ==================== */
+  /* 当前 figure 选中的手绘头型；正圆或无效值返回 null，调用方走原来的 arc 逻辑 */
+  function headShapeOf(f) {
+    const id = f && f.headShape;
+    if (!id || id === 'circle') return null;
+    const HS = SKFE.systems.headShapes;
+    if (!HS || !HS.has(id)) return null;
+    return id;
+  }
+
+  /* 头型朝向：headAngle 是「颈部 → 头心」的方向角，手绘头型默认正立，所以补 90°。
+     正圆是对称的，这个角度对它没有影响 —— 这样"圆头能转，头型也能转"是同一套逻辑。 */
+  function headShapeAngle(f) {
+    return (f.headAngle || 0) + Math.PI / 2;
+  }
+
+  /* 遮罩挖空半径：肢体/躯干要在这个半径以内被裁掉，不能画进头环里。
+     正圆用「外沿往里收半个线宽」；手绘头型用内孔比例（每个头型不一样）。 */
+  function headHoleRadius(f, j, curLW) {
+    const shapeId = headShapeOf(f);
+    if (shapeId) {
+      const r = SKFE.systems.headShapes.innerRatio(shapeId);
+      return Math.max(0, j.headR * (r || 0.7));
+    }
+    return Math.max(0, j.headR - curLW / 2);
+  }
+
+  /* v6.4.1：遮罩挖空改成一次调用。
+     正圆仍用「圆」近似；手绘头型直接用它的**内孔路径**（evenodd = 全屏减内孔），
+     遮罩边界和头型内沿完全重合。之前用圆近似，圆不是内孔的形状、圆心还有偏移，
+     某些方向会捅进头环里，把已经画好的头啃出一道月牙缺口。 */
+  function clipOutHeadHole(c, f, j, curLW) {
+    const HS = SKFE.systems.headShapes;
+    const shapeId = headShapeOf(f);
+    if (HS && shapeId && HS.holeClip) {
+      if (HS.holeClip(c, shapeId, j.headC.x, j.headC.y, j.headR, headShapeAngle(f))) return;
+    }
+    c.beginPath();
+    c.rect(-10000, -10000, 20000, 20000);
+    c.arc(j.headC.x, j.headC.y, headHoleRadius(f, j, curLW), 0, TAU, true);
+    c.clip();
+  }
+
+  /* 头型自身的「线宽」= 环的厚度。手绘头型的粗细是图形自带的、不吃线条滑块，
+     所以头部高光的倍数要以它为基准，否则（拿身体线宽算）会描出一圈比头环还粗的光。
+     正圆没有这个问题：它的环厚就是 curLW。 */
+  function headRingWidth(j, shapeId) {
+    const HS = SKFE.systems.headShapes;
+    const r = HS && shapeId ? HS.innerRatio(shapeId) : 0;
+    return Math.max(1, j.headR - j.headR * (r || 0));
+  }
+
+  /* 用给定颜色画一次头型。
+     mode: 'ring'（空心环）| 'solid'（实心盘）| 'inner'（环 + 内孔填 innerColor）
+         | 'stroke'（沿轮廓描边）| 'grow'（把环整体加厚 grow 像素，高光用）
+     strokeWidth 只在 'stroke' / 'grow' 模式下用，单位是「屏幕/世界像素」，内部会自动除以缩放系数。
+     返回 true 表示画过了，调用方不要再走 arc 分支 */
+  function paintHeadShape(c, j, f, shapeId, color, mode, innerColor, strokeWidth) {
+    const HS = SKFE.systems.headShapes;
+    if (!HS || !shapeId) return false;
+    const ang = headShapeAngle(f);
+    return HS.draw(c, shapeId, j.headC.x, j.headC.y, j.headR, ang, (p, k, s, pOuter) => {
+      if (mode === 'stroke') {
+        c.strokeStyle = color;
+        c.lineWidth = (strokeWidth || 1) / (k || 1);   /* 换算回头型局部坐标 */
+        c.stroke(p);
+        return;
+      }
+      if (mode === 'grow') {
+        /* 高光：把整个环按 grow 像素加厚（内外各长 grow），而不是沿外轮廓描一圈粗边。
+           这样和正圆头的高光语义一致——只有「超出原线条」的那一点点露出来，
+           高光粗细才是原线条的倍数，而不是半个线宽直接捅出剪影外。 */
+        c.fillStyle = color;
+        c.fill(p, 'evenodd');
+        if (strokeWidth > 0) {
+          c.strokeStyle = color;
+          c.lineWidth = strokeWidth * 2 / (k || 1);    /* 描边以轮廓为中心，两边各长 grow */
+          c.stroke(p);
+        }
+        return;
+      }
+      if (mode === 'solid') {
+        /* 用单独的外轮廓路径填：两个子路径方向相反，nonzero 直接 fill 会留孔 */
+        c.fillStyle = color;
+        c.fill(pOuter || p);
+        return;
+      }
+      if (mode === 'inner') {
+        /* 先铺满内盘，再用 evenodd 把环盖上去 —— 顺序反了环会被内盘吃掉 */
+        c.fillStyle = innerColor;
+        c.fill(pOuter || p);
+        c.fillStyle = color;
+        c.fill(p, 'evenodd');
+        return;
+      }
+      c.fillStyle = color;
+      c.fill(p, 'evenodd');
+    });
+  }
+
   /* ==================== 轮廓外发光 ==================== */
   function drawFigureGlow(f, j, curLW, radius, alphaMul, armLpts, armRpts, legLpts, legRpts) {
     const allPts = [j.pelvis, j.waistPoint, j.neck, j.headC, ...armLpts, ...armRpts, ...legLpts, ...legRpts];
@@ -2872,10 +2998,7 @@ function importActionPresets() {
         const needsMask = f.layer[limbName] < f.layer.head && !(f.headFilled || f.headFillCustom);
         if (needsMask) {
           ctx.save();
-          ctx.beginPath();
-          ctx.rect(-10000, -10000, 20000, 20000);
-          ctx.arc(j.headC.x, j.headC.y, Math.max(0, j.headR - curLW / 2), 0, TAU, true);
-          ctx.clip();
+          clipOutHeadHole(ctx, f, j, curLW);
         }
         ctx.beginPath(); smoothPolyline(pts, radius); ctx.stroke();
         const startP = pts[0], endP = pts[pts.length - 1];
@@ -2885,6 +3008,12 @@ function importActionPresets() {
       };
 
       const drawGlowHead = () => {
+        const hShape = headShapeOf(f);
+        if (hShape) {
+          /* 外发光也沿手绘头型走，否则会在圆形位置冒出个光晕 */
+          paintHeadShape(ctx, j, f, hShape, ctx.fillStyle, (f.headFilled || f.headFillCustom) ? 'solid' : 'ring');
+          return;
+        }
         ctx.beginPath(); ctx.arc(j.headC.x, j.headC.y, j.headR, 0, TAU);
         if (f.headFilled || f.headFillCustom) ctx.fill(); else ctx.stroke();
       };
@@ -2893,10 +3022,7 @@ function importActionPresets() {
         const needsMask = f.layer.body < f.layer.head && !(f.headFilled || f.headFillCustom);
         if (needsMask) {
           ctx.save();
-          ctx.beginPath();
-          ctx.rect(-10000, -10000, 20000, 20000);
-          ctx.arc(j.headC.x, j.headC.y, Math.max(0, j.headR - curLW / 2), 0, TAU, true);
-          ctx.clip();
+          clipOutHeadHole(ctx, f, j, curLW);
         }
         ctx.beginPath(); smoothPolyline([j.pelvis, j.waistPoint, j.neck], radius); ctx.stroke();
         if (needsMask) ctx.restore();
@@ -3179,10 +3305,7 @@ function importActionPresets() {
       const needsMask = f.layer.body < f.layer.head && !(f.headFilled || f.headFillCustom);
       if (needsMask) {
         ctx.save();
-        ctx.beginPath();
-        ctx.rect(-10000, -10000, 20000, 20000);
-        ctx.arc(j.headC.x, j.headC.y, Math.max(0, j.headR - curLW / 2), 0, TAU, true);
-        ctx.clip();
+        clipOutHeadHole(ctx, f, j, curLW);
       }
 
       if (drawLight) {
@@ -3213,15 +3336,38 @@ function importActionPresets() {
 
     const drawHead = () => {
       ctx.save(); ctx.globalAlpha = f.alpha * alphaMul; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      const hShape = headShapeOf(f);
       if (drawLight) {
         ctx.save();
         ctx.strokeStyle = f.light.color;
-        ctx.lineWidth = curLW * (f.light.size || 1.0);
+        /* v6.4.1：手绘头型的「原线条」是环的厚度，不是身体线宽 curLW。
+           之前统一用 curLW → 高光描边比头环还粗，糊成一圈大橙环。
+           另外也不能沿外轮廓描：那样半个线宽直接露在剪影外。
+           这里改成「整环加厚 Δ」，Δ = 环厚×(倍数-1)/2，和正圆头的语义完全一致。 */
+        const ringW = hShape ? headRingWidth(j, hShape) : curLW;
+        const grow = Math.max(0, ringW * ((f.light.size || 1.0) - 1) / 2);
+        ctx.lineWidth = hShape ? grow * 2 : curLW * (f.light.size || 1.0);
         ctx.translate(ox, oy);
-        ctx.beginPath(); ctx.arc(j.headC.x, j.headC.y, j.headR, 0, TAU); ctx.stroke();
+        if (hShape) {
+          paintHeadShape(ctx, j, f, hShape, f.light.color, 'grow', null, grow);
+        } else {
+          ctx.beginPath(); ctx.arc(j.headC.x, j.headC.y, j.headR, 0, TAU); ctx.stroke();
+        }
         ctx.restore();
       }
       const customFill = f.headFillCustom && f.headFillColor;
+      if (hShape) {
+        /* v6.4.0：手绘头型。粗细由形状本身决定，不吃线宽滑块 —— 大小只跟「头部」比例走 */
+        if (f.headFilled) {
+          paintHeadShape(ctx, j, f, hShape, (tint || !customFill) ? effColor : f.headFillColor, 'solid');
+        } else if (customFill) {
+          paintHeadShape(ctx, j, f, hShape, tint || effColor, 'inner', tint || f.headFillColor);
+        } else {
+          paintHeadShape(ctx, j, f, hShape, effColor, 'ring');
+        }
+        ctx.restore();
+        return;
+      }
       if (f.headFilled) {
         ctx.fillStyle = (tint || !customFill) ? effColor : f.headFillColor;
         ctx.beginPath(); ctx.arc(j.headC.x, j.headC.y, j.headR, 0, TAU); ctx.fill();
@@ -3240,10 +3386,7 @@ function importActionPresets() {
       const needsMask = f.layer[limbName] < f.layer.head && !(f.headFilled || f.headFillCustom);
       if (needsMask) {
         ctx.save();
-        ctx.beginPath();
-        ctx.rect(-10000, -10000, 20000, 20000);
-        ctx.arc(j.headC.x, j.headC.y, Math.max(0, j.headR - curLW / 2), 0, TAU, true);
-        ctx.clip();
+        clipOutHeadHole(ctx, f, j, curLW);
       }
       ctx.save(); ctx.globalAlpha = f.alpha * alphaMul; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = curLW;
       if (drawLight) {
@@ -3910,71 +4053,29 @@ function importActionPresets() {
     c.lineCap = 'round';
     c.lineJoin = 'round';
 
-    const inkErasers = ink.eraser || [];
-    let ordered = ink.strokes;
-    if (inkErasers.length) {
-      ordered = [];
-      for (const s of ink.strokes) ordered.push({ __inkMask: false, z: (typeof s.z === 'number' ? s.z : 0), s });
-      for (const er of inkErasers) ordered.push({ __inkMask: true, z: (typeof er.z === 'number' ? er.z : 1e9), er });
-      ordered.sort((a, b) => a.z - b.z);
-    }
-
-    for (const item of ordered) {
-      /* ---- 擦除遮罩 ---- */
-      if (item.__inkMask) {
-        const pts = item.er && item.er.points;
-        if (!pts || !pts.length) continue;
-        c.save();
-        c.globalCompositeOperation = 'destination-out';
-        c.globalAlpha = 1;
-        c.strokeStyle = '#000'; c.fillStyle = '#000';
-        if (unitsSafe(syncScale)) {
-          if (pts.length === 1) {
-            const p = toW(pts[0].x, pts[0].y);
-            const kk = kAt(pts[0].x, pts[0].y) / syncScale;
-            c.beginPath();
-            c.arc(p.x, p.y, Math.max((item.er.size || 1) * kk / 2, 0.3), 0, TAU);
-            c.fill();
-          } else {
-            for (let i = 1; i < pts.length; i++) {
-              const a = pts[i - 1], b = pts[i];
-              const pa = toW(a.x, a.y), pb = toW(b.x, b.y);
-              const kk = ((kAt(a.x, a.y) + kAt(b.x, b.y)) / 2) / syncScale;
-              c.lineWidth = Math.max(0.3, (item.er.size || 1) * kk);
-              c.beginPath(); c.moveTo(pa.x, pa.y); c.lineTo(pb.x, pb.y); c.stroke();
-            }
-          }
-        }
-        c.restore();
-        continue;
-      }
-
-      const s = item.__inkMask === false ? item.s : item;
-      const pts = s.points;
-      if (!pts || !pts.length) continue;
-
-      /* ---- 边 ---- */
-      if (s.borderWidth > 0 && s.borderColor) {
-        c.strokeStyle = s.borderColor;
-        c.fillStyle = s.borderColor;
-        if (pts.length === 1) {
-          const p = pts[0], q = toW(p.x, p.y);
-          const kk = kAt(p.x, p.y);
-          c.beginPath();
-          c.arc(q.x, q.y, Math.max(p.w * kk / 2, 0.4) + s.borderWidth * kk, 0, TAU);
-          c.fill();
-        } else {
-          for (let i = 1; i < pts.length; i++) {
-            const a = pts[i - 1], b = pts[i];
-            const qa = toW(a.x, a.y), qb = toW(b.x, b.y);
-            const kk = (kAt(a.x, a.y) + kAt(b.x, b.y)) / 2;
-            c.lineWidth = Math.max(0.5, ((a.w + b.w) / 2) * kk + s.borderWidth * 2 * kk);
-            c.beginPath(); c.moveTo(qa.x, qa.y); c.lineTo(qb.x, qb.y); c.stroke();
-          }
+    /* v6.2.0：把「边」「芯」「橡皮」拆成三个独立动作，方便按描边铺底规则重新排序 */
+    const paintBorder = (s, pts) => {
+      if (!(s.borderWidth > 0) || !s.borderColor) return;
+      c.strokeStyle = s.borderColor;
+      c.fillStyle = s.borderColor;
+      if (pts.length === 1) {
+        const p = pts[0], q = toW(p.x, p.y);
+        const kk = kAt(p.x, p.y);
+        c.beginPath();
+        c.arc(q.x, q.y, Math.max(p.w * kk / 2, 0.4) + s.borderWidth * kk, 0, TAU);
+        c.fill();
+      } else {
+        for (let i = 1; i < pts.length; i++) {
+          const a = pts[i - 1], b = pts[i];
+          const qa = toW(a.x, a.y), qb = toW(b.x, b.y);
+          const kk = (kAt(a.x, a.y) + kAt(b.x, b.y)) / 2;
+          c.lineWidth = Math.max(0.5, ((a.w + b.w) / 2) * kk + s.borderWidth * 2 * kk);
+          c.beginPath(); c.moveTo(qa.x, qa.y); c.lineTo(qb.x, qb.y); c.stroke();
         }
       }
+    };
 
-      /* ---- 芯 ---- */
+    const paintCore = (s, pts) => {
       c.strokeStyle = s.color;
       c.fillStyle = s.color;
       if (pts.length === 1) {
@@ -3992,7 +4093,65 @@ function importActionPresets() {
           c.beginPath(); c.moveTo(qa.x, qa.y); c.lineTo(qb.x, qb.y); c.stroke();
         }
       }
+    };
+
+    const paintMask = (item) => {
+      const pts = item.er && item.er.points;
+      if (!pts || !pts.length) return;
+      c.save();
+      c.globalCompositeOperation = 'destination-out';
+      c.globalAlpha = 1;
+      c.strokeStyle = '#000'; c.fillStyle = '#000';
+      if (unitsSafe(syncScale)) {
+        if (pts.length === 1) {
+          const p = toW(pts[0].x, pts[0].y);
+          const kk = kAt(pts[0].x, pts[0].y) / syncScale;
+          c.beginPath();
+          c.arc(p.x, p.y, Math.max((item.er.size || 1) * kk / 2, 0.3), 0, TAU);
+          c.fill();
+        } else {
+          for (let i = 1; i < pts.length; i++) {
+            const a = pts[i - 1], b = pts[i];
+            const pa = toW(a.x, a.y), pb = toW(b.x, b.y);
+            const kk = ((kAt(a.x, a.y) + kAt(b.x, b.y)) / 2) / syncScale;
+            c.lineWidth = Math.max(0.3, (item.er.size || 1) * kk);
+            c.beginPath(); c.moveTo(pa.x, pa.y); c.lineTo(pb.x, pb.y); c.stroke();
+          }
+        }
+      }
+      c.restore();
+    };
+
+    const inkErasers = ink.eraser || [];
+    let ordered = ink.strokes;
+    if (inkErasers.length) {
+      ordered = [];
+      for (const s of ink.strokes) ordered.push({ __inkMask: false, z: (typeof s.z === 'number' ? s.z : 0), s });
+      for (const er of inkErasers) ordered.push({ __inkMask: true, z: (typeof er.z === 'number' ? er.z : 1e9), er });
+      ordered.sort((a, b) => a.z - b.z);
     }
+
+    /* 勾了「描边铺底」的连续几笔合并成一组：先把组内所有边画完，再统一画芯。
+       橡皮与未勾选的笔会打断分组，保持原来的落笔顺序。 */
+    let group = [];
+    const flushGroup = () => {
+      if (!group.length) return;
+      for (const g of group) paintBorder(g.s, g.pts);
+      for (const g of group) paintCore(g.s, g.pts);
+      group = [];
+    };
+
+    for (const item of ordered) {
+      if (item.__inkMask) { flushGroup(); paintMask(item); continue; }
+      const s = item.__inkMask === false ? item.s : item;
+      const pts = s.points;
+      if (!pts || !pts.length) continue;
+      if (s.outlineUnder) { group.push({ s, pts }); continue; }
+      flushGroup();
+      paintBorder(s, pts);
+      paintCore(s, pts);
+    }
+    flushGroup();
     c.restore();
   }
 
@@ -4046,36 +4205,32 @@ function importActionPresets() {
         ordered.sort((a, b) => a.z - b.z);   /* 稳定排序：同 z 时笔迹先于遮罩 */
       }
 
-      for (const item of ordered) {
-        if (item.__inkMask) { drawInkMaskLocal(ctx, item.er, finalScale); continue; }
-        const s = item.__inkMask === false ? item.s : item;
-        const pts = s.points;
-        if (!pts || !pts.length) continue;
-
-        /* ---- 边（同一笔先画边，再画笔芯，保证边被芯覆盖） ---- */
-        if (s.borderWidth > 0 && s.borderColor) {
-          ctx.strokeStyle = s.borderColor;
-          ctx.fillStyle = s.borderColor;
-          if (pts.length === 1) {
-            const p = pts[0];
+      /* ---- 边 ---- */
+      const paintBorder = (s, pts) => {
+        if (!(s.borderWidth > 0 && s.borderColor)) return;
+        ctx.strokeStyle = s.borderColor;
+        ctx.fillStyle = s.borderColor;
+        if (pts.length === 1) {
+          const p = pts[0];
+          ctx.beginPath();
+          ctx.arc(p.x * finalScale, p.y * finalScale,
+            Math.max(p.w * finalScale / 2, 0.4) + s.borderWidth * finalScale, 0, TAU);
+          ctx.fill();
+        } else {
+          for (let i = 1; i < pts.length; i++) {
+            const a = pts[i - 1], b = pts[i];
+            ctx.lineWidth = Math.max(0.5,
+              ((a.w + b.w) / 2) * finalScale + s.borderWidth * 2 * finalScale);
             ctx.beginPath();
-            ctx.arc(p.x * finalScale, p.y * finalScale,
-              Math.max(p.w * finalScale / 2, 0.4) + s.borderWidth * finalScale, 0, TAU);
-            ctx.fill();
-          } else {
-            for (let i = 1; i < pts.length; i++) {
-              const a = pts[i - 1], b = pts[i];
-              ctx.lineWidth = Math.max(0.5,
-                ((a.w + b.w) / 2) * finalScale + s.borderWidth * 2 * finalScale);
-              ctx.beginPath();
-              ctx.moveTo(a.x * finalScale, a.y * finalScale);
-              ctx.lineTo(b.x * finalScale, b.y * finalScale);
-              ctx.stroke();
-            }
+            ctx.moveTo(a.x * finalScale, a.y * finalScale);
+            ctx.lineTo(b.x * finalScale, b.y * finalScale);
+            ctx.stroke();
           }
         }
+      };
 
-        /* ---- 芯 ---- */
+      /* ---- 芯 ---- */
+      const paintCore = (s, pts) => {
         ctx.strokeStyle = s.color;
         ctx.fillStyle = s.color;
         if (pts.length === 1) {
@@ -4093,7 +4248,30 @@ function importActionPresets() {
             ctx.stroke();
           }
         }
+      };
+
+      /* v6.2.0 描边铺底：勾了 outlineUnder 的连续几笔合并成一组，
+         先把组内所有边画完，再统一画芯 —— 后一笔的边不会压住前一笔的芯。
+         橡皮与未勾选的笔会打断分组，保持原来的落笔顺序。 */
+      let group = [];
+      const flushGroup = () => {
+        if (!group.length) return;
+        for (const g of group) paintBorder(g.s, g.pts);
+        for (const g of group) paintCore(g.s, g.pts);
+        group = [];
+      };
+
+      for (const item of ordered) {
+        if (item.__inkMask) { flushGroup(); drawInkMaskLocal(ctx, item.er, finalScale); continue; }
+        const s = item.__inkMask === false ? item.s : item;
+        const pts = s.points;
+        if (!pts || !pts.length) continue;
+        if (s.outlineUnder) { group.push({ s, pts }); continue; }
+        flushGroup();
+        paintBorder(s, pts);
+        paintCore(s, pts);
       }
+      flushGroup();
       ctx.restore();
 
       /* ---- 选中虚线框（与其它元件一致；变换框开启时由变换框代替） ---- */
@@ -4145,12 +4323,17 @@ function importActionPresets() {
   function renderScene(list, opts) {
     opts = opts || {};
     const isExporting = !!opts.isExporting;
+    /* 渲染出口的绘制列表会剔除被小眼睛隐藏的元件，
+       但 _renderList 必须保留**完整**列表：绑定件的父级查找（getBindTransform / getBindBase /
+       getParentWarp / getMountedExtent）都依赖它。若把隐藏的 figure 摘掉，挂在它身上的画笔
+       会查不到父级、回退到自身 x/y，看起来就是「隐藏火柴人后元件四散」。 */
     const prevList = _renderList;
-    _renderList = list;
+    _renderList = opts.refList || list;
+    const drawList = opts.includeHidden ? list : list.filter(o => o && !o.hidden);
     const prevQueue = renderQueue;
     renderQueue = [];
 
-    for (const o of list) {
+    for (const o of drawList) {
       const isSel = !isExporting && !opts.isGhost && o === AppState.selected;
       if (o.type === 'camera') { SKFE.systems.camera.queueCamera(o, isSel, isExporting, opts); continue; }
       // figure 的橡皮擦走 queueFigure 内部的肢体局部遮罩（drawMaskedLimb 等），
@@ -5614,18 +5797,29 @@ function importActionPresets() {
     return getCombinedObjectsForRenderAt(AppState.currentFrameIndex);
   }
 
+  /* v6.4.0：铺满整块画布的底色 / 清屏。
+     导出时 exportImage 会先给 ctx 设一套 scale+translate 的变换，
+     之前这里直接用 canvas.width（设备像素）当宽高，被变换放大后又整体偏移，
+     结果只盖住画布约 1/4（JPG 导出背景 3/4 变黑）。这里改成回到单位变换再铺，
+     与当前变换无关，任何缩放下都能铺满。 */
+  function paintWholeCanvas(color) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (color == null) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    else { ctx.fillStyle = color; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+    ctx.restore();
+  }
+
   function renderCanvas(isExporting) {
     isExporting = !!isExporting;
     const trackAlphaOpts = (!isExporting && isSubTrackMode()) ? { alphaFor: getTrackRenderAlpha } : {};
     const w = canvas.width, h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
+    paintWholeCanvas(null);
 
     if (!isExporting) {
-      ctx.fillStyle = pageBgAlpha < 1 ? themeHexToRgba(pageBgColor, pageBgAlpha) : pageBgColor;
-      ctx.fillRect(0, 0, w, h);
+      paintWholeCanvas(pageBgAlpha < 1 ? themeHexToRgba(pageBgColor, pageBgAlpha) : pageBgColor);
     } else if (window.exportFormat === 'jpg') {
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, w, h);
+      paintWholeCanvas('#ffffff');
     }
 
     /* 摄像机子轨道：整块画布切换为摄像机取景视角 */
@@ -5982,6 +6176,410 @@ function importActionPresets() {
   }
 
   /* ==================== 图层列表 ==================== */
+  /* ==================== v6.3.0 元件浮窗（缩略图 / 眼睛隐藏 / 长按拖动排序） ====================
+     交互约定：
+       · 元件栏最左侧 ▾ 展开一条浮在画布上的横向缩略图栏；
+       · 每格右侧 👁 = 隐藏/显示，永远全帧生效（和透明度 alpha 是两回事：隐藏＝完全不画、不导出、点不到）；
+       · 每格右侧 ≡ 长按 0.5 秒后左右拖动 = 调整上下层级，写入走 setGlobalProp，遵守「全局属性修改」开关；
+       · 火柴人整体按躯干 layer.body 参与排序；置顶/置底用「当前最高/最低层 ±1」，不再用 999 极限值。 */
+  const layerPopEl = document.getElementById('layerPop');
+  const layerPopListEl = document.getElementById('layerPopList');
+  const layerPopCountEl = document.getElementById('layerPopCount');
+  const btnLayerPop = document.getElementById('btnLayerPop');
+  let layerPopOpen = false;
+  let layerThumbCache = new Map();
+  let layerThumbCacheV = -1;
+  let layerDragState = null;
+
+  /* 排序用的层级：火柴人按躯干算 */
+  function layerSortVal(o) {
+    if (!o) return 0;
+    if (o.type === 'figure') {
+      if (o.layer && typeof o.layer === 'object') return o.layer.body || 0;
+      return o.layer || 0;
+    }
+    return (typeof o.layer === 'number') ? o.layer : 0;
+  }
+
+  /* 当前帧、可参与排序的元件（参考视频不参与，和图层列表保持一致） */
+  function getLayerUIObjects() {
+    return AppState.objects
+      .filter(o => o && o.type !== 'video')
+      .sort((a, b) => layerSortVal(b) - layerSortVal(a));
+  }
+
+  function layerItemEmoji(o) {
+    if (o.type === 'figure') return '🖤';
+    if (o.type === 'image') return '🌇';
+    if (o.type === 'acc') return '👑';
+    if (o.type === 'shape') return '🔷';
+    if (o.type === 'bubble') return '💬';
+    if (o.type === 'ink') return '🖌';
+    if (o.type === 'camera') return '🎥';
+    return '❓';
+  }
+
+  function layerThumbURL(o) {
+    if (layerThumbCacheV !== thumbVersion) { layerThumbCache.clear(); layerThumbCacheV = thumbVersion; }
+    /* key 要带帧号：切帧后元件位置/姿态都变了，只按 id 缓存会显示上一帧的旧图 */
+    const key = AppState.currentFrameIndex + '|' + String(o.id);
+    if (layerThumbCache.has(key)) return layerThumbCache.get(key);
+    let url = null;
+    try {
+      const off = renderFrameToDataURL(AppState.currentFrameIndex, 96, 96, {
+        transparent: true, ignoreCamera: true, onlyId: o.id, includeHidden: true, noRotate: true
+      });
+      url = off.toDataURL('image/png');
+    } catch (_) { url = null; }
+    layerThumbCache.set(key, url);
+    return url;
+  }
+
+  /* 拖动排序：把整张列表重新编号，顶部最大 */
+  function applyLayerOrder(ordered) {
+    const n = ordered.length;
+    ordered.forEach((o, i) => {
+      const target = n - i;
+      const cur = layerSortVal(o);
+      if (o.type === 'figure' && o.layer && typeof o.layer === 'object') {
+        const delta = target - cur;
+        if (!delta) return;
+        Object.keys(o.layer).forEach(k => {
+          o.layer[k] = (o.layer[k] || 0) + delta;
+          setGlobalProp(o, 'layer.' + k, o.layer[k]);
+        });
+      } else {
+        if (cur === target) return;
+        o.layer = target;
+        setGlobalProp(o, 'layer', target);
+      }
+    });
+    EventBus.emit('need:render');
+    markCurrentFrameModified();
+    EventBus.emit('history:save', '调整图层顺序');
+    updateLayerList();
+  }
+
+  /* 眼睛：隐藏/显示，永远全帧生效（不看全局属性开关） */
+  function setObjectHiddenGlobal(o, hidden) {
+    if (!o) return;
+    const id = String(o.id);
+    const apply = (data) => {
+      if (data && String(data.id) === id) data.hidden = !!hidden;
+    };
+    apply(o);
+    for (const tid in AppState.tracks) {
+      const t = AppState.tracks[tid];
+      if (!t || !t.frames) continue;
+      for (const data of t.frames) apply(data);
+    }
+    if (AppState.selected) apply(AppState.selected);
+    EventBus.emit('need:render');
+    markCurrentFrameModified();
+    EventBus.emit('history:save', hidden ? '隐藏元件' : '显示元件');
+    if (layerPopOpen) renderLayerPop();
+    updateLayerList();
+  }
+
+  function positionLayerPop() {
+    if (!layerPopEl || !btnLayerPop) return;
+    const r = btnLayerPop.getBoundingClientRect();
+    const w = layerPopEl.offsetWidth || 300;
+    const h = layerPopEl.offsetHeight || 140;
+    let left = r.left;
+    let top = r.bottom + 6;
+    /* 宽视口：控制面板右侧还放得下就浮到画布上，别压住下面的属性面板 */
+    const uiEl = document.getElementById('ui');
+    if (uiEl) {
+      const ur = uiEl.getBoundingClientRect();
+      if (window.innerWidth - ur.right > w + 26 && ur.width > 0) {
+        left = ur.right + 10;
+        top = Math.max(8, r.top);
+      }
+    }
+    left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
+    /* 空间不够就往上翻 */
+    if (top + h > window.innerHeight - 8) {
+      top = Math.max(8, r.top - 6 - h);
+    }
+    layerPopEl.style.left = Math.round(left) + 'px';
+    layerPopEl.style.top = Math.round(top) + 'px';
+  }
+
+  function setLayerPopOpen(open) {
+    layerPopOpen = !!open;
+    if (!layerPopEl) return;
+    layerPopEl.classList.toggle('open', layerPopOpen);
+    if (btnLayerPop) btnLayerPop.classList.toggle('on', layerPopOpen);
+    if (layerPopOpen) { renderLayerPop(); positionLayerPop(); }
+  }
+
+  /* 防抖：拖拽元件时 need:syncUI 触发很频繁，别每帧都重建整条浮窗（缩略图重算很贵） */
+  let layerPopTimer = 0;
+  let layerPopAnimUntil = 0;   /* 落地动效期间不要重建，否则会把过渡打断 */
+  function scheduleRenderLayerPop() {
+    if (!layerPopOpen) return;
+    if (layerPopTimer) return;
+    const wait = Math.max(120, layerPopAnimUntil - Date.now());
+    layerPopTimer = setTimeout(() => { layerPopTimer = 0; renderLayerPop(); }, wait);
+  }
+
+  function renderLayerPop() {
+    if (!layerPopOpen || !layerPopListEl) return;
+    if (layerDragState) return;   /* 拖动中重建会把 DOM 换掉，手势就断了 */
+    const list = getLayerUIObjects();
+    if (layerPopCountEl) layerPopCountEl.textContent = list.length + ' 个';
+    layerPopListEl.innerHTML = '';
+    list.forEach((o) => {
+      const item = document.createElement('div');
+      item.className = 'lp-item'
+        + (o === AppState.selected ? ' active' : '')
+        + (o.hidden ? ' hidden-obj' : '');
+      item.dataset.id = String(o.id);
+
+      const wrap = document.createElement('div');
+      wrap.className = 'lp-thumb-wrap';
+      const url = layerThumbURL(o);
+      if (url) {
+        const im = document.createElement('img');
+        im.className = 'lp-thumb';
+        im.src = url;
+        im.draggable = false;
+        wrap.appendChild(im);
+      } else {
+        const em = document.createElement('span');
+        em.className = 'lp-emoji';
+        em.textContent = layerItemEmoji(o);
+        wrap.appendChild(em);
+      }
+      item.appendChild(wrap);
+
+      const rail = document.createElement('div');
+      rail.className = 'lp-rail';
+
+      const eye = document.createElement('button');
+      eye.type = 'button';
+      eye.className = 'lp-eye' + (o.hidden ? ' on' : '');
+      eye.textContent = o.hidden ? '🙈' : '👁';
+      eye.title = o.hidden ? tr2('layerPop.showTip', '点击显示（全帧生效）') : tr2('layerPop.hideTip', '点击隐藏（全帧生效）');
+      eye.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
+      eye.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setObjectHiddenGlobal(o, !o.hidden);
+      });
+      rail.appendChild(eye);
+
+      const handle = document.createElement('div');
+      handle.className = 'lp-drag';
+      handle.textContent = '≡';
+      handle.title = tr2('layerPop.dragTip', '长按 0.5 秒后左右拖动，调整图层上下顺序');
+      attachLayerDragHandle(handle, o, item);
+      rail.appendChild(handle);
+
+      item.appendChild(rail);
+
+      const name = document.createElement('span');
+      name.className = 'lp-name';
+      name.textContent = o.name || layerItemEmoji(o);
+      item.appendChild(name);
+
+      item.title = (o.name || '') + (o.hidden ? '（已隐藏）' : '');
+      item.addEventListener('click', (e) => {
+        if (e.target.closest('.lp-eye') || e.target.closest('.lp-drag')) return;
+        select(o);
+        EventBus.emit('need:render');
+        renderLayerPop();
+      });
+
+      layerPopListEl.appendChild(item);
+    });
+  }
+
+  function tr2(key, fallback) {
+    try { if (typeof window.t === 'function') { const s = window.t(key); if (s && s !== key) return s; } } catch (_) {}
+    return fallback;
+  }
+
+  /* 长按 0.5 秒进入拖动；v6.3.1 起不画竖线指示器，改为「被拖行跟手 + 其余行实时让位」 */
+  function attachLayerDragHandle(handle, o, item) {
+    let timer = 0;
+    let armed = false;
+    const cancelTimer = () => { if (timer) { clearTimeout(timer); timer = 0; } };
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      armed = false;
+      cancelTimer();
+      const sx = e.clientX, sy = e.clientY, pid = e.pointerId;
+      timer = setTimeout(() => {
+        timer = 0;
+        armed = true;
+        beginLayerDrag(item, o, pid, sy);
+      }, 500);
+      /* 长按未满就明显移动 → 视为滑动列表，取消长按 */
+      const onPreMove = (ev) => {
+        if (ev.pointerId !== pid) return;
+        if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > 8) {
+          cancelTimer();
+          window.removeEventListener('pointermove', onPreMove, true);
+        }
+      };
+      const onPreUp = () => {
+        cancelTimer();
+        window.removeEventListener('pointermove', onPreMove, true);
+        window.removeEventListener('pointerup', onPreUp, true);
+      };
+      window.addEventListener('pointermove', onPreMove, true);
+      window.addEventListener('pointerup', onPreUp, true);
+    });
+  }
+
+  function beginLayerDrag(item, o, pointerId, startY) {
+    const items = Array.from(layerPopListEl.children);
+    const rects = items.map(el => el.getBoundingClientRect());
+    const from = items.indexOf(item);
+    layerDragState = {
+      id: String(o.id), item, items, rects,
+      from, to: from, pointerId,
+      startY: startY, dy: 0,
+      moved: false
+    };
+    item.classList.add('dragging');
+    try { if (navigator.vibrate) navigator.vibrate(12); } catch (_) {}
+    window.addEventListener('pointermove', onLayerDragMove, true);
+    window.addEventListener('pointerup', onLayerDragEnd, true);
+    window.addEventListener('pointercancel', onLayerDragEnd, true);
+  }
+
+  /* 其余行平移到「前一/后一行的原始槽位」，让出被拖行最终要落的位置 */
+  function applyLayerShift() {
+    const st = layerDragState;
+    if (!st) return;
+    const { items, rects, from, to } = st;
+    for (let i = 0; i < items.length; i++) {
+      if (i === from) continue;
+      const el = items[i];
+      let shift = 0;
+      if (to > from) {
+        /* 往下拖：from 之后的行依次上移一格填坑 */
+        if (i > from && i < to) shift = rects[i - 1].top - rects[i].top;
+      } else if (to < from) {
+        /* 往上拖：to 到 from-1 的行依次下移一格腾位 */
+        if (i >= to && i < from) shift = rects[i + 1].top - rects[i].top;
+      }
+      el.style.transform = shift ? 'translateY(' + Math.round(shift) + 'px)' : '';
+    }
+  }
+
+  function onLayerDragMove(e) {
+    const st = layerDragState;
+    if (!st) return;
+    e.preventDefault();
+
+    /* 靠近上下边缘时自动滚动，并把滚动量补给 rects / startY，避免跟手错位 */
+    const lr = layerPopListEl.getBoundingClientRect();
+    let ds = 0;
+    if (e.clientY < lr.top + 26) ds = -8;
+    else if (e.clientY > lr.bottom - 26) ds = 8;
+    if (ds) {
+      const before = layerPopListEl.scrollTop;
+      layerPopListEl.scrollTop += ds;
+      const actual = layerPopListEl.scrollTop - before;
+      if (actual) {
+        st.rects.forEach(r => { r.top -= actual; r.bottom -= actual; });
+        st.startY -= actual;
+      }
+    }
+
+    /* 被拖行跟手 */
+    const dy = e.clientY - st.startY;
+    if (Math.abs(dy) > 3) st.moved = true;
+    st.dy = dy;
+    st.item.style.transform = 'translateY(' + Math.round(dy) + 'px)';
+
+    /* 插入位置：指针落在哪一行的上半部分就插到它前面 */
+    const y = e.clientY;
+    let to = st.items.length;
+    for (let i = 0; i < st.items.length; i++) {
+      const r = st.rects[i];
+      if (y < r.top + r.height / 2) { to = i; break; }
+    }
+    if (to !== st.to) { st.to = to; }
+    applyLayerShift();
+  }
+
+  function onLayerDragEnd() {
+    const st = layerDragState;
+    if (!st) return;
+    layerDragState = null;
+    window.removeEventListener('pointermove', onLayerDragMove, true);
+    window.removeEventListener('pointerup', onLayerDragEnd, true);
+    window.removeEventListener('pointercancel', onLayerDragEnd, true);
+
+    const { item, items, from, to } = st;
+    item.classList.remove('dragging');
+
+    if (!st.moved || to === from || to === from + 1) {
+      /* 没真正挪位置：让所有行滑回原处 */
+      item.style.transform = '';
+      items.forEach(el => { el.style.transform = ''; });
+      return;
+    }
+
+    /* 真正的 DOM 重排：其余行已经让到目标槽位，重排后清掉 transform 不会跳 */
+    const rest = items.filter(el => el !== item);
+    const targetIdx = (to > from) ? to - 1 : to;
+    const ref = rest[targetIdx] || null;
+    const visTop = item.getBoundingClientRect().top;   /* 指针处的视觉位置 */
+    layerPopListEl.insertBefore(item, ref);
+    items.forEach(el => { el.style.transform = ''; });
+
+    /* 被拖行从指针位置平滑落到最终槽位 */
+    const newTop = item.getBoundingClientRect().top;
+    const delta = visTop - newTop;
+    layerPopAnimUntil = Date.now() + 300;
+    if (Math.abs(delta) > 1) {
+      item.style.transition = 'none';
+      item.style.transform = 'translateY(' + Math.round(delta) + 'px)';
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          item.style.transition = '';
+          item.style.transform = '';
+        });
+      });
+    }
+
+    /* 按 DOM 顺序落地成新的层级 */
+    const ordered = Array.from(layerPopListEl.children)
+      .map(el => AppState.objects.find(o => String(o.id) === el.dataset.id))
+      .filter(Boolean);
+    applyLayerOrder(ordered);
+    /* v6.3.0：排序遵守「全局属性」开关——关着时只改当前帧，给个提示免得以为全帧都变了 */
+    if (!globalEditEnabled) showHistoryToast(tr2('layerPop.onlyThisFrame', '图层顺序仅应用于当前帧（全局属性开关已关闭）'), 'undo', 2400);
+  }
+
+  if (btnLayerPop) {
+    btnLayerPop.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setLayerPopOpen(!layerPopOpen);
+    });
+  }
+  const btnLayerPopClose = document.getElementById('btnLayerPopClose');
+  if (btnLayerPopClose) {
+    btnLayerPopClose.addEventListener('click', (e) => { e.stopPropagation(); setLayerPopOpen(false); });
+  }
+  document.addEventListener('pointerdown', (e) => {
+    if (!layerPopOpen) return;
+    const t = e.target;
+    if (!t || !t.closest) return;
+    if (t.closest('#layerPop') || t.closest('#btnLayerPop')) return;
+    setLayerPopOpen(false);
+  }, true);
+  window.addEventListener('resize', () => { if (layerPopOpen) positionLayerPop(); });
+  if (uiPanel) uiPanel.addEventListener('scroll', () => { if (layerPopOpen) positionLayerPop(); }, { passive: true });
+  EventBus.on('need:syncUI', () => { scheduleRenderLayerPop(); });
+
   /* name-v5.1.1: 图层按钮上的元件名称（安全文本节点，兼容图片/配饰等所有类型） */
   function attachLayerName(btn, o) {
     const raw = (o && typeof o.name === 'string') ? o.name.trim() : '';
@@ -6027,6 +6625,7 @@ function importActionPresets() {
       else if (o.type === 'video') icon = '🎞'; /* 兜底：万一别处把视频带进来，也不要显示 ❓ */
       btn.innerHTML = `<span>${icon}</span><span class="idx">${idx++}</span>`;
       attachLayerName(btn, o);
+      if (o.hidden) { btn.classList.add('hidden-obj'); btn.title = (o.name || '') + '（已隐藏）'; }
       btn.onclick = () => { select(o); EventBus.emit('need:render'); };
       layerListEl.appendChild(btn);
     });
@@ -6043,6 +6642,7 @@ function importActionPresets() {
     } else {
       btnToggleLock.style.display = 'none';
     }
+    scheduleRenderLayerPop();
   }
 
   btnToggleLock.onclick = () => {
@@ -6512,19 +7112,19 @@ function importActionPresets() {
         let startScrollLeft = bar.scrollLeft;
 
         const allChips = Array.from(bar.querySelectorAll('.frame-chip'));
+        let dragRects = null;   /* v6.3.1：拖动开始时的槽位快照，用于实时让位 */
+        const startDrag = () => {
+          isDragging = true;
+          chip.classList.add('dragging');
+          dragRects = allChips.map(c => c.getBoundingClientRect());
+        };
 
         // 鼠标按下直接开始拖拽，触屏则需要按住 300ms（防止和横向滑动冲突）
         if (isMouse) {
-          isDragging = true;
-          chip.classList.add('dragging');
-          dragIndicator.style.display = 'block';
-          dragIndicator.style.left = (allChips[i].offsetLeft) + 'px';
+          startDrag();
         } else {
           pressTimer = setTimeout(() => {
-            isDragging = true;
-            chip.classList.add('dragging');
-            dragIndicator.style.display = 'block';
-            dragIndicator.style.left = (allChips[i].offsetLeft) + 'px';
+            startDrag();
             if (navigator.vibrate) navigator.vibrate(40); // 增加振动反馈，告知已触发拖拽
           }, 300);
         }
@@ -6547,27 +7147,54 @@ function importActionPresets() {
             return;
           }
 
-          // 拖拽中：边缘自动滚动
+          // 拖拽中：边缘自动滚动（滚动量要补给槽位快照，否则跟手会错位）
           const barRect = bar.getBoundingClientRect();
-          if (me.clientX > barRect.right - 40) bar.scrollLeft += 10;
-          else if (me.clientX < barRect.left + 40) bar.scrollLeft -= 10;
+          let ds = 0;
+          if (me.clientX > barRect.right - 40) ds = 10;
+          else if (me.clientX < barRect.left + 40) ds = -10;
+          if (ds) {
+            const before = bar.scrollLeft;
+            bar.scrollLeft += ds;
+            const actual = bar.scrollLeft - before;
+            if (actual && dragRects) {
+              dragRects.forEach(r => { r.left -= actual; r.right -= actual; });
+              dragStartX -= actual;
+            }
+          }
 
+          /* 被拖帧块跟手 */
+          const dx = me.clientX - dragStartX;
+          chip.style.transform = 'translateX(' + Math.round(dx) + 'px) scale(1.08)';
+
+          /* 插到哪：指针越过某个帧块的中线就插到它前面 */
           for (let j = 0; j < allChips.length; j++) {
-            const rect = allChips[j].getBoundingClientRect();
+            const rect = dragRects ? dragRects[j] : allChips[j].getBoundingClientRect();
             const mid = rect.left + rect.width / 2;
             if (me.clientX < mid) { insertIndex = j; break; }
             if (j === allChips.length - 1) insertIndex = allChips.length;
           }
 
-          if (insertIndex === 0) dragIndicator.style.left = (allChips[0].offsetLeft) + 'px';
-          else if (insertIndex === allChips.length) dragIndicator.style.left = (allChips[allChips.length - 1].offsetLeft + allChips[allChips.length - 1].offsetWidth) + 'px';
-          else dragIndicator.style.left = (allChips[insertIndex].offsetLeft) + 'px';
+          /* 其余帧块实时让位：整体前移/后移一格，露出落点 */
+          for (let j = 0; j < allChips.length; j++) {
+            if (j === dragStartIndex) continue;
+            let shift = 0;
+            if (insertIndex > dragStartIndex) {
+              if (j > dragStartIndex && j < insertIndex) shift = dragRects[j - 1].left - dragRects[j].left;
+            } else if (insertIndex < dragStartIndex) {
+              if (j >= insertIndex && j < dragStartIndex) shift = dragRects[j + 1].left - dragRects[j].left;
+            }
+            allChips[j].style.transform = shift ? 'translateX(' + Math.round(shift) + 'px)' : '';
+          }
         };
 
         const onPointerUp = () => {
           clearTimeout(pressTimer);
           chip.classList.remove('dragging');
-          dragIndicator.style.display = 'none';
+          /* v6.3.1：清掉跟手/让位的位移，重排后由 updateFrameBar 重建 */
+          chip.style.transform = '';
+          allChips.forEach(c => { if (c !== chip) c.style.transform = ''; });
+          dragRects = null;
+          if (dragIndicator) dragIndicator.style.display = 'none';
           document.removeEventListener('pointermove', onPointerMove);
           document.removeEventListener('pointerup', onPointerUp);
           document.removeEventListener('pointercancel', onPointerUp);
@@ -8285,10 +8912,11 @@ function importActionPresets() {
     return { w: Math.max(2, w - (w % 2)), h: Math.max(2, h - (h % 2)) };
   }
 
-  function computeContentBounds(list) {
+  function computeContentBounds(list, refList) {
     list = list || AppState.objects;
     const prevList = _renderList;
-    _renderList = list;
+    /* refList：参与测量的范围，但绑定/父级查找仍用完整列表，否则挂载件会被算到错误位置 */
+    _renderList = refList || list;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     const extend = (x, y) => {
       if (x < minX) minX = x;
@@ -8424,7 +9052,11 @@ function importActionPresets() {
       ? String(trackId)
       : ((options.trackId != null && options.trackId !== TRACK_ALL_ID) ? String(options.trackId) : null);
     const safeTid = (tid && isCameraTrackId(tid)) ? null : tid;
-    const objList = getObjectsForFrameAt(safeIdx, safeTid);
+    /* v6.3.0：可以只渲染某一个元件（元件浮窗的缩略图），也可以强制包含被隐藏的元件 */
+    const fullList = getObjectsForFrameAt(safeIdx, safeTid);
+    let objList = fullList;
+    if (options.onlyId != null) objList = objList.filter(o => o && String(o.id) === String(options.onlyId));
+    if (!options.includeHidden) objList = objList.filter(o => o && !o.hidden);
     const off = document.createElement('canvas');
     off.width = outW; off.height = outH;
     const octx = off.getContext('2d');
@@ -8447,9 +9079,11 @@ function importActionPresets() {
       cy = AppState.canvasBounds.y + AppState.canvasBounds.h / 2;
       rotation = rad;
     } else {
-      const c = bboxToCrop(computeContentBounds(objList), outW, outH, 1.15);
+      const c = bboxToCrop(computeContentBounds(objList, fullList), outW, outH, 1.15);
       scale = c.scale; cx = c.cx; cy = c.cy;
     }
+    /* v6.3.1：缩略图不跟随画布/取景框旋转，保持正立 */
+    if (options.noRotate) rotation = 0;
     if (!transparent) { octx.fillStyle = pageBgColor; octx.fillRect(0, 0, outW, outH); }
     octx.translate(outW / 2, outH / 2);
     octx.rotate(-rotation);
@@ -8469,7 +9103,7 @@ function importActionPresets() {
         octx.clip();
         octx.restore();
       }
-      renderScene(objList, { isExporting: true });
+      renderScene(objList, { isExporting: true, includeHidden: !!options.includeHidden, refList: fullList });
       octx.restore();
     } finally { ctx = savedCtx; window.__isExporting = false; }
     return off;
@@ -9098,6 +9732,9 @@ function importActionPresets() {
   const lwInput = document.getElementById('lw');
   const lwVal = document.getElementById('lwVal');
   const btnHeadFill = document.getElementById('btnHeadFill');
+  /* v6.4.0：头型切换按钮组（只有火柴人显示） */
+  const headShapeRow = document.getElementById('headShapeRow');
+  const headShapeBtns = Array.from(document.querySelectorAll('.head-shape-btn'));
   const headFillCustomCheckbox = document.getElementById('headFillCustom');
   const headFillColorInput = document.getElementById('headFillColor');
   const btnLight = document.getElementById('btnLight');
@@ -9431,6 +10068,8 @@ function togglePin(part) {
     colorInput.disabled = !isFig;
     lwInput.disabled = !isFig;
     btnHeadFill.disabled = !isFig;
+    /* v6.4.0：头型行只对火柴人出现 */
+    if (headShapeRow) headShapeRow.style.display = isFig ? 'flex' : 'none';
     if (headFillCustomCheckbox) headFillCustomCheckbox.disabled = !isFig;
     if (headFillColorInput) headFillColorInput.disabled = !isFig || !(isFig && AppState.selected.headFillCustom);
     btnLight.disabled = !isFig;
@@ -9635,6 +10274,9 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       shinRatioRInput.value = isIndep ? bs.shinR : sh; shinRatioRVal.textContent = (+shinRatioRInput.value).toFixed(2);
       btnHeadFill.textContent = AppState.selected.headFilled ? '头部实心' : '头部空心';
       btnHeadFill.classList.toggle('on', AppState.selected.headFilled);
+      /* v6.4.0：回填当前头型（旧工程没有这个字段 → 正圆） */
+      const curHeadShape = AppState.selected.headShape || 'circle';
+      headShapeBtns.forEach(b => b.classList.toggle('on', b.dataset.shape === curHeadShape));
       if (headFillCustomCheckbox) headFillCustomCheckbox.checked = !!AppState.selected.headFillCustom;
       if (headFillColorInput) headFillColorInput.value = AppState.selected.headFillColor || '#111111';
       
@@ -10074,7 +10716,8 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     if (pointers.size > 2) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (e.target.closest('#transformBoxUI') || e.target.closest('#ui') || e.target.closest('#timeline') ||
-        e.target.closest('#btnShowTimeline') || e.target.closest('#historyControls')) return;
+        e.target.closest('#btnShowTimeline') || e.target.closest('#historyControls') ||
+        e.target.closest('#layerPop')) return;
 
     const p = getPos(e);
     const isTouch = e.pointerType === 'touch';
@@ -10199,7 +10842,8 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       }
     }
 
-    const hitObjects = subTrackMode ? [subTrackObj] : AppState.objects;
+    /* v6.3.0：画布上点不到被小眼睛隐藏的元件（否则隐藏了还能拖出来） */
+    const hitObjects = subTrackMode ? [subTrackObj] : AppState.objects.filter(o => o && !o.hidden);
     for (let i = hitObjects.length - 1; i >= 0; i--) {
       const o = hitObjects[i];
       if (!o || o.locked) continue;
@@ -11381,16 +12025,17 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     if (AppState.selected.type === 'video') {
       AppState.selected.x = 0; AppState.selected.y = 0; AppState.selected.scale = 1; AppState.selected.alpha = 1;
     } else if (AppState.selected.type === 'figure') {
-      AppState.selected.a = makeFigure(0, 0).a;
-      AppState.selected.bodyScale = { head: 1.83, arm: 1.06, leg: 1.16, torso: 0.62, foreArm: 0.37, shin: 0.49 };
+      /* v6.3.0：复位统一以 makeFigure 的初始预设为准，避免两处硬编码走散 */
+      const tpl = makeFigure(0, 0);
+      AppState.selected.a = tpl.a;
+      AppState.selected.bodyScale = tpl.bodyScale;
       AppState.selected.scale = 1.67;
       AppState.selected.rot = 0;
       AppState.selected.mirror = false;
       AppState.selected.headFilled = false;
       AppState.selected.headFillCustom = false;
       AppState.selected.headFillColor = '#111111';
-      AppState.selected.headAngle = -Math.PI / 2;
-      AppState.selected.headOffset = { x: 0, y: 0 };
+      AppState.selected.headAngle = tpl.headAngle;
       AppState.selected.headOffset = { x: 0, y: 0 };
       AppState.selected.shadowOffX = 0; AppState.selected.shadowOffY = 0;
       AppState.selected.shadowScaleX = 1; AppState.selected.shadowScaleY = 1;
@@ -11430,20 +12075,28 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
   function moveLayer(dir) {
     if (!AppState.selected) return;
     if (AppState.selected.type === 'video') {
+      /* v6.3.0：置顶/置底改成「当前最高层 +1 / 最低层 -1」，不再写 9999 这种极限值 */
+      const others = AppState.objects.filter(o => o && o !== AppState.selected && o.type !== 'video');
+      const vals = others.map(o => (o.type === 'figure' ? (o.layer.body || 0) : (o.layer || 0)));
+      const hi = vals.length ? Math.max.apply(null, vals) : 0;
+      const lo = vals.length ? Math.min.apply(null, vals) : 0;
       if (dir === 'up') AppState.selected.layer += 1;
       else if (dir === 'down') AppState.selected.layer -= 1;
-      else if (dir === 'top') AppState.selected.layer = 9999;
-      else if (dir === 'bottom') AppState.selected.layer = -9999;
+      else if (dir === 'top') AppState.selected.layer = hi + 1;
+      else if (dir === 'bottom') AppState.selected.layer = lo - 1;
       EventBus.emit('need:render'); markCurrentFrameModified(); EventBus.emit('history:save', '调整图层'); return;
     }
     const isFig = AppState.selected.type === 'figure';
-    let allLayers = [];
+    /* v6.3.0：置顶/置底按「其余对象里的最高层 +1 / 最低层 -1」算，不再写 999 这类极限值。
+       必须排除自身，否则反复点置顶会让层值一路膨胀。已经在最顶/最底时保持不动。 */
+    let otherLayers = [];
     AppState.objects.forEach(o => {
-      if (o.type === 'figure') Object.values(o.layer).forEach(v => allLayers.push(v));
-      else allLayers.push(o.layer);
+      if (!o || o === AppState.selected) return;
+      if (o.type === 'figure') Object.values(o.layer).forEach(v => otherLayers.push(v));
+      else otherLayers.push(o.layer);
     });
-    const minLayer = Math.min(...allLayers);
-    const maxLayer = Math.max(...allLayers);
+    const minLayer = otherLayers.length ? Math.min(...otherLayers) : 0;
+    const maxLayer = otherLayers.length ? Math.max(...otherLayers) : 0;
     if (dir === 'up') {
       if (isFig) Object.keys(AppState.selected.layer).forEach(k => { AppState.selected.layer[k] += 1; setGlobalProp(AppState.selected, `layer.${k}`, AppState.selected.layer[k]); });
       else { AppState.selected.layer += 1; setGlobalProp(AppState.selected, 'layer', AppState.selected.layer); }
@@ -11454,8 +12107,9 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       if (isFig) Object.keys(AppState.selected.layer).forEach(k => { AppState.selected.layer[k] = maxLayer + 1; setGlobalProp(AppState.selected, `layer.${k}`, AppState.selected.layer[k]); });
       else { AppState.selected.layer = maxLayer + 1; setGlobalProp(AppState.selected, 'layer', AppState.selected.layer); }
     } else if (dir === 'bottom') {
+      /* v6.3.0：非火柴人以前写死 -99999，改成「当前最低层 -1」 */
       if (isFig) Object.keys(AppState.selected.layer).forEach(k => { AppState.selected.layer[k] = minLayer - 1; setGlobalProp(AppState.selected, `layer.${k}`, AppState.selected.layer[k]); });
-      else { AppState.selected.layer = -99999; setGlobalProp(AppState.selected, 'layer', AppState.selected.layer); }
+      else { AppState.selected.layer = minLayer - 1; setGlobalProp(AppState.selected, 'layer', AppState.selected.layer); }
     }
     EventBus.emit('need:syncUI'); EventBus.emit('need:render');
     markCurrentFrameModified();
@@ -11528,25 +12182,34 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     }
 
     const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-    let newScale = Math.min(VIEW_SCALE_MAX, Math.max(VIEW_SCALE_MIN, AppState.viewScale * zoomFactor));
-    if (viewPinned && pinnedView) {
-      newScale = Math.max(newScale, pinnedView.scale);
-    }
+    /* v6.2.0：这段与画笔 overlay 共用同一个实现 */
+    if (!zoomViewAt(e.clientX, e.clientY, zoomFactor)) return;
+  }, { passive: false });
+
+  /* v6.2.0：以视口坐标 (clientX, clientY) 为锚缩放画布视图。
+     抽出来是为了给画笔的 overlay 复用 —— 画笔模式下 overlay 会吃掉滚轮/双指，
+     不转进来的话，画到一半就没法缩放画布了。返回是否真的缩放了。 */
+  function zoomViewAt(clientX, clientY, factor) {
+    if (!(factor > 0) || !isFinite(factor)) return false;
+    if (SKFE.systems.camera.getCameraViewObject()) return false; /* 摄像机视角另有自己的缩放 */
+    let newScale = Math.min(VIEW_SCALE_MAX, Math.max(VIEW_SCALE_MIN, AppState.viewScale * factor));
+    if (viewPinned && pinnedView) newScale = Math.max(newScale, pinnedView.scale);
     const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+    const mx = clientX - rect.left;
+    const my = clientY - rect.top;
     if (viewPinned && pinnedView && newScale <= pinnedView.scale + 0.0001) {
       AppState.viewScale = pinnedView.scale;
       AppState.viewOffset.x = pinnedView.offset.x;
       AppState.viewOffset.y = pinnedView.offset.y;
     } else {
       const actualZoom = newScale / AppState.viewScale;
-      AppState.viewOffset.x = mouseX - (mouseX - AppState.viewOffset.x) * actualZoom;
-      AppState.viewOffset.y = mouseY - (mouseY - AppState.viewOffset.y) * actualZoom;
+      AppState.viewOffset.x = mx - (mx - AppState.viewOffset.x) * actualZoom;
+      AppState.viewOffset.y = my - (my - AppState.viewOffset.y) * actualZoom;
       AppState.viewScale = newScale;
     }
     EventBus.emit('need:render');
-  }, { passive: false });
+    return true;
+  }
 
   document.getElementById('btnNew').onclick = addFigure;
   document.getElementById('btnBubble').onclick = addBubble;
@@ -11745,6 +12408,25 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     EventBus.emit('need:syncUI'); EventBus.emit('need:render'); markCurrentFrameModified();
     EventBus.emit('history:save', '切换头部填充');
   };
+
+  /* v6.4.0：切换头型（圆 / Vic / TCO / TDL / TSC）。
+     头型只受「头部」比例滑块影响大小，不吃线宽；朝向跟随 headAngle，和圆头一致。 */
+  headShapeBtns.forEach(b => {
+    b.addEventListener('click', () => {
+      const f = AppState.selected;
+      if (!f || f.type !== 'figure') return;
+      const id = b.dataset.shape || 'circle';
+      if (id !== 'circle') {
+        const HS = SKFE.systems.headShapes;
+        if (!HS || !HS.has(id)) return;
+      }
+      if ((f.headShape || 'circle') === id) return;
+      f.headShape = id;
+      setGlobalProp(f, 'headShape', id);
+      EventBus.emit('need:syncUI'); EventBus.emit('need:render'); markCurrentFrameModified();
+      EventBus.emit('history:save', '切换头型');
+    });
+  });
 
   if (headFillCustomCheckbox) {
     headFillCustomCheckbox.addEventListener('change', e => {
@@ -12340,6 +13022,21 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       if (hist) hist.style.top = '';
     }
 
+    /* v6.3.0：移动端底部抽屉展开时，「🎬 帧动画面板」浮钮抬到抽屉上沿而不是隐藏。
+       以前用 CSS 直接 display:none，帧条又恰好是收起状态时，两个入口同时消失，
+       看起来就是"点展开设置后帧动画面板没了"。 */
+    const btnShowTl = document.getElementById('btnShowTimeline');
+    if (btnShowTl && isMobile && ui) {
+      const closed = ui.classList.contains('hidden');
+      if (closed) {
+        btnShowTl.style.bottom = '';
+      } else {
+        const r = ui.getBoundingClientRect();
+        const drawerH = Math.max(0, window.innerHeight - r.top);
+        btnShowTl.style.bottom = Math.round(drawerH + 10) + 'px';
+      }
+    }
+
     // 【修复】不论是否开启了自由缩放，桌面端顶部停靠时先把 UI 面板往下推，否则会被时间轴压住
     if (!isMobile && ui) {
       const baseTop = 14;
@@ -12577,6 +13274,8 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     /* 屏幕 ↔ 世界：与指针交互共用 getPos 的换算（含摄像机子轨道视角） */
     screenToWorld: (sx, sy) => getPos({ clientX: sx, clientY: sy }),
     worldToScreen: (p) => worldToScreenPoint(p),
+    /* v6.2.0：画笔 overlay 会挡住滚轮/双指，缩放要转交给这个实现 */
+    zoomViewAt: (clientX, clientY, factor) => zoomViewAt(clientX, clientY, factor),
     getInkLocalMatrix,
     getBindTransform, getBoundFigureTransform, getBindBase, getAnchorOffset,
     jointData,
@@ -12587,7 +13286,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     getSnapshot, pushPreSnapshot,
     markCurrentFrameModified, invalidateAllFrameThumbs, setGlobalProp,
     refreshUI: () => EventBus.emit('need:syncUI'),
-    showToast: (msg) => showHistoryToast(msg),
+    showToast: (msg, type, ms) => showHistoryToast(msg, type, ms),
     getUndoDepth: () => undoStack.length,
     isPlaying: () => isPlaying,
     pause: () => pause(),

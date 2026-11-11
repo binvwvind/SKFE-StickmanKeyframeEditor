@@ -287,6 +287,8 @@
     border-color: transparent; /* 透明边框 */
     background: var(--color-primary-soft); color: var(--color-primary); /* 浅主题色背景，主题色文字 */
     z-index: 10; /* 提升层级，浮在其它帧块之上 */
+    transition: none; /* v6.3.1：拖动跟手不要过渡；其余帧块的让位动效交给它们自己的 transform 过渡 */
+    will-change: transform;
   } /* 拖拽帧块样式结束 */
   
   .theme-preset-list { /* 主题预设列表容器 */
@@ -789,6 +791,12 @@
 
   .btn-sm { min-height: 28px; padding: 5px 10px; font-size: 12px; } /* 小号按钮：高度，内边距，字号 */
   .btn-xs { min-height: 26px; padding: 4px 8px; font-size: 11px; } /* 超小号按钮：高度，内边距，字号 */
+  /* v6.4.0 头型切换按钮组 */
+  .head-shape-btn { flex: 0 0 auto; line-height: 1; padding: 4px 9px; }
+  .head-shape-btn.on { /* 当前头型 */
+    background: var(--color-primary); color: var(--color-primary-text);
+    border-color: transparent; font-weight: 600;
+  }
   .is-saved { /* 保存成功状态的按钮 */
     background: var(--color-success) !important; /* 强制使用成功主色（灰绿） */
     color: var(--color-primary-text) !important; /* 强制使用白色文字 */
@@ -870,6 +878,72 @@
     box-shadow: 0 0 0 2px var(--color-danger-soft); /* 浅红外圈阴影 */
   } /* 选中锁定状态结束 */
   .layer-btn.active.locked:hover { background: var(--color-danger-soft-hover); color: var(--color-danger); } /* 选中锁定悬浮状态 */
+  .layer-btn.hidden-obj { opacity: .45; } /* v6.3.0：被小眼睛隐藏的元件在元件栏里也变淡 */
+
+  /* ==================== v6.3.0 元件浮窗 ==================== */
+  .lp-toggle { flex-shrink: 0; padding: 4px 7px; min-width: 26px; font-size: 12px; line-height: 1; } /* 元件栏最左侧的下三角 */
+  .lp-toggle.on { background: var(--color-primary); color: var(--color-primary-text); border-color: transparent; }
+  #layerPop { /* 浮在画布上的一条纵向缩略图列表 */
+    position: fixed; z-index: 60; display: none; /* 固定定位，默认隐藏 */
+    min-width: 250px; max-width: min(94vw, 420px); /* 纵向列表，宽度不必太宽 */
+    width: 300px;
+    background: var(--bg-panel); border-radius: 14px; /* 面板色背景，圆角 */
+    /* 主题的面板色可能带透明度，直接铺开会透出下面的控制面板，看起来像"图层错乱"；
+       加一层毛玻璃把背后的内容糊掉，既保留主题色又不会串味 */
+    backdrop-filter: blur(18px) saturate(1.1);
+    -webkit-backdrop-filter: blur(18px) saturate(1.1);
+    box-shadow: 0 10px 34px rgba(20, 28, 40, .22); padding: 8px 10px 6px; /* 阴影，内边距 */
+    transform-origin: top left; /* 缩放原点 */
+  }
+  #layerPop.open { display: block; }
+  .lp-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+  .lp-title { font-size: 12px; font-weight: 600; color: var(--text-main); }
+  .lp-count { font-size: 11px; color: var(--text-sub); }
+  .lp-close { margin-left: auto; border: none; background: transparent; color: var(--text-sub); cursor: pointer; font-size: 12px; padding: 2px 4px; border-radius: 6px; }
+  .lp-close:hover { background: var(--btn-hover); color: var(--text-main); }
+  .lp-list { /* v6.3.1：改成纵向列表 */
+    display: flex; flex-direction: column; gap: 6px;
+    overflow-y: auto; overflow-x: hidden; max-height: min(52vh, 400px);
+    padding: 2px; scrollbar-width: thin;
+  }
+  .lp-list::-webkit-scrollbar { width: 6px; }
+  .lp-list::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+
+  .lp-item { /* 单行：缩略图 · 名称 · 眼睛/横线（右对齐并排） */
+    display: flex; align-items: center; gap: 8px;
+    flex: 0 0 auto; width: 100%; padding: 5px 6px;
+    border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-input);
+    cursor: pointer; position: relative; user-select: none;
+    /* 让位动效：只有 transform 走过渡，拖动中的那一项会被 JS 关掉 */
+    transition: border-color .15s, background .15s, transform .18s cubic-bezier(.2,.8,.3,1);
+    will-change: transform;
+  }
+  .lp-item:hover { background: var(--btn-hover); }
+  .lp-item.active { border-color: var(--color-primary); box-shadow: 0 0 0 2px var(--color-primary-soft, rgba(59,130,246,.18)); }
+  .lp-item.hidden-obj { opacity: .45; } /* 被隐藏的元件整行变淡 */
+  .lp-item.dragging { /* 拖动中的那一行：浮起来跟手，不加过渡 */
+    z-index: 5; opacity: .97; border-style: dashed;
+    background: var(--bg-panel);
+    box-shadow: 0 8px 22px rgba(20, 28, 40, .24);
+    transition: none;
+    cursor: grabbing;
+  }
+
+  .lp-thumb-wrap { width: 44px; height: 44px; flex: 0 0 auto; border-radius: 8px; overflow: hidden; background: transparent; display: flex; align-items: center; justify-content: center; }
+  .lp-thumb { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .lp-emoji { font-size: 20px; line-height: 1; } /* 缩略图生成失败时退回图标 */
+  .lp-name { order: 1; flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+  .lp-rail { order: 2; display: flex; flex-direction: row; align-items: center; gap: 2px; flex: 0 0 auto; } /* 眼睛与横线并排，固定在行尾 */
+  .lp-eye { border: none; background: transparent; cursor: pointer; font-size: 14px; line-height: 1; padding: 4px; border-radius: 6px; }
+  .lp-eye:hover { background: var(--btn-hover); }
+  .lp-eye.on { opacity: .55; }
+  .lp-drag { /* 长按拖动的横线手柄 */
+    width: 24px; height: 26px; display: flex; align-items: center; justify-content: center;
+    font-size: 14px; letter-spacing: -1px; color: var(--text-sub); cursor: grab;
+    touch-action: none; border-radius: 6px;
+  }
+  .lp-drag:active { cursor: grabbing; background: var(--btn-hover); }
+  .lp-hint { margin-top: 2px; font-size: 10.5px; color: var(--text-sub); text-align: center; } /* 底部操作提示 */
   .layer-btn .idx { font-size: 10px; color: var(--text-sub); } /* 按钮内的索引数字：小字号，次要文字色 */
   .layer-btn.active .idx { color: var(--color-primary-text); opacity: .75; } /* 选中时索引文字变白，75% 透明度 */
   .layer-btn.locked .idx { color: var(--color-danger); opacity: .7; } /* 锁定时索引文字变暗红，70% 透明度 */
@@ -1421,8 +1495,8 @@
     #ui .row.slider { min-height: 34px; }
     #ui .btn-xs { min-height: 28px; padding-left: 10px; padding-right: 10px; }
 
-    /* 底部抽屉展开时，右下角「帧动画面板」浮钮让位，避免压在面板按钮上 */
-    body.ui-open #btnShowTimeline { display: none !important; }
+    /* v6.3.0：底部抽屉展开时「帧动画面板」浮钮不再藏起来（藏了等于入口消失，
+       帧条一旦是收起状态就再也打不开）。改成由 JS 把它抬到抽屉上沿，见 refreshTimelineDockOffsets。 */
     #watermark { text-align: center; margin-bottom: 8px; } /* 移动端水印居中，下边距 */
 
     #timeline { padding: 4px 6px; border-radius: 18px 18px 0 0; } /* 移动端时间轴：内边距，圆角 */

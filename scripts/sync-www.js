@@ -85,7 +85,7 @@ if (!html.includes("navigator.serviceWorker.register")) {
 fs.writeFileSync(idxPath, html);
 
 // 自检：确保关键文件都在
-const required = ['index.html', 'style.css', 'js/app.js', 'manifest.webmanifest', 'sw.js'];
+const required = ['index.html', 'style.css', 'js/app.js', 'js/systems/headShapes.js', 'manifest.webmanifest', 'sw.js'];
 const missing = required.filter(f => !fs.existsSync(path.join(OUT, f)));
 if (missing.length) {
   console.error('[sync] 缺少文件: ' + missing.join(', '));

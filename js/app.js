@@ -64,7 +64,7 @@
   let drag = null;
   let uid = 0;
   let currentColor = '#111111';
-  let currentLW = 11;
+  let currentLW = 10.5;
 
   let groundShadowEnabled = false;
   let shadowColor = '#000000';
@@ -1209,7 +1209,7 @@ function syncDistortToAllFrames(obj) {
       if (p.data.color) nameDiv.style.color = p.data.color;
       const metaDiv = document.createElement('div');
       metaDiv.className = 'preset-meta';
-      let metaHtml = `<span>LW:${p.data.lw}</span>`;
+      let metaHtml = `<span>LW:${(+p.data.lw).toFixed(1)}</span>`;
       if (p.data.glow.enabled) metaHtml += ' <span>✨发光</span>';
       if (p.data.light.enabled) metaHtml += ' <span>💡高光</span>';
       if (p.data.extremity.enabled) metaHtml += ' <span>🦵手脚</span>';
@@ -2322,12 +2322,13 @@ function importActionPresets() {
         lines: SKFE.systems.spatial.defaultLines()
       },
       id: ++uid, type: 'figure', name: 'Stickman',
-      x, y, color: color || '#111111', lw: lw || 11,
-      alpha: 1, scale: 1.67, locked: false,
+      /* v7.0.4：默认尺寸 2、线宽 10.5（线宽支持一位小数，见 index.html 的 #lw step=0.1） */
+      x, y, color: color || '#111111', lw: lw || 10.5,
+      alpha: 1, scale: 2, locked: false,
       rot: 0, mirror: false,
       shadowOffX: 0, shadowOffY: 0, shadowScaleX: 1, shadowScaleY: 1,
       headFilled: false, headFillCustom: false, headFillColor: '#111111',
-      headShape: 'circle',   /* v6.4.0：'circle' | 'Vic' | 'TCO' | 'TDL' | 'TSC' */
+      headShape: 'TCO',   /* v7.0.4：默认头型改成 TCO（'circle' | 'Vic' | 'TCO' | 'TDL' | 'TSC'） */
       /* v6.3.0：初始预设改成用户调好的比例（手臂 0.98 / 小臂占比 0.41，其余不变） */
       bodyScale: { head: 1.83, arm: 0.98, leg: 1.16, torso: 0.62, foreArm: 0.41, shin: 0.49 },
       headAngle: -Math.PI / 2 - 15 * Math.PI / 180,
@@ -8124,12 +8125,37 @@ function importActionPresets() {
     advSettingsBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) setEaseMenuOpen(false);
   }
+  /* v7.0.4：段曲线菜单改成 fixed 定位，按按钮的实际屏幕位置摆放。
+     因为控制栏 .timeline-controls 现在是横向滚动容器（overflow-x:auto），
+     absolute 定位的子元素会被裁剪掉，所以必须脱离文档流手动算位置。 */
+  function positionEaseMenu() {
+    if (!tweenMoreMenu || tweenMoreMenu.hidden) return;
+    const r = tweenEaseBtn.getBoundingClientRect();
+    const mw = tweenMoreMenu.offsetWidth || 240;
+    const mh = tweenMoreMenu.offsetHeight || 280;
+    const pad = 8;
+    let left = r.left;
+    if (left + mw > window.innerWidth - pad) left = window.innerWidth - mw - pad;
+    if (left < pad) left = pad;
+    let top = r.top - mh - 8;                       /* 默认开在按钮上方 */
+    if (top < pad) top = r.bottom + 8;              /* 上方不够就开在下方 */
+    if (top + mh > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - mh - pad);
+    tweenMoreMenu.style.left = Math.round(left) + 'px';
+    tweenMoreMenu.style.top = Math.round(top) + 'px';
+  }
   function setEaseMenuOpen(open) {
     if (open) { renderTweenEaseMenu(); setAdvPanelOpen(false); }
     tweenMoreMenu.hidden = !open;
     tweenEaseBtn.classList.toggle('open', open);
     tweenEaseBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) positionEaseMenu();   /* 必须先显示出来才能量到宽高 */
   }
+  /* 窗口尺寸变了、或控制栏被横向滑动时，菜单要跟着按钮走 */
+  window.addEventListener('resize', () => { if (!tweenMoreMenu.hidden) positionEaseMenu(); });
+  (function bindEaseMenuFollow() {
+    const bar = document.querySelector('.timeline-controls');
+    if (bar) bar.addEventListener('scroll', () => { if (!tweenMoreMenu.hidden) positionEaseMenu(); }, { passive: true });
+  })();
 
   tweenEaseBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -11123,7 +11149,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
 });
       updateLimbStatus();
       colorInput.value = AppState.selected.color;
-      lwInput.value = AppState.selected.lw; lwVal.textContent = AppState.selected.lw;
+      lwInput.value = AppState.selected.lw; lwVal.textContent = (+AppState.selected.lw).toFixed(1);
       lightColorInput.value = AppState.selected.light.color;
       lightSizeInput.value = AppState.selected.light.size; lightSizeVal.textContent = AppState.selected.light.size.toFixed(1);
       lightAngleInput.value = AppState.selected.light.angle; lightAngleVal.textContent = AppState.selected.light.angle + '°';
@@ -13303,7 +13329,9 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
   colorInput.addEventListener('change', () => EventBus.emit('history:save', '修改颜色'));
 
   lwInput.addEventListener('input', e => {
-    currentLW = +e.target.value; lwVal.textContent = currentLW;
+    /* v7.0.4：线宽支持一位小数，显示统一补到 .1（四舍五入到 0.1 避免浮点尾数） */
+    currentLW = Math.round(+e.target.value * 10) / 10;
+    lwVal.textContent = currentLW.toFixed(1);
     if (AppState.selected && AppState.selected.type === 'figure') {
       AppState.selected.lw = currentLW;
       setGlobalProp(AppState.selected, 'lw', currentLW);
@@ -13960,19 +13988,12 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       if (hist) hist.style.top = '';
     }
 
-    /* v6.3.0：移动端底部抽屉展开时，「🎬 帧动画面板」浮钮抬到抽屉上沿而不是隐藏。
-       以前用 CSS 直接 display:none，帧条又恰好是收起状态时，两个入口同时消失，
-       看起来就是"点展开设置后帧动画面板没了"。 */
+    /* v7.0.4：移动端「🎬 帧动画面板」浮钮**不再随抽屉抬升**，永久固定在屏幕右下角（和 PC 端一致）。
+       之前把它抬到抽屉上沿，展开设置后按钮会跳到屏幕中间，位置飘。现在靠更高层级（z-index 30 > #ui 的 10）
+       浮在抽屉之上，配合 body.ui-open 给抽屉底部留白，不会压住内容。 */
     const btnShowTl = document.getElementById('btnShowTimeline');
-    if (btnShowTl && isMobile && ui) {
-      const closed = ui.classList.contains('hidden');
-      if (closed) {
-        btnShowTl.style.bottom = '';
-      } else {
-        const r = ui.getBoundingClientRect();
-        const drawerH = Math.max(0, window.innerHeight - r.top);
-        btnShowTl.style.bottom = Math.round(drawerH + 10) + 'px';
-      }
+    if (btnShowTl && isMobile) {
+      btnShowTl.style.bottom = '';   /* 清掉旧版本可能残留的内联 bottom */
     }
 
     // 【修复】不论是否开启了自由缩放，桌面端顶部停靠时先把 UI 面板往下推，否则会被时间轴压住
@@ -14000,7 +14021,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
         if (!isUiHidden) {
           if (!uiPanelDragged) {
             ui.style.top = 'auto';
-            ui.style.maxHeight = '70vh';
+            ui.style.maxHeight = '50vh';   /* v7.0.4：展开高度 = 半屏，与 #ui 的 CSS 保持一致 */
           } else {
             const topPx = parseFloat(ui.style.top) || 60;
             ui.style.maxHeight = Math.max(120, window.innerHeight - topPx - bottomOffset) + 'px';
@@ -14387,8 +14408,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     if (presets.length > 0) {
       loadPreset(presets[0]);
     } else {
-      const f = makeFigure(0, 0, '#111111', 11);
-      f.lw = 11;
+      const f = makeFigure(0, 0, '#111111');
       f.extremity.enabled = false;
       generateName(f); addObjectToFrames(f); select(f);
     }

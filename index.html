@@ -3,7 +3,7 @@
 <head> <!-- 网页头部，包含元数据和外部引用 -->
 <meta charset="UTF-8"> <!-- 设置字符编码为 UTF-8，防止中文乱码 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover"> <!-- 移动端视口设置：宽度同设备，允许缩放，适配刘海屏 -->
-<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.0.3</title> <!-- 网页标题，带有多语言属性 -->
+<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.0.4</title> <!-- 网页标题，带有多语言属性 -->
 <link rel="stylesheet" href="./style.css"> <!-- 引入外部样式表 -->
 </head> <!-- 头部结束 -->
 <body> <!-- 网页主体开始 -->
@@ -91,7 +91,7 @@
   <div id="uiDragHandle"><div class="bar"></div></div> <!-- 面板顶部的拖拽把手 -->
 
   <div id="watermark"> <!-- 控制面板顶部的作者/版本水印 -->
-    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.0.3</div> <!-- 软件名称及版本 -->
+    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.0.4</div> <!-- 软件名称及版本 -->
     <div class="author" data-i18n="watermark.author">Author: binvwvind qq交流分享群:1121039855</div> <!-- 作者信息及群号 -->
   </div> <!-- 水印结束 -->
 
@@ -264,7 +264,7 @@
 
   <!-- 这里的 div 名称保留 objPanel，防止 JS 报错，但内部已彻底精简 -->
   <div id="objPanel" style="display:block;"> <!-- ==================== 对象通用属性面板 ==================== -->
-    <div class="row slider" style="margin-top:10px;"><label data-i18n="obj.line">线条</label><input type="range" id="lw" min="2" max="20" value="11"><span class="val" id="lwVal">11</span></div> <!-- 线条粗细滑条 -->
+    <div class="row slider" style="margin-top:10px;"><label data-i18n="obj.line">线条</label><input type="range" id="lw" min="2" max="20" step="0.1" value="10.5"><span class="val" id="lwVal">10.5</span></div> <!-- 线条粗细滑条（v7.0.4：step 0.1，可调一位小数） -->
     <div class="row slider"><label data-i18n="obj.alpha">透明</label><input type="range" id="objAlpha" min="0" max="1" step="0.01" value="1"><span class="val" id="objAlphaVal">1.00</span></div> <!-- 透明度滑条 -->
 
     <div class="row slider"><label data-i18n="obj.xAxis">X轴</label><input type="range" id="posXSlider" min="-100" max="100" step="1" value="0"><span class="val" style="color:var(--text-sub); font-size:11px;" data-i18n="obj.relative">相对</span></div> <!-- 相对 X 轴位置微调滑条 -->

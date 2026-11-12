@@ -428,7 +428,18 @@
     box-shadow: 0 0 6px var(--color-primary-soft-hover); /* 主题色外发光 */
   } /* 拖拽指示线样式结束 */
 
-  .timeline-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; } /* 时间轴控制栏：弹性布局，间距 6px，垂直居中，自动换行，字号 12px */
+  /* v7.0.4：控制栏所有按钮改成**单行**排列，超出屏幕宽度左右滑动（原来会折成两行，把面板顶高）。
+     注意：overflow 一旦不是 visible，里面的绝对定位子元素会被裁剪 —— 所以 .tween-more-menu 改成了 fixed，见下方。 */
+  .timeline-controls {
+    display: flex; gap: 6px; align-items: center; font-size: 12px; /* 弹性布局，间距 6px，垂直居中，字号 12px */
+    flex-wrap: nowrap; /* 不换行 */
+    overflow-x: auto; overflow-y: hidden; /* 横向滚动，纵向裁切 */
+    -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; /* iOS 惯性滚动，横滑不带动页面 */
+    scrollbar-width: none; /* Firefox 隐藏滚动条 */
+    padding: 3px 0; /* 上下留 3px，避免聚焦光圈被裁 */
+  }
+  .timeline-controls::-webkit-scrollbar { display: none; } /* Chrome/Safari 隐藏滚动条 */
+  .timeline-controls > * { flex: 0 0 auto; } /* 任何子项都不许压缩，否则按钮文字会被挤扁 */
   .timeline-controls button { /* 控制栏内的按钮 */
     padding: 4px 9px; min-height: 28px; font-size: 12px; /* 内边距，最小高度，字号 */
     border-radius: 8px; border: 1px solid transparent; /* 圆角，透明边框 */
@@ -492,7 +503,9 @@
   .tween-more-toggle .caret { font-size: 9px; line-height: 1; opacity: .8; } /* 下拉小箭头：字号 9px，轻微透明 */
 
   .tween-more-menu { /* 补间设置的弹出菜单 */
-    position: absolute; left: 0; bottom: calc(100% + 8px); /* 绝对定位，在按钮上方 8px 处 */
+    /* v7.0.4：改成 fixed，位置由 JS（positionEaseMenu）按按钮实际位置算。
+       原因：控制栏现在有 overflow-x:auto，absolute 子元素会被滚动容器裁掉。 */
+    position: fixed; left: 0; top: 0; /* 初始值，JS 会覆盖 */
     width: 240px; max-height: 60vh; overflow-y: auto; /* 宽度 240px，最大高度 60vh，纵向滚动 */
     padding: 8px; /* 内边距 */
     background: var(--bg-dropdown); /* 下拉菜单背景色 */
@@ -1517,7 +1530,8 @@
   @media (max-width: 768px) { /* 移动端（屏幕宽度 ≤ 768px）适配 */
     #ui { /* 移动端控制面板 */
       top: auto; bottom: 0; left: 0; right: 0; /* 固定在底部 */
-      width: 100%; max-height: 35vh; /* 全宽，最大高度 35vh */
+      /* v7.0.4：展开高度改成半屏（50vh），原来 35vh 太矮，滑条一多就得来回滚 */
+      width: 100%; max-height: 50vh; /* 全宽，最大高度 50vh */
       border-radius: 20px 20px 0 0; border: none; /* 仅顶部圆角，无边框 */
       transform: translateY(0); /* 位置重置 */
       background: var(--bg-panel); /* 面板色背景 */
@@ -1527,6 +1541,10 @@
     #ui.hidden { transform: translateY(calc(100% - 64px)); } /* 隐藏状态：向下平移，只留出顶部拖动条高度 */
     #ui.hidden .bar { background: var(--text-sub); } /* 隐藏状态下拖动条颜色变深 */
     #ui.hidden::after { display: none; } /* 隐藏状态下的伪元素隐藏 */
+
+    /* v7.0.4：抽屉展开时，右下角的「🎬 帧动画面板」浮钮固定不动（不再被顶上去），
+       这里给抽屉底部留出等高的空白，保证内容滚到底也不会被浮钮压住。 */
+    body.ui-open #ui { padding-bottom: calc(64px + env(safe-area-inset-bottom, 12px)); }
 
     /* v6.0 触控友好：滑条/数字输入加大可点区域（原生滑条高度决定触摸热区） */
     #ui input[type=range] { height: 30px; }

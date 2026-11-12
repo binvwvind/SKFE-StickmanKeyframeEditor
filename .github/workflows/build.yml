@@ -98,6 +98,14 @@ jobs:
         # 允许失败：runner 镜像通常已预装，Gradle 也能按需自动下载
         continue-on-error: true
         run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+      - name: 缓存 debug 签名密钥
+        # runner 每次都是干净的，~/.android/debug.keystore 会重新生成 →
+        # 同一条流水线前后产出的 APK 签名不同，用户覆盖安装会被系统拒绝。
+        # 缓存一把密钥，后续构建就能直接盖掉旧版本。
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: skfe-android-debug-keystore-v1
       - run: npm ci
       - name: 生成原生工程（首次）
         run: |

@@ -101,6 +101,39 @@ SKFE.platform = (function () {
     return e.message || e.errorMessage || JSON.stringify(e);
   }
 
+  /* 一次 bridge 塞太大的 base64 容易失败（视频 / 长 PNG 序列 / 大 GIF 最常见）。
+     超过 CHUNK_B64 的 2 倍且整块写失败时，退回分块写。 */
+  const CHUNK_B64 = 768 * 1024;
+
+  /* 分块写：每段长度取 4 的倍数 —— Base64 是每 4 个字符独立编码 3 字节，
+     在 4 的倍数处切开，各段单独解码再顺序 append，拼出来和整块写字节完全一致。 */
+  async function writeB64Chunked(Fs, dir, filename, b64) {
+    if (typeof Fs.appendFile !== 'function') throw new Error('插件不支持 appendFile，无法分块写入');
+    let i = 0;
+    let first = true;
+    let res = null;
+    try {
+      while (i < b64.length) {
+        let end = Math.min(i + CHUNK_B64, b64.length);
+        const aligned = i + Math.floor((end - i) / 4) * 4;
+        if (aligned > i) end = aligned;
+        const chunk = b64.slice(i, end);
+        if (first) {
+          res = await Fs.writeFile({ path: filename, data: chunk, directory: dir, recursive: true });
+          first = false;
+        } else {
+          await Fs.appendFile({ path: filename, data: chunk, directory: dir });
+        }
+        i = end;
+      }
+    } catch (e) {
+      /* 半截文件比没有文件更糟：清掉再抛 */
+      try { await Fs.deleteFile({ path: filename, directory: dir }); } catch (_) {}
+      throw e;
+    }
+    return res;
+  }
+
   /* 原生壳：写文件（多个目录依次尝试）+ 系统分享 */
   async function saveNative(base64, filename) {
     const Fs = plugin('Filesystem');
@@ -113,14 +146,30 @@ SKFE.platform = (function () {
     const errs = [];
     for (const dir of SAVE_DIRS) {
       try {
-        const r = await Fs.writeFile({
-          path: filename,
-          data: base64,
-          directory: dir,
-          encoding: 'base64',
-          recursive: true
-        });
-        const u = (r && (r.uri || r.path)) || null;
+        /* v7.0.3：这里**绝不能**传 encoding:'base64'。
+           @capacitor/filesystem 的 Android 实现里，encoding 只认 utf8 / utf16 / ascii
+           （Filesystem.getEncoding 只有这三个 case，其余返回 null），
+           传 base64 会被原生直接 reject("Unsupported encoding provided: base64")。
+           它真正的约定是反过来的：**不传 encoding**（charset == null）时，
+           原生走 Base64.decode 写二进制。也就是说「不传」才是「按 base64 写」。
+           —— v7.0.1 之前一直带着 encoding:'base64'，所以每一次写文件都必然失败，
+           再被 catch 吞成 <a download>，表现就是「所有导出都没反应」。 */
+        let r;
+        try {
+          r = await Fs.writeFile({
+            path: filename,
+            data: base64,
+            directory: dir,
+            recursive: true
+          });
+        } catch (e0) {
+          if (base64.length <= CHUNK_B64 * 2) throw e0;   /* 小文件没必要折腾 */
+          r = await writeB64Chunked(Fs, dir, filename, base64);
+        }
+        let u = (r && (r.uri || r.path)) || null;
+        if (!u && typeof Fs.getUri === 'function') {
+          try { const g = await Fs.getUri({ path: filename, directory: dir }); u = (g && g.uri) || null; } catch (_) {}
+        }
         if (u) { uri = u; usedDir = dir; raw = r; break; }
         errs.push(dir + ': 无返回 uri');
       } catch (e) {

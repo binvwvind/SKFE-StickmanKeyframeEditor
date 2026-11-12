@@ -1,7 +1,7 @@
 /* SKFE locale: English */
 window.SKFE_LOCALES = window.SKFE_LOCALES || {};
 window.SKFE_LOCALES['en'] = {
-  "app.title": "SKFE | Stickman Keyframe Editor v7.0.5",
+  "app.title": "SKFE | Stickman Keyframe Editor v7.0.6",
   "tbox.move": "Drag to move the whole object",
   "tbox.scale": "Drag to scale proportionally (enable Free Stretch to scale X/Y separately)",
   "tbox.rotate": "Drag to rotate",
@@ -23,7 +23,7 @@ window.SKFE_LOCALES['en'] = {
   "cameraPreview.closeTitle": "Close preview",
   "cameraPreview.hint": "Always shows the camera export view for the current frame",
   "timeline.show": "🎬 Frame panel",
-  "watermark.title": "SKFE | Stickman Keyframe Editor v7.0.5",
+  "watermark.title": "SKFE | Stickman Keyframe Editor v7.0.6",
   "watermark.author": "Author: binvwvind · QQ group: 1121039855",
   "panel.title": "Control panel",
   "lang.toggle": "🌐 EN/中",
@@ -387,7 +387,10 @@ window.SKFE_LOCALES['en'] = {
 "tab.project": "Project",
 "tab.export": "Export",
 "tab.theme": "Theme",
+"tab.brush": "Brush",
 "tab.back": "Back",
+"layerPop.lockTip": "Lock (can't be dragged or selected on canvas)",
+"layerPop.unlockTip": "Unlock",
 "tab.sub.archive": "Project Files",
 "tab.sub.actions": "Actions",
 "tab.sub.presets": "Local Presets",

@@ -6437,6 +6437,7 @@ function importActionPresets() {
 
   function positionLayerPop() {
     if (!layerPopEl || !btnLayerPop) return;
+    if (layerPopEl.classList.contains('lp-inline')) return;   /* v7.0.6：内联模式不算坐标 */
     const r = btnLayerPop.getBoundingClientRect();
     const w = layerPopEl.offsetWidth || 300;
     const h = layerPopEl.offsetHeight || 140;
@@ -6461,7 +6462,9 @@ function importActionPresets() {
   }
 
   function setLayerPopOpen(open) {
-    layerPopOpen = !!open;
+    /* v7.0.6：列表已经内联进「元件」分区，永远展开，别再被别处调用的 close 关掉 */
+    const inline = !!(layerPopEl && layerPopEl.classList.contains('lp-inline'));
+    layerPopOpen = inline ? true : !!open;
     if (!layerPopEl) return;
     layerPopEl.classList.toggle('open', layerPopOpen);
     if (btnLayerPop) btnLayerPop.classList.toggle('on', layerPopOpen);
@@ -6523,6 +6526,25 @@ function importActionPresets() {
       });
       rail.appendChild(eye);
 
+      /* v7.0.6：每行一个锁定按钮（替换掉横向条旁边那个"只作用于选中项"的全局按钮）。
+         锁住的元件在画布上拖不动、选不中，图标实心；没锁的用淡一点的开锁图标。 */
+      const lock = document.createElement('button');
+      lock.type = 'button';
+      lock.className = 'lp-lock' + (o.locked ? ' on' : '');
+      lock.textContent = o.locked ? '🔒' : '🔓';
+      lock.title = o.locked ? tr2('layerPop.unlockTip', '点击解锁') : tr2('layerPop.lockTip', '点击锁定（锁定后画布上无法拖动/选中）');
+      lock.setAttribute('aria-pressed', o.locked ? 'true' : 'false');
+      lock.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
+      lock.addEventListener('click', (e) => {
+        e.stopPropagation();
+        o.locked = !o.locked;
+        EventBus.emit('need:syncUI');
+        EventBus.emit('need:render');
+        EventBus.emit('history:save', o.locked ? '锁定对象' : '解锁对象');
+        renderLayerPop();
+      });
+      rail.appendChild(lock);
+
       const handle = document.createElement('div');
       handle.className = 'lp-drag';
       handle.textContent = '≡';
@@ -6537,9 +6559,9 @@ function importActionPresets() {
       name.textContent = o.name || layerItemEmoji(o);
       item.appendChild(name);
 
-      item.title = (o.name || '') + (o.hidden ? '（已隐藏）' : '');
+      item.title = (o.name || '') + (o.hidden ? '（已隐藏）' : '') + (o.locked ? '（已锁定）' : '');
       item.addEventListener('click', (e) => {
-        if (e.target.closest('.lp-eye') || e.target.closest('.lp-drag')) return;
+        if (e.target.closest('.lp-eye') || e.target.closest('.lp-drag') || e.target.closest('.lp-lock')) return;
         select(o);
         EventBus.emit('need:render');
         renderLayerPop();
@@ -6725,6 +6747,7 @@ function importActionPresets() {
   }
   document.addEventListener('pointerdown', (e) => {
     if (!layerPopOpen) return;
+    if (layerPopEl && layerPopEl.classList.contains('lp-inline')) return;  /* v7.0.6：常驻，不用点外关闭 */
     const t = e.target;
     if (!t || !t.closest) return;
     if (t.closest('#layerPop') || t.closest('#btnLayerPop')) return;
@@ -6748,6 +6771,9 @@ function importActionPresets() {
   }
 
   function updateLayerList() {
+    /* v7.0.6：横向缩略图条已从面板里删掉，元件列表统一由 #layerPop 的纵向列表承担。
+       这里保留函数签名（多处 syncUI 会调），只把「浮窗该重画了」这个信号转发出去。 */
+    if (!layerListEl) { scheduleRenderLayerPop(); return; }
     layerListEl.innerHTML = '';
     let idx = 1;
     if (videoObj) {
@@ -6784,7 +6810,7 @@ function importActionPresets() {
       layerListEl.appendChild(btn);
     });
 
-    if (AppState.selected) {
+    if (AppState.selected && btnToggleLock) {
       btnToggleLock.style.display = 'block';
       if (AppState.selected.locked) {
         btnToggleLock.textContent = '🔒 解锁';
@@ -6793,20 +6819,24 @@ function importActionPresets() {
         btnToggleLock.textContent = '🔓 锁定';
         btnToggleLock.classList.remove('danger');
       }
-    } else {
+    } else if (btnToggleLock) {
       btnToggleLock.style.display = 'none';
     }
     scheduleRenderLayerPop();
   }
 
-  btnToggleLock.onclick = () => {
-    if (AppState.selected) {
-      AppState.selected.locked = !AppState.selected.locked;
-      EventBus.emit('need:syncUI');
-      EventBus.emit('need:render');
-      EventBus.emit('history:save', '锁定/解锁对象');
-    }
-  };
+  /* v7.0.6：原来那个全局「锁定」按钮随横向条一起删了，锁定改到列表每行一个。
+     这里保留旧引用兜底（HTML 里已经没有该节点时直接跳过）。 */
+  if (btnToggleLock) {
+    btnToggleLock.onclick = () => {
+      if (AppState.selected) {
+        AppState.selected.locked = !AppState.selected.locked;
+        EventBus.emit('need:syncUI');
+        EventBus.emit('need:render');
+        EventBus.emit('history:save', '锁定/解锁对象');
+      }
+    };
+  }
 
   /* ==================== 元件列表横向拖拽滚动（鼠标端） ==================== */
   (function initLayerListDragScroll() {
@@ -14037,11 +14067,11 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
   let activeUiSheet = null;     /* 当前分区 key；null = 属性区 */
 
   function uiSheetTitle(key) {
-    return ({ objects: '元件', canvas: '画布', advanced: '高级', project: '项目', export: '导出', theme: '主题' })[key] || '';
+    return ({ objects: '元件', brush: '画笔', canvas: '画布', advanced: '高级', project: '项目', export: '导出', theme: '主题' })[key] || '';
   }
 
   function mountUiSheets() {
-    const keys = ['objects', 'canvas', 'advanced', 'project', 'export', 'theme'];
+    const keys = ['objects', 'brush', 'canvas', 'advanced', 'project', 'export', 'theme'];
     keys.forEach(k => {
       uiSheetEls[k] = document.getElementById('sheet' + k.charAt(0).toUpperCase() + k.slice(1));
     });
@@ -14078,26 +14108,28 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       box.appendChild(head);
     });
 
-    /* ---- 元件：添加物体 / 编辑操作 / 元件列表 ---- */
+    /* ---- 元件：添加物体 / 编辑操作 / 元件列表（纵向，v7.0.6 起不再是浮窗） ---- */
     const addSummary = document.querySelector('[data-i18n="add.summary"]');
     move(addSummary ? addSummary.closest('.add-details') : null, uiSheetEls.objects);
     move(rowOf(document.getElementById('btnClone')), uiSheetEls.objects);
-    move(document.querySelector('#uiMain .sticky-header'), uiSheetEls.objects);
+    /* 原来的横向缩略图条 + ▾ 浮窗按钮已从 HTML 删除，锁定改成每行一个（见 renderLayerPop） */
 
-    /* ---- 画布 / 主题：整块搬 tool-panel ----
-       这两块原来是 chips 手风琴（靠 .active 显示），搬进固定分区后要**常驻显示**，
+    /* ---- 画笔 / 画布 / 主题：整块搬 tool-panel ----
+       这三块原来是 chips 手风琴（靠 .active 显示），搬进固定分区后要**常驻显示**，
        所以从 toolPanels 数组里剔除，否则 setActiveTool 一调用就把它们关掉，分区里会一片空白。 */
     const canvasPanel = document.getElementById('canvasSettingsPanel');
     const themePanel = document.querySelector('#uiMain .tool-panel[data-tool="theme"]');
-    [canvasPanel, themePanel].forEach(p => {
+    const brushPanel = document.querySelector('#uiMain .tool-panel[data-tool="eraser"]');
+    [brushPanel, canvasPanel, themePanel].forEach(p => {
       if (!p) return;
       p.classList.add('active');
       p.style.display = 'block';
     });
     for (let i = toolPanels.length - 1; i >= 0; i--) {
       const t = toolPanels[i].dataset.tool;
-      if (t === 'canvas' || t === 'theme') toolPanels.splice(i, 1);
+      if (t === 'brush' || t === 'eraser' || t === 'canvas' || t === 'theme') toolPanels.splice(i, 1);
     }
+    move(brushPanel, uiSheetEls.brush);
     move(canvasPanel, uiSheetEls.canvas);
     move(themePanel, uiSheetEls.theme);
 
@@ -14108,6 +14140,17 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       move(rows[0], uiSheetEls.advanced);                       /* 其他画面可见性 */
       move(rows[1], uiSheetEls.advanced);                       /* 各种开关 + 清空帧 + 置顶 */
       move(document.getElementById('globalEditHelpBox'), uiSheetEls.advanced);
+
+      /* v7.0.6：把「透明底 / 3x高清 / 1080p」这三个**导出参数**从这排通用开关里挑出来，
+         单独成行放进「导出」分区（它们只影响导出结果，留在高级里容易找不到） */
+      const expToggles = document.createElement('div');
+      expToggles.className = 'adv-row';
+      expToggles.style.marginTop = '4px';
+      ['gifTransparent', 'gifHD3x', 'hd1080p'].forEach(cbId => {
+        const b = rows[1] && rows[1].querySelector('.adv-toggle[data-toggle="' + cbId + '"]');
+        if (b) expToggles.appendChild(b);
+      });
+      if (expToggles.children.length) uiSheetEls.export.appendChild(expToggles);
 
       if (rows[2]) {                                            /* 视频行：导出按钮抽给「导出」 */
         const exportRow = document.createElement('div');
@@ -14167,8 +14210,18 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     /* 原「本地预设」标题已被上面的 sub() 取代，把空壳去掉 */
     if (presetTitle && presetTitle.parentElement) presetTitle.remove();
 
-    /* ---- chips 里画布/主题已经有独立入口，删掉重复的两个 ---- */
-    document.querySelectorAll('#toolChips .tool-chip[data-tool="canvas"], #toolChips .tool-chip[data-tool="theme"]')
+    /* ---- 元件列表：从画布上的浮窗改成「元件」分区里的常驻纵向列表 ----
+       加 .lp-inline 后 #layerPop 不再是 fixed 浮层，而是普通块级元素，跟着面板一起滚。
+       同时 setLayerPopOpen 会被钉成"永远打开"，positionLayerPop 不再算坐标。 */
+    const lp = document.getElementById('layerPop');
+    if (lp) {
+      lp.classList.add('lp-inline');
+      move(lp, uiSheetEls.objects);
+      setLayerPopOpen(true);
+    }
+
+    /* ---- chips 里画笔/画布/主题已经有独立入口，删掉重复的三个 ---- */
+    document.querySelectorAll('#toolChips .tool-chip[data-tool="canvas"], #toolChips .tool-chip[data-tool="theme"], #toolChips .tool-chip[data-tool="eraser"]')
       .forEach(el => el.remove());
 
     /* 元件列表搬走后，属性区顶部没有吸顶层了，chips 的吸顶偏移归零 */

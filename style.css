@@ -124,7 +124,7 @@
 
   .ui-tab { /* 底部栏的入口按钮 */
     flex: 0 0 auto; /* 不压缩，溢出就滑动 */
-    padding: 5px 12px; min-height: 30px; /* 尺寸（触摸热区够用） */
+    padding: 5px 8px; min-height: 30px; /* v7.0.6：入口加到 7 个，左右内边距收到 8px 才放得下 */
     font-size: 12px; font-weight: 500; /* 字号字重 */
     color: var(--text-sub); background: transparent; /* 未选中：次要色 */
     border: 1px solid transparent; border-radius: 999px; /* 胶囊 */
@@ -1012,6 +1012,17 @@
     transform-origin: top left; /* 缩放原点 */
   }
   #layerPop.open { display: block; }
+  /* v7.0.6：内联模式 —— 元件列表住进「元件」分区，不再是浮在画布上的卡片。
+     定位/宽度/阴影/毛玻璃全部让位，只留一个普通块，长列表跟着面板一起滚。 */
+  #layerPop.lp-inline {
+    position: static; display: block;
+    width: auto; min-width: 0; max-width: none;
+    background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none;
+    box-shadow: none; padding: 0; border-radius: 0;
+    margin-top: 6px;
+  }
+  #layerPop.lp-inline .lp-head { margin-top: 8px; margin-bottom: 4px; } /* 和上面的编辑操作行拉开一点 */
+  #layerPop.lp-inline .lp-list { max-height: none; overflow: visible; padding: 0; }
   .lp-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
   .lp-title { font-size: 12px; font-weight: 600; color: var(--text-main); }
   .lp-count { font-size: 11px; color: var(--text-sub); }
@@ -1053,6 +1064,13 @@
   .lp-eye { border: none; background: transparent; cursor: pointer; font-size: 14px; line-height: 1; padding: 4px; border-radius: 6px; }
   .lp-eye:hover { background: var(--btn-hover); }
   .lp-eye.on { opacity: .55; }
+  .lp-lock { /* v7.0.6：每行的锁定按钮（替代原来横向条旁边那个全局锁定） */
+    border: none; background: transparent; cursor: pointer;
+    font-size: 13px; line-height: 1; padding: 4px; border-radius: 6px;
+    opacity: .5; transition: opacity .15s, background .15s;
+  }
+  .lp-lock:hover { background: var(--btn-hover); opacity: .85; }
+  .lp-lock.on { opacity: 1; } /* 已锁定：实心图标，全不透明 */
   .lp-drag { /* 长按拖动的横线手柄 */
     width: 24px; height: 26px; display: flex; align-items: center; justify-content: center;
     font-size: 14px; letter-spacing: -1px; color: var(--text-sub); cursor: grab;
@@ -1341,6 +1359,14 @@
     border-radius: 12px; /* 圆角 */
   } /* 工具面板基础样式结束 */
   .tool-panel.active { display: block; } /* 激活状态显示 */
+  /* v7.0.6：画笔 / 画布 / 主题搬进底部栏分区后，不要再叠一层"卡片底"。
+     .tool-panel 本身带 var(--bg-panel) + 毛玻璃，跟 #ui 同色 —— 两层一叠就比面板更暗，
+     看起来像块突兀的深色底图。分区里直接把底和圆角内边距都去掉，融进面板。 */
+  .ui-sheet .tool-panel {
+    background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none;
+    padding: 0; border-radius: 0; margin-top: 0;
+  }
+  .ui-sheet .tool-panel .section-title:first-child { margin-top: 0; }
   .tool-panel .section-title { margin: 0 0 6px; font-size: 12px; } /* 面板内标题：外边距，字号 */
 
   details.add-details { /* 可折叠详情容器（如“添加物体”） */

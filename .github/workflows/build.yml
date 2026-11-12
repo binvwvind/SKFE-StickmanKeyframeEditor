@@ -37,26 +37,16 @@ jobs:
       - id: deploy
         uses: actions/deploy-pages@v4
 
-  # ---------- 2. 桌面：Windows / macOS / Linux 安装包 ----------
+  # ---------- 2. 桌面：只出 Windows 安装包 ----------
+  # 2026-11-12 起不再产出 macOS(.dmg) / Linux(.AppImage)：
+  #   1) 实际没人下载，每次 tag 构建却要多烧两台 runner（macos-latest 计费是 linux 的 10 倍）
+  #   2) mac 版没签名没公证，用户双击会被 Gatekeeper 拦，给出去反而添麻烦
+  #   3) 本机也打不出这两个平台的包（electron-builder 不能跨平台），没法自测
+  # 以后真要恢复：把下面 runs-on 换成 matrix，并把 mac / linux 两行加回来即可，
+  # electron-builder.yml 里的 mac: / linux: 配置一直留着，没删。
   # 不依赖 web：打包脚本自己会跑 sync-www，绑定 web 只会在 tag 构建时被连坐跳过
   desktop:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            script: dist:win
-            artifact: release/*.exe
-            name: windows
-          - os: macos-latest
-            script: dist:mac
-            artifact: release/*.dmg
-            name: macos
-          - os: ubuntu-latest
-            script: dist:linux
-            artifact: release/*.AppImage
-            name: linux
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -64,15 +54,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      - name: 打包（${{ matrix.name }}）
-        run: npm run ${{ matrix.script }}
-        env:
-          # macOS 未配置签名证书时跳过签名与公证
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+      - name: 打包（Windows）
+        run: npm run dist:win
       - uses: actions/upload-artifact@v4
         with:
-          name: skfe-${{ matrix.name }}
-          path: ${{ matrix.artifact }}
+          name: skfe-windows
+          path: release/*.exe
           if-no-files-found: error
 
   # ---------- 3. 安卓：Capacitor + Gradle 出 APK ----------
@@ -126,7 +113,8 @@ jobs:
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
-  # ---------- 4. 打 tag（v*）时把四类产物汇总成一个 Release，链接永久可用 ----------
+  # ---------- 4. 打 tag（v*）时把产物汇总成一个 Release，链接永久可用 ----------
+  # 只有两类：Windows 安装包 + 安卓 APK
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [desktop, android]
@@ -140,7 +128,7 @@ jobs:
       - name: 汇总产物
         run: |
           mkdir -p out
-          find dist -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.AppImage' \) -exec cp {} out/ \;
+          find dist -type f -name '*.exe' -exec cp {} out/ \;
           # APK 原名 app-debug.apk，发给别人看不懂，改名带上产品名与版本
           find dist -type f -name '*.apk' -exec cp {} "out/SKFE-${GITHUB_REF_NAME}-android-debug.apk" \;
           ls -lh out

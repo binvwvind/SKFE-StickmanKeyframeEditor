@@ -34,6 +34,9 @@ nsis:
   shortcutName: SKFE
   deleteAppDataOnUninstall: false
 
+# macOS / Linux 段的配置**保留着**（以后想恢复发布不用重写），
+# 但 2026-11-12 起 CI 和 npm scripts 都不再构建这两个平台 —— 现在只发布 Windows + 安卓。
+# 需要临时本地试打：npx electron-builder --mac（只能在 macOS 上跑）
 mac:
   target:
     - target: dmg

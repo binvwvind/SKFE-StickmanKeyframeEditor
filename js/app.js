@@ -2307,6 +2307,53 @@ function importActionPresets() {
   document.getElementById('btnShowTimeline').onclick = () => toggleTimeline(true);
   document.getElementById('btnHideTimeline').onclick = () => toggleTimeline(false);
 
+  /* v7.0.4：控制栏的**鼠标**适配。横滑本身对触屏是原生的，但桌面上：
+     ① 滚动条被藏了 ② 滚轮只会竖滚 → 溢出后鼠标根本推不动。
+     这里补两条：滚轮映射成横向滚动、按住空白处可以像拖地图一样拖。 */
+  (function bindControlsMouseScroll() {
+    const bar = document.querySelector('.timeline-controls');
+    if (!bar) return;
+
+    /* 滚轮 / Shift+滚轮 / 触控板横滑 → 统一转成横向滚动 */
+    bar.addEventListener('wheel', (e) => {
+      if (bar.scrollWidth <= bar.clientWidth + 1) return;   /* 没溢出就别拦，让页面正常滚 */
+      const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (!d) return;
+      bar.scrollLeft += d;
+      e.preventDefault();
+    }, { passive: false });
+
+    /* 按住空白处拖动（按钮/输入框上不抢事件，否则点不动） */
+    let dragging = false, startX = 0, startLeft = 0, moved = false;
+    bar.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch' || e.button !== 0) return;
+      if (e.target.closest('button, input, select, label, a, .tween-more-menu')) return;
+      dragging = true; moved = false;
+      startX = e.clientX; startLeft = bar.scrollLeft;
+      bar.classList.add('dragging');
+    });
+    window.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - startX;
+      if (Math.abs(dx) > 3) moved = true;
+      bar.scrollLeft = startLeft - dx;
+    });
+    function endDrag() {
+      if (!dragging) return;
+      dragging = false;
+      bar.classList.remove('dragging');
+      /* 兜底：万一后面没来 click，别把 moved 永久挂着吞掉下一次点击 */
+      setTimeout(() => { moved = false; }, 260);
+    }
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
+    /* 拖完抬手时浏览器还会补一个 click，拦掉，免得误触按钮 */
+    bar.addEventListener('click', (e) => {
+      if (!moved) return;
+      e.stopPropagation(); e.preventDefault(); moved = false;
+    }, true);
+  })();
+
   /* ==================== 几何/工具 ==================== */
 
 

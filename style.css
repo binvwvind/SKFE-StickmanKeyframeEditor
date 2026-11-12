@@ -428,17 +428,24 @@
     box-shadow: 0 0 6px var(--color-primary-soft-hover); /* 主题色外发光 */
   } /* 拖拽指示线样式结束 */
 
-  /* v7.0.4：控制栏所有按钮改成**单行**排列，超出屏幕宽度左右滑动（原来会折成两行，把面板顶高）。
+  /* v7.0.4：控制栏所有按钮改成**单行**排列，超出宽度可左右滑动（原来会折成两行，把面板顶高）。
+     桌面端：显示细滚动条 + 支持滚轮横滚 + 按住空白处拖动（见 app.js 的 bindControlsMouseScroll）。
+     移动端：隐藏滚动条，走原生触屏横滑。
      注意：overflow 一旦不是 visible，里面的绝对定位子元素会被裁剪 —— 所以 .tween-more-menu 改成了 fixed，见下方。 */
   .timeline-controls {
     display: flex; gap: 6px; align-items: center; font-size: 12px; /* 弹性布局，间距 6px，垂直居中，字号 12px */
     flex-wrap: nowrap; /* 不换行 */
     overflow-x: auto; overflow-y: hidden; /* 横向滚动，纵向裁切 */
     -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; /* iOS 惯性滚动，横滑不带动页面 */
-    scrollbar-width: none; /* Firefox 隐藏滚动条 */
+    scrollbar-width: thin; /* v7.0.4：桌面显示细滚动条，鼠标能直接拖 */
+    scrollbar-color: var(--border-color) transparent; /* 滑块用边框色，轨道透明 */
     padding: 3px 0; /* 上下留 3px，避免聚焦光圈被裁 */
   }
-  .timeline-controls::-webkit-scrollbar { display: none; } /* Chrome/Safari 隐藏滚动条 */
+  .timeline-controls::-webkit-scrollbar { height: 6px; } /* Chrome/Safari：横向 6px 细条 */
+  .timeline-controls::-webkit-scrollbar-track { background: transparent; } /* 轨道透明 */
+  .timeline-controls::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; } /* 滑块样式 */
+  .timeline-controls.dragging { cursor: grabbing; } /* 按住拖动中 */
+  .timeline-controls.dragging * { cursor: grabbing !important; } /* 拖动中所有子元素统一手势 */
   .timeline-controls > * { flex: 0 0 auto; } /* 任何子项都不许压缩，否则按钮文字会被挤扁 */
   .timeline-controls button { /* 控制栏内的按钮 */
     padding: 4px 9px; min-height: 28px; font-size: 12px; /* 内边距，最小高度，字号 */
@@ -1556,7 +1563,8 @@
     #watermark { text-align: center; margin-bottom: 8px; } /* 移动端水印居中，下边距 */
 
     #timeline { padding: 4px 6px; border-radius: 18px 18px 0 0; } /* 移动端时间轴：内边距，圆角 */
-    .timeline-controls { gap: 4px; } /* 控制栏间距 */
+    .timeline-controls { gap: 4px; scrollbar-width: none; } /* 控制栏间距（触屏隐藏滚动条，靠手势滑） */
+    .timeline-controls::-webkit-scrollbar { display: none; } /* Chrome/Safari 移动端隐藏滚动条 */
     .timeline-controls label { font-size: 11px; } /* 标签字号 */
     .timeline-controls input[type=range] { flex: 0 0 50px; width: 50px; } /* 滑条固定宽 50px */
     .timeline-controls button { padding: 3px 7px; min-height: 26px; font-size: 11px; } /* 按钮尺寸 */

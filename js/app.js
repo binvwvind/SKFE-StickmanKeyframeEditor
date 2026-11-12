@@ -2307,11 +2307,11 @@ function importActionPresets() {
   document.getElementById('btnShowTimeline').onclick = () => toggleTimeline(true);
   document.getElementById('btnHideTimeline').onclick = () => toggleTimeline(false);
 
-  /* v7.0.4：控制栏的**鼠标**适配。横滑本身对触屏是原生的，但桌面上：
+  /* v7.0.4：横向滚动容器的**鼠标**适配。横滑本身对触屏是原生的，但桌面上：
      ① 滚动条被藏了 ② 滚轮只会竖滚 → 溢出后鼠标根本推不动。
-     这里补两条：滚轮映射成横向滚动、按住空白处可以像拖地图一样拖。 */
-  (function bindControlsMouseScroll() {
-    const bar = document.querySelector('.timeline-controls');
+     这里补两条：滚轮映射成横向滚动、按住空白处可以像拖地图一样拖。
+     v7.0.5：抽成通用函数，底部面板的 #uiBottomBar 也用它。 */
+  function bindHorizontalScroll(bar) {
     if (!bar) return;
 
     /* 滚轮 / Shift+滚轮 / 触控板横滑 → 统一转成横向滚动 */
@@ -2352,7 +2352,9 @@ function importActionPresets() {
       if (!moved) return;
       e.stopPropagation(); e.preventDefault(); moved = false;
     }, true);
-  })();
+  }
+  bindHorizontalScroll(document.querySelector('.timeline-controls'));
+  bindHorizontalScroll(document.getElementById('uiBottomBar'));
 
   /* ==================== 几何/工具 ==================== */
 
@@ -8060,6 +8062,8 @@ function importActionPresets() {
   const tweenMoreMenu = document.getElementById('tweenMoreMenu');
   const tweenEaseName = document.getElementById('tweenEaseName');
   const tweenEaseMenu = document.getElementById('tweenEaseMenu');
+  /* v7.0.5：时间轴上的「⚙️ 高级设置」按钮已移除（内容搬到控制面板底部栏的「高级」分区），
+     这里保持判空，v6/v7 的调用点不用逐个改。 */
   const advSettingsBtn = document.getElementById('btnAdvancedSettings');
   const advPanel = document.getElementById('timelineAdvancedPanel');
   const easeOverlay = document.getElementById('easeEditorOverlay');
@@ -8167,9 +8171,12 @@ function importActionPresets() {
     tweenEaseMenu.innerHTML = html;
   }
   function setAdvPanelOpen(open) {
+    if (!advPanel) return;
     advPanel.hidden = !open;
-    advSettingsBtn.classList.toggle('open', open);
-    advSettingsBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (advSettingsBtn) {
+      advSettingsBtn.classList.toggle('open', open);
+      advSettingsBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
     if (open) setEaseMenuOpen(false);
   }
   /* v7.0.4：段曲线菜单改成 fixed 定位，按按钮的实际屏幕位置摆放。
@@ -8293,7 +8300,7 @@ function importActionPresets() {
     }
     return null;
   }
-  advSettingsBtn.addEventListener('click', (e) => {
+  if (advSettingsBtn) advSettingsBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     setAdvPanelOpen(advPanel.hidden);
   });
@@ -10090,7 +10097,11 @@ function importActionPresets() {
 
   function updateStickyHeaderHeight() {
     const sh = document.querySelector('.sticky-header');
-    if (sh && uiPanel) uiPanel.style.setProperty('--sticky-header-h', sh.offsetHeight + 'px');
+    if (!uiPanel) return;
+    /* v7.0.5：元件列表搬到「元件」分区后会处于隐藏状态，隐藏时 offsetHeight 是 0，
+       但 offsetParent 也会是 null —— 用它区分"隐藏"和"真的没高度"，避免把 0 写进变量。 */
+    const visible = sh && sh.offsetParent !== null;
+    uiPanel.style.setProperty('--sticky-header-h', (visible ? sh.offsetHeight : 0) + 'px');
   }
 
   function setActiveTool(name) {
@@ -10137,11 +10148,12 @@ function importActionPresets() {
     }
   }
 
-  /* 点击更多设置按钮后：仅当 chips 已处于悬浮状态时，
-     才把 #ui 平滑滚动到让该信息栏刚好出现在 chips 悬浮层下方；
-     chips 仍按文档流显示（未悬浮）时不动，由用户自行滚动。 */
+  /* 点击更多设置按钮后：把滚动区平滑滚到让该信息栏刚好出现在 chips 下方。
+     v7.0.5：元件列表（.sticky-header）已搬到「元件」分区，主区没有吸顶层了，
+     所以拿不到 header 时就不再判断"是否悬浮"，直接滚。 */
      function maybeScrollToActiveToolPanel() {
     if (!activeTool || !uiPanel) return;
+    const scroll = document.getElementById('uiScroll') || uiPanel;
     const panel = uiPanel.querySelector('.tool-panel[data-tool="' + activeTool + '"]');
     if (!panel) return;
     const chips = uiPanel.querySelector('.settings-chips-wrapper');
@@ -10156,14 +10168,14 @@ function importActionPresets() {
     /* sticky-header 的 top 是 -10px、chips 的 top 是 headerH - 11px，
        悬浮时 chips 顶部可视位置 ≈ uiRect.top + headerH - 1 */
     const stickyViewportTop = uiRect.top + headerH - 1;
-    const isStuck = chipsRect.top <= stickyViewportTop + 2;
+    const isStuck = header ? (chipsRect.top <= stickyViewportTop + 2) : true;
     if (!isStuck) return; /* 按钮还在文档流里 → 不滚动 */
 
     /* 目标：让 panel 顶部刚好落在 chips 悬浮层底部下方 8px */
     const panelRect = panel.getBoundingClientRect();
     const desiredTop = uiRect.top + headerH + chipsH - 1 + 8;
     const delta = panelRect.top - desiredTop;
-    uiPanel.scrollTo({ top: Math.max(0, uiPanel.scrollTop + delta), behavior: 'smooth' });
+    scroll.scrollTo({ top: Math.max(0, scroll.scrollTop + delta), behavior: 'smooth' });
   }
 
   toolChips.forEach(ch => {
@@ -14017,6 +14029,192 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
   const TIMELINE_DOCK_KEY = 'skfe_timeline_dock_v1';
   let timelineDock = 'top';
 
+  /* ==================== v7.0.5：控制面板分区（底部固定入口栏） ====================
+     设计：面板 = 拖动条 + 可滚动区(#uiScroll) + 固定底部栏(#uiBottomBar)。
+     默认显示 #uiMain（属性区）；点底部入口把 #uiMain 换成对应分区，再点一次回来。
+     搬迁用 appendChild 把原 DOM 节点移进分区容器 —— 事件监听绑在元素自身上，搬家不会丢。 */
+  const uiSheetEls = {};        /* key -> 容器 */
+  let activeUiSheet = null;     /* 当前分区 key；null = 属性区 */
+
+  function uiSheetTitle(key) {
+    return ({ objects: '元件', canvas: '画布', advanced: '高级', project: '项目', export: '导出', theme: '主题' })[key] || '';
+  }
+
+  function mountUiSheets() {
+    const keys = ['objects', 'canvas', 'advanced', 'project', 'export', 'theme'];
+    keys.forEach(k => {
+      uiSheetEls[k] = document.getElementById('sheet' + k.charAt(0).toUpperCase() + k.slice(1));
+    });
+    if (!uiSheetEls.objects) return;   /* 旧 HTML 没更新时安全退出 */
+
+    const move = (el, box) => { if (el && box) box.appendChild(el); };
+    const rowOf = (el) => (el ? el.closest('.row') : null);
+    /* 分区内的小标题：带 data-i18n，切语言时能被 applyTranslations 一起刷 */
+    const sub = (i18nKey) => {
+      const d = document.createElement('div');
+      d.className = 'section-title';
+      d.style.marginTop = '10px';
+      d.dataset.i18n = i18nKey;
+      d.textContent = (window.t ? window.t(i18nKey) : i18nKey);
+      return d;
+    };
+
+    /* 每个分区顶部的标题 + 返回按钮 */
+    keys.forEach(k => {
+      const box = uiSheetEls[k];
+      if (!box) return;
+      const head = document.createElement('div');
+      head.className = 'ui-sheet-head';
+      const tEl = document.createElement('span');
+      tEl.dataset.i18n = 'tab.' + k;        /* 标题跟着语言切换 */
+      tEl.textContent = uiSheetTitle(k);
+      const back = document.createElement('button');
+      back.type = 'button';
+      back.className = 'ui-sheet-back';
+      back.dataset.i18n = 'tab.back';       /* 返回按钮也跟着切 */
+      back.textContent = '返回属性';
+      back.addEventListener('click', () => switchUiSheet(null));
+      head.appendChild(tEl); head.appendChild(back);
+      box.appendChild(head);
+    });
+
+    /* ---- 元件：添加物体 / 编辑操作 / 元件列表 ---- */
+    const addSummary = document.querySelector('[data-i18n="add.summary"]');
+    move(addSummary ? addSummary.closest('.add-details') : null, uiSheetEls.objects);
+    move(rowOf(document.getElementById('btnClone')), uiSheetEls.objects);
+    move(document.querySelector('#uiMain .sticky-header'), uiSheetEls.objects);
+
+    /* ---- 画布 / 主题：整块搬 tool-panel ----
+       这两块原来是 chips 手风琴（靠 .active 显示），搬进固定分区后要**常驻显示**，
+       所以从 toolPanels 数组里剔除，否则 setActiveTool 一调用就把它们关掉，分区里会一片空白。 */
+    const canvasPanel = document.getElementById('canvasSettingsPanel');
+    const themePanel = document.querySelector('#uiMain .tool-panel[data-tool="theme"]');
+    [canvasPanel, themePanel].forEach(p => {
+      if (!p) return;
+      p.classList.add('active');
+      p.style.display = 'block';
+    });
+    for (let i = toolPanels.length - 1; i >= 0; i--) {
+      const t = toolPanels[i].dataset.tool;
+      if (t === 'canvas' || t === 'theme') toolPanels.splice(i, 1);
+    }
+    move(canvasPanel, uiSheetEls.canvas);
+    move(themePanel, uiSheetEls.theme);
+
+    /* ---- 拆原「高级设置」弹窗：开关归高级、导出归导出、项目/动作归项目 ---- */
+    const adv = document.getElementById('timelineAdvancedPanel');
+    if (adv) {
+      const rows = Array.prototype.slice.call(adv.querySelectorAll(':scope > .adv-row'));
+      move(rows[0], uiSheetEls.advanced);                       /* 其他画面可见性 */
+      move(rows[1], uiSheetEls.advanced);                       /* 各种开关 + 清空帧 + 置顶 */
+      move(document.getElementById('globalEditHelpBox'), uiSheetEls.advanced);
+
+      if (rows[2]) {                                            /* 视频行：导出按钮抽给「导出」 */
+        const exportRow = document.createElement('div');
+        exportRow.className = 'row';
+        exportRow.style.flexWrap = 'wrap';
+        ['btnExportGIF', 'btnExportPNGSeq', 'btnExportMP4'].forEach(id => {
+          move(document.getElementById(id), exportRow);
+        });
+        move(rows[2].querySelector('.adv-color-label'), exportRow);
+        uiSheetEls.export.appendChild(exportRow);
+        move(rows[2], uiSheetEls.advanced);                     /* 剩下的导入视频 / 显隐 / 播放 */
+      }
+
+      if (rows[3]) {                                            /* 工程存档 */
+        uiSheetEls.project.appendChild(sub('tab.sub.archive'));
+        move(rows[3], uiSheetEls.project);
+      }
+      if (rows[4]) {                                            /* 动作库 */
+        uiSheetEls.project.appendChild(sub('tab.sub.actions'));
+        move(rows[4], uiSheetEls.project);
+      }
+      move(document.getElementById('actionList'), uiSheetEls.project);
+
+      /* 弹窗的标题栏（⚙️ 高级设置 + ✕）在一行行搬空后就成了死 UI：
+         触发它的按钮已删，这个壳永远打不开。趁早摘掉，只留那些隐藏 checkbox 当状态存储。 */
+      const advHead = adv.querySelector('.adv-panel-head');
+      if (advHead) advHead.remove();
+    }
+
+    /* ---- 导出：面板顶部的 PNG/JPG + 高清勾选（全屏**留在原位**） ---- */
+    const pngRow = rowOf(document.getElementById('btnExportPNG'));
+    const topExportRow = document.createElement('div');
+    topExportRow.className = 'row';
+    move(document.getElementById('btnExportPNG'), topExportRow);
+    move(document.getElementById('btnExportJPG'), topExportRow);
+    const hdRow = rowOf(document.getElementById('exportHD'));
+    /* 顺序：PNG/JPG → 高清勾选 → 视频导出（更常用的放前面） */
+    const exportHead = uiSheetEls.export.querySelector('.ui-sheet-head');
+    if (exportHead) {
+      exportHead.after(topExportRow);
+      if (hdRow) topExportRow.after(hdRow);
+    } else {
+      uiSheetEls.export.appendChild(topExportRow);
+      move(hdRow, uiSheetEls.export);
+    }
+    const fsBtn = document.getElementById('btnFullscreen');
+    if (fsBtn) fsBtn.style.flex = '0 0 auto';                 /* 只剩全屏时别再拉满整行 */
+    if (pngRow) pngRow.style.justifyContent = 'flex-start';    /* 靠左 */
+
+    /* ---- 项目：本地预设 + 清空画布 ---- */
+    const presetTitle = document.querySelector('#uiMain .section-title[data-i18n="preset.title"]');
+    if (presetTitle) uiSheetEls.project.appendChild(sub('tab.sub.presets'));
+    move(rowOf(document.getElementById('presetNameInput')), uiSheetEls.project);
+    move(document.getElementById('presetList'), uiSheetEls.project);
+    move(rowOf(document.getElementById('btnClearCanvas')), uiSheetEls.project);
+    move(document.querySelector('#uiMain .hint[data-i18n-html="preset.tips"]'), uiSheetEls.project);
+    /* 原「本地预设」标题已被上面的 sub() 取代，把空壳去掉 */
+    if (presetTitle && presetTitle.parentElement) presetTitle.remove();
+
+    /* ---- chips 里画布/主题已经有独立入口，删掉重复的两个 ---- */
+    document.querySelectorAll('#toolChips .tool-chip[data-tool="canvas"], #toolChips .tool-chip[data-tool="theme"]')
+      .forEach(el => el.remove());
+
+    /* 元件列表搬走后，属性区顶部没有吸顶层了，chips 的吸顶偏移归零 */
+    updateStickyHeaderHeight();
+
+    /* ---- 底部栏绑定 ---- */
+    const bar = document.getElementById('uiBottomBar');
+    if (bar) {
+      bar.querySelectorAll('.ui-tab').forEach(btn => {
+        btn.addEventListener('click', () => switchUiSheet(btn.dataset.sheet));
+      });
+    }
+  }
+
+  function switchUiSheet(key) {
+    const main = document.getElementById('uiMain');
+    const scroll = document.getElementById('uiScroll');
+    const bar = document.getElementById('uiBottomBar');
+    if (!main) return;
+
+    if (key && key === activeUiSheet) key = null;   /* 再点同一个入口 → 回到属性区 */
+    activeUiSheet = key;
+
+    Object.keys(uiSheetEls).forEach(k => {
+      const box = uiSheetEls[k];
+      if (box) box.hidden = (k !== key);
+    });
+    main.hidden = !!key;
+
+    if (bar) {
+      bar.querySelectorAll('.ui-tab').forEach(b => {
+        const on = b.dataset.sheet === key;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+    }
+    if (scroll) scroll.scrollTop = 0;               /* 切分区回到顶部 */
+
+    /* v7.0.5：画布分区要同时打开「画布边界 / 地面线」编辑态，否则在画布上拖不动边界（原来靠点 chip 触发）。
+       离开画布分区时把编辑态关掉，避免误拖。 */
+    if (key === 'canvas') setActiveTool('canvas');
+    else if (activeTool === 'canvas') setActiveTool(null);
+
+    EventBus.emit('need:render');
+  }
+
   function refreshTimelineDockOffsets() {
     const tl = document.getElementById('timeline');
     if (!tl) return;
@@ -14035,20 +14233,31 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       if (hist) hist.style.top = '';
     }
 
-    /* v7.0.4：移动端「🎬 帧动画面板」浮钮**不再随抽屉抬升**，永久固定在屏幕右下角（和 PC 端一致）。
-       之前把它抬到抽屉上沿，展开设置后按钮会跳到屏幕中间，位置飘。现在靠更高层级（z-index 30 > #ui 的 10）
-       浮在抽屉之上，配合 body.ui-open 给抽屉底部留白，不会压住内容。 */
+    /* v7.0.4/7.0.5：「🎬 帧动画面板」浮钮固定在屏幕右下角，不被抽屉顶上去。
+       v7.0.5 面板底部多了固定入口栏，所以移动端要把它抬到**底部栏上方**（barH + 8），
+       免得压住「元件/画布/高级…」那排入口。桌面端面板在左上，浮钮照旧贴屏幕右下。 */
     const btnShowTl = document.getElementById('btnShowTimeline');
-    if (btnShowTl && isMobile) {
-      btnShowTl.style.bottom = '';   /* 清掉旧版本可能残留的内联 bottom */
+    if (btnShowTl) {
+      if (isMobile) {
+        const bar = document.getElementById('uiBottomBar');
+        const barH = (bar && ui && !ui.classList.contains('hidden')) ? bar.offsetHeight : 0;
+        btnShowTl.style.bottom = barH ? (barH + 8) + 'px' : '';
+      } else {
+        btnShowTl.style.bottom = '';
+      }
     }
 
     // 【修复】不论是否开启了自由缩放，桌面端顶部停靠时先把 UI 面板往下推，否则会被时间轴压住
     if (!isMobile && ui) {
       const baseTop = 14;
+      const reserved = baseTop + (timelineDock === 'top' ? h : 0) + 100;   /* 顶部偏移 + 时间轴 + 底部留白 */
       ui.style.top = (baseTop + (timelineDock === 'top' ? h : 0)) + 'px';
-      // 高度计算也加上时间轴的高度
-      ui.style.maxHeight = 'calc(100vh - ' + (baseTop + (timelineDock === 'top' ? h : 0) + 100) + 'px)';
+      ui.style.maxHeight = 'calc(100vh - ' + reserved + 'px)';
+      /* v7.0.5：桌面端也把高度**写死**成可用高度。原来只有 max-height、高度随内容自适应，
+         切分区时内容一短面板就缩，底部入口栏跟着上下乱跳（每次点入口都要重新找位置）。
+         写死之后滚动交给 #uiScroll，栏稳稳待在面板底部。
+         例外：开了自由缩放且用户拖过尺寸时，高度归 applyCustomSize()，这里别抢。 */
+      if (!(uiResizable && uiCustomSize)) ui.style.height = 'calc(100vh - ' + reserved + 'px)';
     }
 
     if (uiResizable) return; // 防冲突：自由缩放的其余逻辑不需要重复执行
@@ -14068,11 +14277,18 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
         if (!isUiHidden) {
           if (!uiPanelDragged) {
             ui.style.top = 'auto';
-            ui.style.maxHeight = '50vh';   /* v7.0.4：展开高度 = 半屏，与 #ui 的 CSS 保持一致 */
+            /* v7.0.5：高度交给 CSS 的 height:50vh（写死高度，切分区不塌缩），这里只保证清掉拖拽残留 */
+            ui.style.height = '';
+            ui.style.maxHeight = '50vh';
           } else {
             const topPx = parseFloat(ui.style.top) || 60;
-            ui.style.maxHeight = Math.max(120, window.innerHeight - topPx - bottomOffset) + 'px';
+            const hh = Math.max(120, window.innerHeight - topPx - bottomOffset);
+            ui.style.height = hh + 'px';     /* 手动拖高时用内联高度覆盖 CSS */
+            ui.style.maxHeight = hh + 'px';
           }
+        } else {
+          ui.style.height = '';              /* 收起状态清掉内联高度，回到 CSS 的 50vh */
+          ui.style.maxHeight = '';
         }
       }
       
@@ -14477,6 +14693,9 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     updateUndoRedoButtons();
     syncPinViewBtn();
     syncResizeUI(); // 页面加载时，根据保存的状态刷新一下按钮文字和手柄
+    /* v7.0.5：把控件搬进 6 个分区、绑定底部入口栏。必须在所有控件初始化之后做，
+       否则负责量尺寸的代码（吸顶高度等）会算到搬迁前的布局。 */
+    mountUiSheets();
     applyTranslations();
     if (typeof window.SKFE_REFRESH_I18N === 'function') window.SKFE_REFRESH_I18N();
     saveHistory('初始化');

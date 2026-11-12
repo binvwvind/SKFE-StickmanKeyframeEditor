@@ -70,25 +70,82 @@
   #ui { /* 主控制面板 */
     position: fixed; top: 14px; left: 14px; /* 固定在屏幕左上角，距离边缘 14px */
     border-radius: var(--radius-panel); /* 使用全局大面板圆角 */
-    padding: 10px 12px; /* 内边距：上下 10px，左右 12px */
+    padding: 0; /* v7.0.5：内边距移到 #uiScroll / 拖动条 / 底部栏，底部栏才能通栏 */
     box-shadow: var(--shadow-panel); /* 使用大面板阴影 */
     user-select: none; /* 禁止选中内部文字 */
     color: var(--text-main); /* 应用主文字颜色 */
     width: 350px; max-height: calc(100vh - 100px); /* 固定宽度 350px，最大高度为屏幕高度减去 100px */
-    overflow-y: auto; /* 内容超出时纵向滚动 */
+    display: flex; flex-direction: column; /* v7.0.5：纵向三段 —— 拖动条 / 滚动区 / 固定底部栏 */
+    overflow: hidden; /* 滚动交给 #uiScroll，否则底部栏会被一起滚走 */
     transition: transform .3s ease, bottom .3s ease; /* 平滑过渡动画：用于移动端展开/收起 */
     z-index: 10; /* 层级较高，保证在画布上方 */
-    scrollbar-width: thin; /* 针对 Firefox 设置滚动条为细线 */
-    scrollbar-color: var(--border-color) transparent; /* 滚动条颜色：滑块为边框色，轨道透明 */
   } /* 主控制面板基础样式结束 */
+
+  #uiScroll { /* v7.0.5：面板里唯一可滚动的区域 */
+    flex: 1 1 auto; min-height: 0; /* 占满剩余高度，内容多时自己滚 */
+    overflow-y: auto; overflow-x: hidden; /* 纵向滚动 */
+    padding: 0 12px 10px; /* 左右 12px、底部 10px（顶部留给拖动条） */
+    scrollbar-width: thin; /* Firefox 细滚动条 */
+    scrollbar-color: var(--border-color) transparent; /* 滑块边框色，轨道透明 */
+  } /* 滚动区样式结束 */
+
+  #uiMain, .ui-sheet { /* 属性区 / 6 个分区容器 */
+    display: block; /* 正常块级 */
+  } /* 区域基础样式结束 */
+  .ui-sheet[hidden], #uiMain[hidden] { display: none !important; } /* 隐藏时必须真的隐藏（覆盖 display） */
+
+  .ui-sheet-head { /* 分区顶部的返回标题 */
+    display: flex; align-items: center; gap: 8px; /* 水平排列 */
+    padding: 4px 0 8px; /* 上下留白 */
+    font-size: 13px; font-weight: 600; color: var(--text-main); /* 标题字重字号 */
+    position: sticky; top: 0; z-index: 3; /* 分区内滚动时标题吸顶 */
+    background: var(--bg-panel); /* 吸顶需要不透明底 */
+  } /* 分区标题结束 */
+  .ui-sheet-head .ui-sheet-back { /* 返回按钮 */
+    margin-left: auto; padding: 3px 10px; min-height: 26px; font-size: 11.5px; /* 尺寸 */
+    border-radius: 999px; border: 1px solid transparent; /* 胶囊圆角 */
+    background: var(--btn-bg); color: var(--text-sub); cursor: pointer; /* 配色 */
+  } /* 返回按钮结束 */
+
+  #uiBottomBar { /* v7.0.5：底部固定栏（不参与滚动） */
+    flex: 0 0 auto; /* 高度固定，不被压缩 */
+    display: flex; align-items: center; gap: 4px; /* 一行排列 */
+    padding: 6px 8px; /* 内边距 */
+    border-top: 1px solid var(--border-color); /* 与内容区隔开 */
+    background: var(--bg-panel); /* 不透明底，避免内容透上来 */
+    border-radius: 0 0 var(--radius-panel) var(--radius-panel); /* 跟随面板底部圆角 */
+    overflow-x: auto; overflow-y: hidden; /* 入口多时左右滑动 */
+    scrollbar-width: none; /* 隐藏滚动条（桌面靠滚轮/拖动） */
+    -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; /* iOS 惯性滚动 */
+  } /* 底部栏结束 */
+  #uiBottomBar::-webkit-scrollbar { display: none; } /* 隐藏滚动条 */
+  #uiBottomBar.dragging { cursor: grabbing; } /* 拖动中 */
+  #uiBottomBar.dragging * { cursor: grabbing !important; } /* 拖动中统一手势 */
+
+  .ui-tab { /* 底部栏的入口按钮 */
+    flex: 0 0 auto; /* 不压缩，溢出就滑动 */
+    padding: 5px 12px; min-height: 30px; /* 尺寸（触摸热区够用） */
+    font-size: 12px; font-weight: 500; /* 字号字重 */
+    color: var(--text-sub); background: transparent; /* 未选中：次要色 */
+    border: 1px solid transparent; border-radius: 999px; /* 胶囊 */
+    cursor: pointer; white-space: nowrap; /* 不换行 */
+    transition: background .15s, color .15s; /* 过渡 */
+  } /* 入口按钮基础样式结束 */
+  .ui-tab:hover { background: var(--btn-hover); color: var(--text-main); } /* 悬停 */
+  .ui-tab.active { /* 当前打开的分区 */
+    background: var(--color-primary); color: var(--color-primary-text); /* 主题色实底 */
+  } /* 选中态结束 */
+  .ui-tab.active:hover { background: var(--color-primary-hover); color: var(--color-primary-text); } /* 选中态悬停 */
   
-  #ui::-webkit-scrollbar, /* 面板滚动条整体 */
+  #uiScroll::-webkit-scrollbar, /* v7.0.5：滚动区（原 #ui）的滚动条 */
+  #ui::-webkit-scrollbar, /* 兼容旧结构 */
   .adv-panel::-webkit-scrollbar, /* 高级面板滚动条 */
   .preset-list::-webkit-scrollbar, /* 预设列表滚动条 */
   .ease-preset-list::-webkit-scrollbar, /* 缓动预设列表滚动条 */
   #jointEaseList::-webkit-scrollbar { width: 6px; height: 6px; } /* 设置宽度和高度为 6px */
   
-  #ui::-webkit-scrollbar-thumb, /* 面板滚动条滑块 */
+  #uiScroll::-webkit-scrollbar-thumb, /* v7.0.5：滚动区滑块 */
+  #ui::-webkit-scrollbar-thumb, /* 兼容旧结构 */
   .adv-panel::-webkit-scrollbar-thumb, /* 高级面板滚动条滑块 */
   .preset-list::-webkit-scrollbar-thumb, /* 预设列表滑块 */
   .ease-preset-list::-webkit-scrollbar-thumb, /* 缓动预设列表滑块 */
@@ -97,8 +154,9 @@
   } /* 滚动条自定义结束 */
 
   #uiDragHandle { /* 控制面板顶部的拖动条手柄 */
-    width: 100%; height: 24px; display: flex; justify-content: center; align-items: center; /* 占满宽度，高度 24px，内容水平垂直居中 */
-    cursor: grab; touch-action: none; margin: -6px 0 4px 0; /* 鼠标指针为抓取状，禁用触摸手势，微调外边距 */
+    flex: 0 0 auto; /* v7.0.5：#ui 变成 flex 纵向布局，这里不能被压缩 */
+    width: auto; height: 24px; display: flex; justify-content: center; align-items: center; /* 高度 24px，内容水平垂直居中 */
+    cursor: grab; touch-action: none; margin: 4px 12px 2px 12px; /* v7.0.5：#ui 的 padding 归零了，这里自己补回左右 12px */
   } /* 拖动条手柄基础样式结束 */
   #uiDragHandle:active { cursor: grabbing; } /* 鼠标按住时，指针变为抓紧状 */
   #uiDragHandle .bar { /* 拖动条内部的横线图标 */
@@ -1538,20 +1596,22 @@
     #ui { /* 移动端控制面板 */
       top: auto; bottom: 0; left: 0; right: 0; /* 固定在底部 */
       /* v7.0.4：展开高度改成半屏（50vh），原来 35vh 太矮，滑条一多就得来回滚 */
-      width: 100%; max-height: 50vh; /* 全宽，最大高度 50vh */
+      /* v7.0.5：用固定 height 而不是 max-height —— 切到内容少的分区（画布/主题）时面板不会缩成一条 */
+      width: 100%; height: 50vh; max-height: 50vh; /* 全宽，固定半屏 */
       border-radius: 20px 20px 0 0; border: none; /* 仅顶部圆角，无边框 */
       transform: translateY(0); /* 位置重置 */
       background: var(--bg-panel); /* 面板色背景 */
-      padding-bottom: env(safe-area-inset-bottom, 12px); /* 底部内边距适配刘海屏安全区 */
+      /* v7.0.5：padding 归零，safe-area 交给底部栏自己处理 */
       overscroll-behavior-y: contain; /* 防止长按拖动触发系统手势 */
     } /* 移动端面板样式结束 */
     #ui.hidden { transform: translateY(calc(100% - 64px)); } /* 隐藏状态：向下平移，只留出顶部拖动条高度 */
     #ui.hidden .bar { background: var(--text-sub); } /* 隐藏状态下拖动条颜色变深 */
     #ui.hidden::after { display: none; } /* 隐藏状态下的伪元素隐藏 */
 
-    /* v7.0.4：抽屉展开时，右下角的「🎬 帧动画面板」浮钮固定不动（不再被顶上去），
-       这里给抽屉底部留出等高的空白，保证内容滚到底也不会被浮钮压住。 */
-    body.ui-open #ui { padding-bottom: calc(64px + env(safe-area-inset-bottom, 12px)); }
+    /* v7.0.5：底部栏固定后，抽屉不再需要给右下角浮钮额外留白 —— 浮钮改由 JS 抬到底部栏上方 */
+    #uiBottomBar { padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px)); }
+    /* 浮钮浮在内容区右下角，底部多留一点空白，滚到底时最后一行不会被它压住 */
+    #uiScroll { padding-bottom: 56px; }
 
     /* v6.0 触控友好：滑条/数字输入加大可点区域（原生滑条高度决定触摸热区） */
     #ui input[type=range] { height: 30px; }

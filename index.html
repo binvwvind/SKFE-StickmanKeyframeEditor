@@ -3,7 +3,7 @@
 <head> <!-- 网页头部，包含元数据和外部引用 -->
 <meta charset="UTF-8"> <!-- 设置字符编码为 UTF-8，防止中文乱码 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover"> <!-- 移动端视口设置：宽度同设备，允许缩放，适配刘海屏 -->
-<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.0.4</title> <!-- 网页标题，带有多语言属性 -->
+<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.0.5</title> <!-- 网页标题，带有多语言属性 -->
 <link rel="stylesheet" href="./style.css"> <!-- 引入外部样式表 -->
 </head> <!-- 头部结束 -->
 <body> <!-- 网页主体开始 -->
@@ -88,10 +88,14 @@
 <button id="btnShowTimeline" data-i18n="timeline.show">🎬 帧动画面板</button> <!-- 右下角呼出时间轴的悬浮按钮 -->
 
 <div id="ui"> <!-- ==================== 核心控制面板主容器 ==================== -->
-  <div id="uiDragHandle"><div class="bar"></div></div> <!-- 面板顶部的拖拽把手 -->
+  <div id="uiDragHandle"><div class="bar"></div></div> <!-- 面板顶部的拖拽把手（固定在面板顶部，不参与滚动） -->
+  <!-- v7.0.5：把原来"一路滚到底"的内容拆成「属性区 + 6 个分区」。滚动只发生在 #uiScroll 里，
+       底部 #uiBottomBar 是固定栏（不参与滚动），点击入口切换分区。 -->
+  <div id="uiScroll">
+  <div id="uiMain">
 
   <div id="watermark"> <!-- 控制面板顶部的作者/版本水印 -->
-    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.0.4</div> <!-- 软件名称及版本 -->
+    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.0.5</div> <!-- 软件名称及版本 -->
     <div class="author" data-i18n="watermark.author">Author: binvwvind qq交流分享群:1121039855</div> <!-- 作者信息及群号 -->
   </div> <!-- 水印结束 -->
 
@@ -837,6 +841,26 @@
       • GIF / 视频支持透明底（视频需浏览器支持 WebM Alpha），iOS 端长按图片即可保存。 <!-- 列表项 -->
     </div> <!-- 帮助内容结束 -->
   </details> <!-- 使用说明面板结束 -->
+  </div> <!-- uiMain（属性区）结束 -->
+
+  <!-- 6 个分区容器：内容由 JS 在初始化时从上面搬进来（迁移映射见 app.js 的 mountUiSheets） -->
+  <div class="ui-sheet" id="sheetObjects" hidden></div> <!-- 元件 -->
+  <div class="ui-sheet" id="sheetCanvas" hidden></div> <!-- 画布 -->
+  <div class="ui-sheet" id="sheetAdvanced" hidden></div> <!-- 高级 -->
+  <div class="ui-sheet" id="sheetProject" hidden></div> <!-- 项目 -->
+  <div class="ui-sheet" id="sheetExport" hidden></div> <!-- 导出 -->
+  <div class="ui-sheet" id="sheetTheme" hidden></div> <!-- 主题 -->
+  </div> <!-- #uiScroll 结束 -->
+
+  <!-- 底部固定栏：不参与上面的滚动，一行排列、超出可左右滑动 -->
+  <div id="uiBottomBar" role="tablist" aria-label="面板分区">
+    <button class="ui-tab" type="button" data-sheet="objects" role="tab" data-i18n="tab.objects">元件</button>
+    <button class="ui-tab" type="button" data-sheet="canvas" role="tab" data-i18n="tab.canvas">画布</button>
+    <button class="ui-tab" type="button" data-sheet="advanced" role="tab" data-i18n="tab.advanced">高级</button>
+    <button class="ui-tab" type="button" data-sheet="project" role="tab" data-i18n="tab.project">项目</button>
+    <button class="ui-tab" type="button" data-sheet="export" role="tab" data-i18n="tab.export">导出</button>
+    <button class="ui-tab" type="button" data-sheet="theme" role="tab" data-i18n="tab.theme">主题</button>
+  </div> <!-- 底部栏结束 -->
 </div> <!-- ==================== 核心控制面板主容器结束 ==================== -->
 
 <div id="uiResizeHandle" style="display:none;" title="按住拖拽调整大小，双击恢复默认" data-i18n-title="uiResize.title">◢</div> <!-- 控制面板右下角的自由缩放手柄（默认隐藏） -->
@@ -895,7 +919,7 @@
     <select id="trackSelector" title="选择主时间轴或元件子轨道" aria-label="轨道选择"> <!-- 轨道选择下拉框 -->
       <option value="all">[全局主时间轴]</option> <!-- 默认选项：全局 -->
     </select> <!-- 轨道选择结束 -->
-    <button id="btnAdvancedSettings" class="adv-settings-btn" title="高级设置" aria-expanded="false" aria-controls="timelineAdvancedPanel" data-i18n="timeline.adv" data-i18n-title="timeline.advTitle">⚙️ 高级设置</button> <!-- 展开高级设置面板按钮 -->
+    <!-- v7.0.5：原「⚙️ 高级设置」按钮已移除，内容整体搬到控制面板底部栏的「高级」分区 -->
   </div> <!-- 时间轴操作控制栏结束 -->
   
   <div class="adv-panel" id="timelineAdvancedPanel" hidden> <!-- ==================== 时间轴高级设置弹窗 ==================== -->

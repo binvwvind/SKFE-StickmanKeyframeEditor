@@ -12,6 +12,8 @@
   const { EventBus } = SKFE.core.eventBus;
   const { darkenColor, hexToRgb, rgbToHex, lerpColor, themeHexToRgba, themeMixHex } = SKFE.core.colorUtils;
   const { along, norm, distToSeg, worldToFigureLocal } = SKFE.core.geometry;
+  /* v7.0.0：关键帧数据层（槽位身份 / 段 / 单对象插值） */
+  const KF = SKFE.systems.keyframes;
 
   /* ==================== 全局状态（AppState） ==================== */
   const AppState = {
@@ -284,6 +286,44 @@ function syncDistortToAllFrames(obj) {
   }
 }
 
+  /* D12：主轨已经有段时新增元件 —— 在这一段的两端补锚点，用当前帧的姿势填充。
+     两端姿势相同，所以段内每一帧插出来都是同一个姿势（整段静止）。
+     来源记 'main'：它确实是主轨带出来的，主轨取消关键帧时会跟着回收（D9）；
+     但用户在子轨改过姿势也好、重新打过锚点也好，来源不变 → 仍然被回收（用例 19）。
+     返回补了几个锚点，0 表示当前帧不在任何段内（保持旧行为：只有这一帧有这个元件）。 */
+  function inheritMainKeyframesForNewTrack(trackId, obj) {
+    /* 画笔笔画和参考视频天生是「这一帧的」东西，整段复制会糊成一片，不参与继承 */
+    if (!obj || obj.type === 'ink' || obj.type === 'video' || obj.type === 'camera') return 0;
+    const cur = AppState.currentFrameIndex;
+    const keys = new Set();
+    for (const id in AppState.tracks) {
+      if (String(id) === String(trackId)) continue;
+      const t = AppState.tracks[id];
+      if (!t || !t.frames) continue;
+      for (let i = 0; i < t.frames.length; i++) if (KF.isKey(t.frames[i])) keys.add(i);
+    }
+    if (keys.size < 2) return 0;
+    const sorted = Array.from(keys).sort((a, b) => a - b);
+    let lo = null, hi = null;
+    for (const k of sorted) if (k <= cur) lo = k;
+    for (const k of sorted) if (k >= cur) { hi = k; break; }
+    if (lo === null || hi === null || lo === hi) return 0;
+
+    const t = AppState.tracks[String(trackId)];
+    if (!t || !t.frames) return 0;
+    while (t.frames.length <= hi) t.frames.push(null);
+    let n = 0;
+    for (const k of [lo, hi]) {
+      if (KF.isReal(t.frames[k])) continue;
+      const clone = cloneObjectKeepImg(obj);
+      clone.id = obj.id;
+      t.frames[k] = clone;
+      KF.markKey(clone, 'main');
+      n++;
+    }
+    return n;
+  }
+
   function addObjectToFrames(obj) {
     if (!obj || obj.type === 'video') return;
     const id = String(obj.id);
@@ -302,6 +342,9 @@ function syncDistortToAllFrames(obj) {
         clone.id = obj.id;
         AppState.tracks[id].frames[i] = clone;
       }
+    } else if (inheritMainKeyframesForNewTrack(id, obj) > 0) {
+      /* D12：段内新增元件 → 继承主轨关键帧，段两端补锚点（当前帧姿势），整段静止 */
+      reconcileAllTracks();
     }
     syncMainLengthFromTracks();
     AppState.objects.length = 0;
@@ -390,6 +433,7 @@ function syncDistortToAllFrames(obj) {
     } else {
       return;
     }
+    reconcileAllTracks({ adoptPlain: false });
     syncMainLengthFromTracks();
     if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = AppState.frames.length - 1;
     if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
@@ -424,11 +468,23 @@ function syncDistortToAllFrames(obj) {
     updateUndoRedoButtons();
   }
 
-  function saveHistory(label) {
+  /* v7.0.0（验收 11）：拖滑块 / 连续微调时，同一标签的连续落点合并成一条历史。
+     合并时保留最早那次落点的快照，因此撤销一步就能回到拖动之前。 */
+  function saveHistory(label, coalesceMs) {
     if (isUndoRedoAction) return;
     if (typeof label !== 'string' || !label) label = '编辑';
     thumbVersion++;
-    undoStack.push({ snap: getSnapshot(), label });
+    const now = Date.now();
+    const last = undoStack[undoStack.length - 1];
+    if (coalesceMs > 0 && last && last.label === label &&
+        (now - (last.at || 0)) < coalesceMs && undoStack.length > 1) {
+      last.at = now;
+      redoStack = [];
+      updateUndoRedoButtons();
+      SKFE.systems.autosave.scheduleAutoArchiveSave();
+      return;
+    }
+    undoStack.push({ snap: getSnapshot(), label, at: now });
     if (undoStack.length > MAX_HISTORY) undoStack.shift();
     redoStack = [];
     updateUndoRedoButtons();
@@ -478,10 +534,33 @@ function syncDistortToAllFrames(obj) {
   document.getElementById('btnRedo').onclick = redo;
 
   /* ==================== 补间帧恢复 ==================== */
+  /* v7.0.0（D3）：编辑派生帧 = 自动把它升格成关键帧，原段一分为二。
+     升格在这里做而不是在 syncFrameRef 里做，因为这里才是「用户真的改了东西」
+     的唯一信号；切帧/渲染都会走 syncFrameRef，在那里升格等于把所有帧都烘焙。 */
+  function promoteDerivedToKey(objId) {
+    const idx = AppState.currentFrameIndex;
+    const tid = (objId != null) ? String(objId) : (isSubTrackMode() ? AppState.activeTrackId : null);
+    if (!tid) return false;
+    const t = AppState.tracks[tid];
+    if (!t || !t.frames || !KF.isDerived(t.frames[idx])) return false;
+    const live = AppState.objects.find(o => o && o.type !== 'video' && String(o.id) === tid) || null;
+    if (!live) return false;
+    t.frames[idx] = live;
+    KF.markKey(live, 'sub');
+    bumpKfEval();
+    return true;
+  }
+
   function markCurrentFrameModified() {
     if (AppState.frames[AppState.currentFrameIndex] && AppState.frames[AppState.currentFrameIndex].isTween) {
       AppState.frames[AppState.currentFrameIndex].isTween = false;
       updateFrameBar();
+    }
+    const promoted = promoteDerivedToKey(AppState.selected ? AppState.selected.id : null);
+    if (promoted) {
+      invalidateAllFrameThumbs();
+      updateFrameBar();
+      showHistoryToast('已升起为关键帧（⌘Z 可撤销）', 'ink', 1800);
     }
     if (AppState.frames[AppState.currentFrameIndex]) delete AppState.frames[AppState.currentFrameIndex]._thumb;
     if (isSubTrackMode()) trackThumbCache.delete(AppState.activeTrackId + '|' + AppState.currentFrameIndex);
@@ -490,6 +569,13 @@ function syncDistortToAllFrames(obj) {
 
   /* ==================== 项目文件导出与导入 ==================== */
   const PROJECT_SAVE_KEY = 'skfe_project_v1';
+  /* v7.0.0：工程格式版本。
+     3 = 关键帧模型（槽位带 __k / __d 标记）；2 = 每元件轨道的烘焙帧；
+     1 = frames[i].objects 共享模型。
+     minVersion 是「打开本文件至少需要的版本」——v7 的工程里派生帧不存画面，
+     旧版打开会看到空白帧，所以必须声明。 */
+  const PROJECT_VERSION = 3;
+  const PROJECT_MIN_VERSION = 3;
 
   function cloneObjectForSave(o) {
     const copy = JSON.parse(JSON.stringify(o, (k, v) => (k === 'img' ? undefined : v)));
@@ -561,6 +647,7 @@ function syncDistortToAllFrames(obj) {
   function restoreTrackObjectImages(objList, promises) {
     (objList || []).forEach(o => {
       if (!o) return;
+      if (KF.isDerived(o)) return;   /* v7.0.0：派生帧哨兵不是真对象，别往上挂字段 */
       if (o.imgSrc) {
         promises.push(new Promise((resolve) => {
           const img = new Image();
@@ -608,7 +695,8 @@ function syncDistortToAllFrames(obj) {
 
   function exportProjectJSON() {
     const projectData = {
-      version: 2,
+      version: PROJECT_VERSION,
+      minVersion: PROJECT_MIN_VERSION,
       frames: serializeFrames(),
       tracks: serializeTracks(),
       currentFrameIndex: AppState.currentFrameIndex, defaultFPS,
@@ -629,6 +717,7 @@ function syncDistortToAllFrames(obj) {
     return Promise.all(promises).then(() => {
       AppState.frames = newFrames;
       AppState.tracks = newTracks;
+      reconcileAllTracks({ adoptPlain: false });
       syncMainLengthFromTracks();
       AppState.currentFrameIndex = data.currentFrameIndex || 0;
       if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = 0;
@@ -678,9 +767,18 @@ function syncDistortToAllFrames(obj) {
       try {
         const data = JSON.parse(e.target.result);
         if (!data || !Array.isArray(data.frames)) throw new Error('Invalid project file');
+        /* v7.0.0：版本校验。minVersion 高于本版本说明文件里有本版本读不懂的插值数据，
+           硬读会把关键帧段读成一堆空白帧，所以宁可拒绝。 */
+        const need = Number(data.minVersion || data.version || 1);
+        if (need > PROJECT_VERSION) {
+          alert('这个工程由更新版本的 SKFE 创建（需要 v' + need + '），当前版本是 v' + PROJECT_VERSION +
+            '。\n请升级后再打开，否则动画的关键帧数据会显示不出来。');
+          return;
+        }
         applyLoadedProject(data).then(() => {
           EventBus.emit('history:save', '导入项目');
-          alert('项目导入成功');
+          const n = data.version || 1;
+          alert(n >= 3 ? '项目导入成功' : '项目导入成功（旧格式 v' + n + '，已按普通帧加载）');
         });
       } catch (err) {
         alert('导入失败: ' + err.message);
@@ -692,7 +790,8 @@ function syncDistortToAllFrames(obj) {
   function saveProjectToLocal() {
     try {
       const projectData = {
-        version: 2,
+        version: PROJECT_VERSION,
+        minVersion: PROJECT_MIN_VERSION,
         frames: serializeFrames(),
         tracks: serializeTracks(),
         currentFrameIndex: AppState.currentFrameIndex, defaultFPS,
@@ -2197,6 +2296,8 @@ function importActionPresets() {
     // 所有的面板位置计算统一交给 refreshTimelineDockOffsets 处理
     refreshTimelineDockOffsets();
     resize();
+    /* v7.0.0：时间轴刚展开时帧条还没量过宽度，段曲线要重画一次 */
+    if (show && typeof renderKfCurveStrip === 'function') renderKfCurveStrip();
     /* 摄像机视角下，时间轴开关会改变可用区域 → 重新适配，保证取景框不被遮挡 */
     if (isCameraTrackId(AppState.activeTrackId)) {
       SKFE.systems.camera.fitCameraViewToAvailableArea();
@@ -6026,6 +6127,9 @@ function importActionPresets() {
       scrubber.value = AppState.currentFrameIndex;
     }
     updateScrubberTime();
+    /* v7.0.0：播放头动了，段曲线上的进度点也要跟着走 */
+    if (typeof renderKfCurveStrip === 'function') renderKfCurveStrip();
+    if (typeof syncKeyframeButtonState === 'function') syncKeyframeButtonState();
   }
 
   /* ==================== 显示图层数字 ==================== */
@@ -6746,11 +6850,79 @@ function importActionPresets() {
     return max;
   }
 
-  function getTrackFrame(trackId, idx) {
+  /* ---------- 帧数据的两个访问层级（v7.0.0） ----------
+     getTrackSlot  = 原始存储：可能返回派生帧哨兵，只给需要判槽位身份的地方用
+     getTrackFrame = 渲染/导出/缩略图统一入口：派生帧在这里按段求值
+
+     求值结果要缓存，否则同一帧连续调用两次会拿到两个不同的克隆实例，
+     AppState.selected 与 AppState.objects 里的元素就不是同一个对象，
+     拖拽改的是 A、画的是 B。缓存按 (轨道, 帧号) 存，任何改动都整表清空。 */
+  const kfEvalCache = new Map();
+  let kfEvalEpoch = 0;
+  /* 缓动提供者：补间缓动系统初始化后挂上来（避免 tweenEaseKey 的 TDZ） */
+  let kfEaseProvider = null;
+
+  function bumpKfEval() {
+    kfEvalEpoch++;
+    if (kfEvalCache.size) kfEvalCache.clear();
+  }
+
+  /* 全轨道归一化：段内的普通/空白帧接管成派生，段外的悬空派生退回空白。
+     opts.adoptPlain=false 时只清悬空派生（用于旧工程原样加载）。 */
+  function reconcileAllTracks(opts) {
+    for (const id in AppState.tracks) {
+      const t = AppState.tracks[id];
+      if (t) KF.reconcileTrack(t, opts);
+    }
+    bumpKfEval();
+  }
+
+  function getTrackSlot(trackId, idx) {
     const t = AppState.tracks[trackId];
     if (!t || !t.frames) return null;
     if (idx < 0 || idx >= t.frames.length) return null;
-    return t.frames[idx] || null;
+    return t.frames[idx];
+  }
+
+  function getTrackFrame(trackId, idx) {
+    const slot = getTrackSlot(trackId, idx);
+    if (!KF.isDerived(slot)) return slot || null;
+    return evaluateDerived(trackId, idx);
+  }
+
+  /* 派生帧求值：找段 → 取两端关键帧 → 按段曲线插值 → 缓存 */
+  function evaluateDerived(trackId, idx) {
+    const t = AppState.tracks[trackId];
+    if (!t || !t.frames) return null;
+    const loc = KF.locate(t.frames, idx);
+    if (loc.kind !== 'derived') return null;
+    const key = trackId + '|' + idx + '|' + kfEvalEpoch;
+    const hit = kfEvalCache.get(key);
+    if (hit) return hit;
+    const o1 = t.frames[loc.a], o2 = t.frames[loc.b];
+    if (!KF.isReal(o1) || !KF.isReal(o2)) return null;
+    const curve = KF.curveOf(o1);
+    /* v7.0.1：段上没有曲线就是匀速。绝不再回退到「全局当前缓动」——
+       那条会漏，改一段会连带影响所有没设过曲线的段。曲线只属于它自己那一段。 */
+    const easeKey = (curve && curve.ease) || 'linear';
+    const chMap = (curve && curve.ch) || null;
+    const obj = KF.interpolateObject(o1, o2, loc.u, {
+      ease: (u) => {
+        const fn = kfEaseProvider ? kfEaseProvider.fn(easeKey) : null;
+        return fn ? fn(u) : u;
+      },
+      /* 通道级缓动：段曲线优先，其次沿用旧的「分部缓动」全局配置 */
+      partEase: (part, tt, u) => {
+        const ek = chMap ? chMap[part] : null;
+        const fallback = kfEaseProvider ? kfEaseProvider.channel(o1.id, part) : null;
+        const use = ek || fallback;
+        const fn = use && kfEaseProvider ? kfEaseProvider.fn(use) : null;
+        return fn ? fn(u) : tt;
+      },
+      enforcePins: (o) => { try { enforcePins(o); } catch (_) {} }
+    });
+    if (obj) kfEvalCache.set(key, obj);
+    return obj;
   }
 
   function setTrackFrame(trackId, idx, data) {
@@ -6759,6 +6931,7 @@ function importActionPresets() {
     if (!t.frames) t.frames = [];
     while (t.frames.length <= idx) t.frames.push(null);
     t.frames[idx] = data || null;
+    bumpKfEval();
     syncMainLengthFromTracks();
   }
 
@@ -6950,27 +7123,41 @@ function importActionPresets() {
       const t = AppState.tracks[AppState.activeTrackId];
       if (!t) return;
       if (!t.frames) t.frames = [];
+      /* v7.0.0：派生帧不写回。它本来就不存画面，随手写回等于把段静默烘焙掉，
+         用户会发现自己什么都没做、段却断了。要落地必须先由 markCurrentFrameModified
+         把它升格成关键帧（那一刻槽位已经不是派生帧了）。 */
+      if (KF.isDerived(t.frames[idx])) return;
       const mine = AppState.objects.find(o => o && o.type !== 'video' && String(o.id) === String(AppState.activeTrackId)) || null;
       while (t.frames.length <= idx) t.frames.push(null);
+      const prev = t.frames[idx];
+      if (prev === mine) return;
       t.frames[idx] = mine;
+      bumpKfEval();
       syncMainLengthFromTracks();
       return;
     }
     /* 全局模式：把当前帧合并视图按 id 分发回各 track */
     const present = new Set();
+    let changed = false;
     for (const o of AppState.objects) {
       if (!o || o.type === 'video') continue;
       const id = String(o.id);
       present.add(id);
       const t = ensureTrack(id, o.name);
       while (t.frames.length <= idx) t.frames.push(null);
+      if (KF.isDerived(t.frames[idx])) continue;   /* 派生帧不写回 */
+      if (t.frames[idx] === o) continue;
       t.frames[idx] = o;
+      changed = true;
     }
     for (const id in AppState.tracks) {
       if (present.has(id)) continue;
       const arr = AppState.tracks[id].frames;
-      if (arr && idx < arr.length) arr[idx] = null;
+      if (!arr || idx >= arr.length) continue;
+      if (KF.isDerived(arr[idx])) continue;        /* 派生槽位不能被抹成空白 */
+      if (arr[idx] !== null) { arr[idx] = null; changed = true; }
     }
+    if (changed) bumpKfEval();
     syncMainLengthFromTracks();
   }
 
@@ -6998,6 +7185,228 @@ function importActionPresets() {
   function invalidateAllFrameThumbs() {
     AppState.frames.forEach(fr => delete fr._thumb);
     trackThumbCache.clear();
+    bumpKfEval();
+  }
+
+  /* v7.0.0：时间轴下方的段曲线可视化。
+     每个段画一条曲线：当前段用主题色加粗，其余段淡显；末端画出播放头位置。
+     没有段时整块隐藏，不影响老工程布局。 */
+  let kfCurveScrollBound = false;
+  function renderKfCurveStrip() {
+    const wrap = document.getElementById('kfCurveWrap');
+    const cvs = document.getElementById('kfCurveStrip');
+    const bar = document.getElementById('frameBar');
+    if (!wrap || !cvs || !bar) return;
+
+    if (!kfCurveScrollBound) {
+      kfCurveScrollBound = true;
+      bar.addEventListener('scroll', () => {
+        const c = document.getElementById('kfCurveStrip');
+        if (c) c.style.transform = 'translateX(' + (-bar.scrollLeft) + 'px)';
+      }, { passive: true });
+    }
+
+    const ids = currentScopeTrackIds();
+    const segs = [];
+    for (const id of ids) {
+      const t = AppState.tracks[id];
+      if (!t || !t.frames) continue;
+      for (const s of KF.segments(t.frames)) segs.push({ id: id, s: s, frames: t.frames });
+    }
+    if (!segs.length) {
+      wrap.classList.remove('visible');
+      return;
+    }
+    wrap.classList.add('visible');
+
+    const chips = bar.querySelectorAll('.frame-chip');
+    const barRect = bar.getBoundingClientRect();
+    const w = Math.max(1, bar.scrollWidth);
+    const h = 26;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    cvs.width = Math.round(w * dpr);
+    cvs.height = Math.round(h * dpr);
+    cvs.style.width = w + 'px';
+    cvs.style.height = h + 'px';
+    cvs.style.transform = 'translateX(' + (-bar.scrollLeft) + 'px)';
+    const g = cvs.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+
+    const css = getComputedStyle(document.documentElement);
+    const accent = (css.getPropertyValue('--color-primary') || '#4a90e2').trim();
+    const dim = (css.getPropertyValue('--text-sub') || '#888888').trim();
+    const cx = (i) => {
+      const c = chips[i];
+      if (!c) return null;
+      const r = c.getBoundingClientRect();
+      return r.left - barRect.left + bar.scrollLeft + r.width / 2;
+    };
+    const top = 3, bottom = h - 3;
+
+    /* 当前段：与 updateFrameBar 里的整段高亮同一口径 */
+    const curSeg = currentSegmentAheadAny();
+
+    for (const item of segs) {
+      const x1 = cx(item.s.a), x2 = cx(item.s.b);
+      if (x1 === null || x2 === null || x2 <= x1) continue;
+      const curve = KF.curveOf(item.frames[item.s.a]) || {};
+      /* v7.0.2：没设曲线的段就是匀速，别拿全局残留值来画，否则看起来像被改过 */
+      const ek = curve.ease || 'linear';
+      const fn = getEaseFunction(ek || 'linear') || ((u) => u);
+      const isCur = curSeg && curSeg.a === item.s.a && curSeg.b === item.s.b;
+      g.beginPath();
+      for (let n = 0; n <= 48; n++) {
+        const u = n / 48;
+        const p = Math.max(0, Math.min(1, fn(u)));
+        const x = x1 + (x2 - x1) * u;
+        const y = bottom - (bottom - top) * p;
+        if (n === 0) g.moveTo(x, y); else g.lineTo(x, y);
+      }
+      g.strokeStyle = isCur ? accent : dim;
+      g.globalAlpha = isCur ? 1 : 0.35;
+      g.lineWidth = isCur ? 2 : 1;
+      g.stroke();
+      g.globalAlpha = isCur ? 1 : 0.45;
+      g.fillStyle = isCur ? accent : dim;
+      g.beginPath(); g.arc(x1, bottom, 2, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.arc(x2, top, 2, 0, Math.PI * 2); g.fill();
+    }
+    g.globalAlpha = 1;
+
+    /* 播放头：画在当前段上，直观看清「这一帧的进度落在曲线哪一点」 */
+    const idx = AppState.currentFrameIndex;
+    const cur = currentSegmentAheadAny();
+    if (cur) {
+      const xa = cx(cur.a), xb = cx(cur.b);
+      if (xa !== null && xb !== null && xb > xa) {
+        const u = (idx - cur.a) / (cur.b - cur.a);
+        const curve = KF.curveOf(AppState.tracks[cur.id].frames[cur.a]) || {};
+        const fn = getEaseFunction(curve.ease || (kfEaseProvider ? kfEaseProvider.key() : 'linear')) || ((v) => v);
+        const p = Math.max(0, Math.min(1, fn(u)));
+        const px = xa + (xb - xa) * u;
+        const py = bottom - (bottom - top) * p;
+        g.strokeStyle = accent;
+        g.globalAlpha = 0.55;
+        g.lineWidth = 1;
+        g.beginPath(); g.moveTo(px, 0); g.lineTo(px, h); g.stroke();
+        g.globalAlpha = 1;
+        g.fillStyle = accent;
+        g.beginPath(); g.arc(px, py, 3.2, 0, Math.PI * 2); g.fill();
+      }
+    }
+  }
+
+  /* 当前作用域下「播放头所在（或即将进入）的段」，跨轨道取第一个命中 */
+  function currentSegmentAheadAny() {
+    const ids = currentScopeTrackIds();
+    for (const id of ids) {
+      const t = AppState.tracks[id];
+      if (!t || !t.frames) continue;
+      const s = segmentAhead(t.frames, AppState.currentFrameIndex);
+      if (s) return { id: id, a: s.a, b: s.b };
+    }
+    return null;
+  }
+
+  /* v7.0.0：帧块上的槽位身份标记。
+     子轨看自己那条轨道；主轨看全部轨道（全有 = 关键帧，部分有 = 半填充）。 */
+  function kfChipKind(idx) {
+    const ids = isSubTrackMode() ? [String(AppState.activeTrackId)] : Object.keys(AppState.tracks);
+    let hasKey = 0, hasContent = 0, hasDerived = 0;
+    for (const id of ids) {
+      const t = AppState.tracks[id];
+      if (!t || !t.frames || idx >= t.frames.length) continue;
+      const slot = t.frames[idx];
+      const k = KF.kindOf(slot);
+      if (k !== 'blank') hasContent++;
+      if (k === 'key') hasKey++;
+      else if (k === 'derived') hasDerived++;
+    }
+    if (!hasContent) return 'blank';
+    if (hasKey && hasKey === hasContent) return 'key';
+    if (hasKey) return 'partial';
+    if (hasDerived) return 'derived';
+    return 'plain';
+  }
+
+  /* D10：这一帧「部分关键帧」到底是哪几个元件有锚点（主轨显示用） */
+  function kfPartialNames(idx) {
+    const out = [];
+    for (const id in AppState.tracks) {
+      const t = AppState.tracks[id];
+      if (!t || !t.frames || idx >= t.frames.length) continue;
+      if (KF.isKey(t.frames[idx])) out.push(t.name || id);
+    }
+    return out;
+  }
+
+  /* D10：主轨上点「部分关键帧」的帧块 → 直接说清谁有锚点、谁没有 */
+  function announcePartialKeys(idx) {
+    if (isSubTrackMode()) return;
+    if (kfChipKind(idx) !== 'partial') return;
+    const has = [], missing = [];
+    for (const id in AppState.tracks) {
+      const t = AppState.tracks[id];
+      if (!t || !t.frames) continue;
+      const slot = (idx < t.frames.length) ? t.frames[idx] : undefined;
+      const hasKey = slot !== undefined && KF.isKey(slot);
+      if (!hasKey) {
+        const live = AppState.objects.find(o => o && o.type !== 'video' && String(o.id) === String(id));
+        if (!live) continue;          /* 这一帧本来就没这个元件，不算「缺」 */
+        missing.push(t.name || id);
+      } else has.push(t.name || id);
+    }
+    if (!has.length) return;
+    const msg = '部分关键帧：' + has.join('、') + ' 有锚点' + (missing.length ? ('；' + missing.join('、') + ' 没有') : '');
+    showHistoryToast(msg, undefined, 2600);
+  }
+
+  /* 关键帧按钮的三种状态：全部有锚点 / 部分 / 没有 */
+  function mainKeyStateAt(idx) {
+    let has = 0, can = 0;
+    for (const id in AppState.tracks) {
+      const t = AppState.tracks[id];
+      if (!t || !t.frames) continue;
+      const slot = (idx < t.frames.length) ? t.frames[idx] : undefined;
+      const hasKey = slot !== undefined && KF.isKey(slot);
+      if (hasKey) { has++; can++; continue; }
+      /* 有画面但没有锚点 → 这一帧「本可以有」 */
+      const live = AppState.objects.find(o => o && o.type !== 'video' && String(o.id) === String(id));
+      if (live) can++;
+    }
+    if (!has) return 'none';
+    return has === can ? 'all' : 'partial';
+  }
+
+  function syncKeyframeButtonState() {
+    const btn = document.getElementById('btnKeyframe');
+    if (!btn) return;
+    const st = mainKeyStateAt(AppState.currentFrameIndex);
+    btn.classList.toggle('kf-on', st === 'all');
+    btn.classList.toggle('kf-partial-on', st === 'partial');
+    const base = (SKFE.i18n && SKFE.i18n.t) ? (SKFE.i18n.t('timeline.keyframeTitle') || '把当前帧设为 / 取消关键帧') : '把当前帧设为 / 取消关键帧';
+    if (st === 'all') btn.title = '这一帧已是关键帧，点一下取消（只取消主轨广播的锚点）';
+    else if (st === 'partial') {
+      const names = kfPartialNames(AppState.currentFrameIndex);
+      btn.title = '部分关键帧：' + (names.join('、') || '—') + ' 已有锚点，点一下补齐其余元件';
+    } else btn.title = base;
+  }
+
+  /* 当前帧所在的段范围（用于整段高亮） */
+  function kfSegRangeNow() {
+    const ids = isSubTrackMode() ? [String(AppState.activeTrackId)] : Object.keys(AppState.tracks);
+    let lo = null, hi = null;
+    for (const id of ids) {
+      const t = AppState.tracks[id];
+      if (!t || !t.frames) continue;
+      /* 停在关键帧上时高亮它后面那一段（D4：点关键帧本身就等于选它后面的段） */
+      const s = segmentAhead(t.frames, AppState.currentFrameIndex);
+      if (!s) continue;
+      lo = (lo === null) ? s.a : Math.min(lo, s.a);
+      hi = (hi === null) ? s.b : Math.max(hi, s.b);
+    }
+    return (lo === null) ? null : { lo: lo, hi: hi };
   }
 
   function updateFrameBar() {
@@ -7027,6 +7436,8 @@ function importActionPresets() {
     const chips = bar.querySelectorAll('.frame-chip');
     chips.forEach(c => c.remove());
 
+    const kfSeg = kfSegRangeNow();
+
     AppState.frames.forEach((fr, i) => {
       const chip = document.createElement('div');
       chip.className = 'frame-chip';
@@ -7038,6 +7449,13 @@ function importActionPresets() {
         chip.setAttribute('aria-label', `第 ${i + 1} 帧，当前元件未出场`);
       }
       chip.dataset.index = i;
+
+      /* v7.0.0：关键帧 / 派生帧标记 + 整段高亮 */
+      const kfKind = kfChipKind(i);
+      if (kfKind === 'key') chip.classList.add('kf-key');
+      else if (kfKind === 'partial') { chip.classList.add('kf-partial'); chip.dataset.kfPartial = '1'; }
+      else if (kfKind === 'derived') { chip.classList.add('tween-frame'); chip.classList.add('kf-nodrag'); }
+      if (kfSeg && i >= kfSeg.lo && i <= kfSeg.hi) chip.classList.add('kf-seg');
 
       if (frameThumbMode) {
         if (!emptyTrackFrame) {
@@ -7103,6 +7521,9 @@ function importActionPresets() {
         }
 
         const isMouse = e.pointerType === 'mouse';
+        /* v7.0.0（D8）：派生帧是算出来的，不许单独拖拽。
+           点选、多选、切帧照旧，只是拖不起来。 */
+        const isDerivedChip = (kfChipKind(i) === 'derived');
         dragStartX = e.clientX; 
         dragStartY = e.clientY;
         const dragStartIndex = i;
@@ -7114,6 +7535,7 @@ function importActionPresets() {
         const allChips = Array.from(bar.querySelectorAll('.frame-chip'));
         let dragRects = null;   /* v6.3.1：拖动开始时的槽位快照，用于实时让位 */
         const startDrag = () => {
+          if (isDerivedChip) return;   /* 派生帧禁止拖起 */
           isDragging = true;
           chip.classList.add('dragging');
           dragRects = allChips.map(c => c.getBoundingClientRect());
@@ -7124,6 +7546,11 @@ function importActionPresets() {
           startDrag();
         } else {
           pressTimer = setTimeout(() => {
+            if (isDerivedChip) {
+              /* 长按派生帧：解释为什么拖不动，而不是毫无反应 */
+              showHistoryToast('派生帧由关键帧算出，不能拖动；要改就在这一帧直接编辑', 'redo', 2200);
+              return;
+            }
             startDrag();
             if (navigator.vibrate) navigator.vibrate(40); // 增加振动反馈，告知已触发拖拽
           }, 300);
@@ -7249,10 +7676,11 @@ function importActionPresets() {
               EventBus.emit('need:render'); EventBus.emit('need:syncUI');
             } else {
               // 鼠标拖拽了但位置没有变化，当作点击处理
-              if (isMouse && !hasMoved) goToFrame(dragStartIndex);
+              if (isMouse && !hasMoved) { goToFrame(dragStartIndex); announcePartialKeys(dragStartIndex); }
             }
           } else if (!hasMoved) {
             goToFrame(dragStartIndex);
+            announcePartialKeys(dragStartIndex);
           }
         };
 
@@ -7287,11 +7715,19 @@ function importActionPresets() {
         // 如果没开启缩略图模式，直接修改按钮的文本
         chip.textContent = textToShow;
       }
+
+      /* D10：部分关键帧要说清是哪几个元件有锚点 */
+      if (chip.dataset.kfPartial) {
+        const names = kfPartialNames(i);
+        chip.title = '第 ' + (i + 1) + ' 帧 · 部分关键帧：' + (names.join('、') || '—') + ' 有锚点，其余元件没有';
+      }
     });
 
     const active = bar.querySelector('.frame-chip.active');
     if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     updateMultiActions();
+    renderKfCurveStrip();
+    syncKeyframeButtonState();
   }
 
   function addFrame() {
@@ -7299,9 +7735,13 @@ function importActionPresets() {
     syncFrameRef();
     if (isSubTrackMode()) {
       const t = ensureTrack(AppState.activeTrackId, (AppState.selected && AppState.selected.name) || AppState.activeTrackId);
+      /* v7.0.0：在段内加帧只是把段拉长一格，插出来的是派生帧；
+         段外维持原来的克隆行为，且克隆必须剥掉关键帧身份，否则一加帧就多出个锚点。 */
+      const inSeg = !!segmentAhead(t.frames, AppState.currentFrameIndex);
       const srcObj = getFrameTrackObject(null, AppState.currentFrameIndex);
-      const clone = srcObj ? cloneObjectKeepImg(srcObj) : null;
-      if (clone && srcObj) clone.id = srcObj.id;
+      let clone = null;
+      if (inSeg) clone = KF.DERIVED_SLOT;
+      else if (srcObj) { clone = cloneObjectKeepImg(srcObj); clone.id = srcObj.id; delete clone[KF.KEY]; }
       const nextIdx = AppState.currentFrameIndex + 1;
       if (nextIdx < t.frames.length && t.frames[nextIdx] == null) {
         /* 下一帧对当前轨道是空白帧：直接占用该槽位，不把后面的帧挤开 */
@@ -7311,6 +7751,7 @@ function importActionPresets() {
         t.frames.splice(nextIdx, 0, clone);
       }
       AppState.currentFrameIndex = nextIdx;
+      reconcileAllTracks();
       syncMainLengthFromTracks();
       trimTrailingEmptyFrames();
       invalidateAllFrameThumbs();
@@ -7332,17 +7773,22 @@ function importActionPresets() {
       isTween: false
     };
     AppState.frames.splice(insertAt, 0, newFrame);
-    /* 全局模式：所有 track 同步插入，并克隆各自在当前帧的内容 */
+    /* 全局模式：所有 track 同步插入并各自克隆当前帧；段内的轨道插派生帧 */
     for (const id in AppState.tracks) {
       const t = AppState.tracks[id];
       if (!t) continue;
       if (!t.frames) t.frames = [];
       while (t.frames.length < insertAt) t.frames.push(null);
+      if (segmentAhead(t.frames, AppState.currentFrameIndex)) {
+        t.frames.splice(insertAt, 0, KF.DERIVED_SLOT);
+        continue;
+      }
       const src = t.frames[AppState.currentFrameIndex];
-      const clone = src ? cloneObjectKeepImg(src) : null;
-      if (clone && src) clone.id = src.id;
+      const clone = KF.isReal(src) ? cloneObjectKeepImg(src) : null;
+      if (clone) { clone.id = src.id; delete clone[KF.KEY]; }
       t.frames.splice(insertAt, 0, clone);
     }
+    reconcileAllTracks();
     syncMainLengthFromTracks();
     AppState.currentFrameIndex = insertAt;
     invalidateAllFrameThumbs();
@@ -7355,6 +7801,48 @@ function importActionPresets() {
     EventBus.emit('history:save', '添加帧');
   }
 
+  /* v7.0.1：删除关键帧 ≠ 清空。
+     落在所有段之外的帧不该变成空白，而是延续最近的关键帧姿势（静止延续）：
+       · 删的是末端关键帧 → 这一段剩下的帧全部延续上一关键帧
+       · 删的是首位关键帧 → 段内剩下的帧全部延续下一关键帧
+       · 删的是中间关键帧 → 前后两段合并，交给 reconcile 自动补帧 */
+  function fillHoldRange(t, from, to, srcIdx) {
+    if (!t || !t.frames || !KF.isReal(t.frames[srcIdx])) return 0;
+    if (from > to) return 0;
+    let n = 0;
+    const lo = Math.max(0, from), hi = Math.min(to, t.frames.length - 1);
+    for (let i = lo; i <= hi; i++) {
+      if (i === srcIdx) continue;
+      const c = cloneObjectKeepImg(t.frames[srcIdx]);
+      delete c[KF.KEY];
+      t.frames[i] = c;
+      n++;
+    }
+    return n;
+  }
+
+  function keyNeighbors(frames, k) {
+    let prev = null, next = null;
+    for (let i = 0; i < frames.length; i++) {
+      if (!KF.isKey(frames[i])) continue;
+      if (i < k) prev = i;
+      else if (i > k && next === null) next = i;
+    }
+    return { prev: prev, next: next };
+  }
+
+  /* 抽掉某一格之前先给「末端/首位关键帧」补静止延续 */
+  function prepareHoldBeforeSplice(k, onlyTrackId) {
+    for (const id in AppState.tracks) {
+      if (onlyTrackId != null && String(id) !== String(onlyTrackId)) continue;
+      const t = AppState.tracks[id];
+      if (!t || !t.frames || !KF.isKey(t.frames[k])) continue;
+      const nb = keyNeighbors(t.frames, k);
+      if (nb.prev !== null && nb.next === null) fillHoldRange(t, nb.prev + 1, k - 1, nb.prev);
+      else if (nb.prev === null && nb.next !== null) fillHoldRange(t, k + 1, nb.next, nb.next);
+    }
+  }
+
   function deleteFrame() {
     if (isPlaying) pause();
     if (isSubTrackMode()) {
@@ -7363,8 +7851,11 @@ function importActionPresets() {
       const target = getFrameTrackObject(null, AppState.currentFrameIndex);
       if (!t) return;
       if (AppState.currentFrameIndex < 0 || AppState.currentFrameIndex >= t.frames.length) return;
+      /* v7.0.1：删掉的是末端 / 首位关键帧 → 剩下的帧延续相邻关键帧，不要留空 */
+      prepareHoldBeforeSplice(AppState.currentFrameIndex, AppState.activeTrackId);
       t.frames.splice(AppState.currentFrameIndex, 1);
       if (t.frames.length === 0) t.frames.push(null);
+      reconcileAllTracks();
       trimTrailingEmptyFrames();
       if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = AppState.frames.length - 1;
       if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
@@ -7380,12 +7871,16 @@ function importActionPresets() {
       return;
     }
     if (AppState.frames.length <= 1) { alert('至少保留一帧'); return; }
+    /* v7.0.1：删掉的是末端 / 首位关键帧 → 先按相邻关键帧铺满，再抽掉这一格。
+       中间关键帧不用铺：抽掉后前后两段合并，reconcile 会自动补出插值帧。 */
+    prepareHoldBeforeSplice(AppState.currentFrameIndex);
     AppState.frames.splice(AppState.currentFrameIndex, 1);
     for (const id in AppState.tracks) {
       const t = AppState.tracks[id];
       if (!t || !t.frames) continue;
       if (AppState.currentFrameIndex < t.frames.length) t.frames.splice(AppState.currentFrameIndex, 1);
     }
+    reconcileAllTracks();
     trimTrailingEmptyFrames();
     if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = AppState.frames.length - 1;
     if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
@@ -7535,32 +8030,49 @@ function importActionPresets() {
   function tweenEaseProgress(u) {
     return getEaseFunction(tweenEaseKey)(u);
   }
+
+  /* v7.0.0：把缓动系统交给关键帧求值器。
+     段上没有存曲线时退回当前选中的缓动（保持旧补间的手感）；
+     通道级缓动优先用段曲线里的 ch[part]，其次才是旧的「分部缓动」全局表。 */
+  kfEaseProvider = {
+    key: () => tweenEaseKey,
+    fn: (k) => getEaseFunction(k || 'linear'),
+    channel: (objId, part) => {
+      const ek = tweenJointEases[String(objId) + ':' + part];
+      return ek || null;
+    }
+  };
   let elastic1Params = { damping: 0.6, period: 0.8 };
   let elastic2Params = { period: 0.5, skew: 0 };
 
 
 
   function updateTweenEaseLabel() {
+    /* v7.0.0：有段就显示段自己的曲线，没有段才显示全局默认值 */
+    const segEase = (typeof currentSegmentEase === 'function') ? currentSegmentEase() : null;
+    const ek = segEase || 'linear';   /* 没有段曲线就是匀速，别再显示全局残留值 */
     let label;
-    if (tweenEaseKey && tweenEaseKey.startsWith('preset:')) {
-      const id = tweenEaseKey.slice(7);
+    if (ek && ek.startsWith('preset:')) {
+      const id = ek.slice(7);
       const p = customEasePresets.find(x => x.id === id);
       label = p ? p.name : '自定义';
-    } else if (tweenEaseKey === 'custom') {
+    } else if (ek === 'custom') {
       label = '自定义';
-    } else if (tweenEaseKey === 'elastic1') {
+    } else if (ek === 'elastic1') {
       label = '阻尼振荡';
-    } else if (tweenEaseKey === 'elastic2') {
+    } else if (ek === 'elastic2') {
       label = '周期';
     } else {
-      label = (TWEEN_EASE_PRESETS[tweenEaseKey] || TWEEN_EASE_PRESETS.linear).label;
+      label = (TWEEN_EASE_PRESETS[ek] || TWEEN_EASE_PRESETS.linear).label;
     }
     tweenEaseName.textContent = label;
-    tweenEaseBtn.title = '补间设置 · ' + label;
+    tweenEaseBtn.title = (segEase ? '当前段曲线 · ' : '段曲线（默认）· ') + label;
   }
 
   function renderTweenEaseMenu() {
     const builtins = ['linear', 'easeIn', 'easeOut', 'easeInOut', 'custom'];
+    const segEase = (typeof currentSegmentEase === 'function') ? currentSegmentEase() : null;
+    const activeKey = segEase || 'linear';
     let html = '';
     builtins.forEach(key => {
       const custom = key === 'custom';
@@ -7580,7 +8092,7 @@ function importActionPresets() {
         thumbInput = TWEEN_EASE_PRESETS[key].bezier;
       }
       
-      const active = tweenEaseKey === key;
+      const active = activeKey === key;
       html += (custom ? '<div class="ease-divider"></div>' : '') +
         '<button type="button" class="ease-item' + (active ? ' active' : '') + '" data-ease="' + key + '" role="menuitemradio" aria-checked="' + active + '">' +
           '<svg class="ease-thumb" viewBox="0 0 40 28" aria-hidden="true"><path d="' + easeThumbPath(thumbInput) + '"/></svg>' +
@@ -7592,7 +8104,7 @@ function importActionPresets() {
       html += '<div class="ease-divider"></div>';
       customEasePresets.forEach(p => {
         const key = 'preset:' + p.id;
-        const active = tweenEaseKey === key;
+        const active = activeKey === key;
         html += '<button type="button" class="ease-item' + (active ? ' active' : '') + '" data-ease="' + key + '" role="menuitemradio" aria-checked="' + active + '">' +
           '<svg class="ease-thumb" viewBox="0 0 40 28" aria-hidden="true"><path d="' + easeThumbPath(p.bezier) + '"/></svg>' +
           '<span class="ease-label">' + p.name + '</span>' +
@@ -7630,10 +8142,84 @@ function importActionPresets() {
     if (!item) return;
     const key = item.dataset.ease;
     if (key === 'custom') { setEaseMenuOpen(false); openEaseEditor(); return; }
+    /* v7.0.1：曲线只作用于相邻两个关键帧之间的那一段。
+       当前帧不在段内就不该偷偷改全局默认值，否则别的段会跟着变。 */
+    const touched = applyEaseToCurrentSegments(key);
+    if (!touched) {
+      showHistoryToast(!isSubTrackMode() && !(AppState.selected && AppState.selected.id != null)
+        ? '先在画布上选中一个元件，再改它这一段的曲线（曲线只作用于这一个元件相邻两个关键帧之间）'
+        : '曲线只作用于相邻两个关键帧之间的段 —— 当前帧不在任何段内，先把两侧打好关键帧',
+        'redo', 2800);
+      setEaseMenuOpen(false);
+      return;
+    }
     tweenEaseKey = key;
     updateTweenEaseLabel();
     setEaseMenuOpen(false);
   });
+
+  /* v7.0.2：改曲线的目标轨道 —— 只认「当前这一个元件」的那一段。
+     子轨 = 正在编辑的那条轨道；主轨 = 画布上选中的那个元件。
+     以前这里用 currentScopeTrackIds()，主轨模式下等于「全部元件」，
+     于是改一次曲线把所有元件同一位置的段一起改了 —— 曲线串台就是这么来的。 */
+  function easeTargetTrackIds() {
+    if (isSubTrackMode()) return [String(AppState.activeTrackId)];
+    const sel = AppState.selected;
+    if (sel && sel.id != null) {
+      const id = String(sel.id);
+      if (AppState.tracks[id]) return [id];
+    }
+    /* 没选中元件时，只有一个元件的工程就没歧义，直接给它 */
+    const all = Object.keys(AppState.tracks);
+    if (all.length === 1) return [all[0]];
+    return [];
+  }
+
+  /* v7.0.0（D4 / D11）：把缓动写到「当前选中的段」上。
+     选中段内任意帧即定位整段，末端关键帧在选区外也一起生效。
+     没有段可写时不改任何东西（全局默认值只影响以后新建的段）。 */
+  function applyEaseToCurrentSegments(key) {
+    const idxs = (multiSelectMode && multiSelectedFrames.size)
+      ? Array.from(multiSelectedFrames)
+      : [AppState.currentFrameIndex];
+    const ids = easeTargetTrackIds();
+    const touched = [];
+    for (const id of ids) {
+      const t = AppState.tracks[id];
+      if (!t || !t.frames) continue;
+      const seen = new Set();
+      for (const i of idxs) {
+        const seg = segmentAhead(t.frames, i);
+        if (!seg || seen.has(seg.a)) continue;
+        seen.add(seg.a);
+        const old = KF.curveOf(t.frames[seg.a]) || {};
+        KF.setCurve(t.frames[seg.a], { ease: key, ch: old.ch || null });
+        touched.push(id + ':' + seg.a + '-' + seg.b);
+      }
+    }
+    if (!touched.length) return 0;
+    bumpKfEval();
+    invalidateAllFrameThumbs();
+    updateFrameBar();
+    EventBus.emit('need:render');
+    EventBus.emit('history:save', '改段曲线', 900);
+    showHistoryToast('已把曲线应用到 ' + touched.length + ' 个段', undefined, 1500);
+    return touched.length;
+  }
+
+  /* 当前段实际用的缓动（用于菜单高亮与按钮文字）。目标轨道同上，只看当前元件。 */
+  function currentSegmentEase() {
+    const ids = easeTargetTrackIds();
+    for (const id of ids) {
+      const t = AppState.tracks[id];
+      if (!t || !t.frames) continue;
+      const seg = segmentAhead(t.frames, AppState.currentFrameIndex);
+      if (!seg) continue;
+      const c = KF.curveOf(t.frames[seg.a]);
+      if (c && c.ease) return c.ease;
+    }
+    return null;
+  }
   advSettingsBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     setAdvPanelOpen(advPanel.hidden);
@@ -8076,6 +8662,10 @@ function importActionPresets() {
         tweenEaseKey = easeEditorMode;
       }
     }
+    /* v7.0.1：自定义曲线也要落到段上，否则只改全局默认值 → 哪一段都不会变 */
+    if (!applyEaseToCurrentSegments(tweenEaseKey)) {
+      showHistoryToast('曲线只作用于相邻两个关键帧之间的段 —— 当前帧不在任何段内', 'redo', 2800);
+    }
     updateTweenEaseLabel();
     closeEaseEditor();
   });
@@ -8201,6 +8791,9 @@ function importActionPresets() {
         select.addEventListener('change', () => {
           if (select.value) tweenJointEases[ch.key] = select.value;
           else delete tweenJointEases[ch.key];
+          /* v7.0.0：分部缓动的作用域是 (轨道, 段)，写进段起始关键帧的 __k.c.ch */
+          const cut = String(ch.key).indexOf(':');
+          if (cut > 0) pushChannelEaseToSegments(ch.key.slice(0, cut), ch.key.slice(cut + 1), select.value || null);
         });
         row.appendChild(label);
         row.appendChild(select);
@@ -8210,6 +8803,40 @@ function importActionPresets() {
     jointEaseOverlay.hidden = false;
   }
   function closeJointEasePanel() { jointEaseOverlay.hidden = true; }
+
+  /* 把某一个分部（x / rot / torso / armL_u …）的缓动写进当前段。
+     idxs 规则同 D4：选中段内任意帧即定位整段。 */
+  function pushChannelEaseToSegments(objId, part, easeKey) {
+    const id = String(objId);
+    const t = AppState.tracks[id];
+    if (!t || !t.frames) return 0;
+    const idxs = (multiSelectMode && multiSelectedFrames.size)
+      ? Array.from(multiSelectedFrames)
+      : [AppState.currentFrameIndex];
+    const seen = new Set();
+    const touched = [];
+    for (const i of idxs) {
+      const seg = segmentAhead(t.frames, i);
+      if (!seg || seen.has(seg.a)) continue;
+      seen.add(seg.a);
+      const cur = KF.curveOf(t.frames[seg.a]) || {};
+      const ch = Object.assign({}, cur.ch || {});
+      if (easeKey) ch[part] = easeKey; else delete ch[part];
+      KF.setCurve(t.frames[seg.a], {
+        ease: cur.ease || null,   /* 没设过段曲线就留空 → 匀速，别把全局默认值带进来 */
+        ch: Object.keys(ch).length ? ch : null
+      });
+      touched.push(seg.a);
+    }
+    if (touched.length) {
+      bumpKfEval();
+      invalidateAllFrameThumbs();
+      updateFrameBar();
+      EventBus.emit('need:render');
+      EventBus.emit('history:save', '改分部缓动', 900);
+    }
+    return touched.length;
+  }
   btnJointEase.addEventListener('click', () => { setEaseMenuOpen(false); openJointEasePanel(); });
   document.getElementById('btnJointEaseClose').addEventListener('click', closeJointEasePanel);
   document.getElementById('btnJointEaseApply').addEventListener('click', closeJointEasePanel);
@@ -8451,9 +9078,15 @@ function importActionPresets() {
       if (!t) return;
       if (t.frames.length - multiSelectedFrames.size < 1) { alert('至少保留一帧'); return; }
       const indices = Array.from(multiSelectedFrames).sort((a, b) => b - a);
-      indices.forEach(i => { if (i >= 0 && i < t.frames.length) t.frames.splice(i, 1); });
+      indices.forEach(i => {
+        if (i >= 0 && i < t.frames.length) {
+          prepareHoldBeforeSplice(i, AppState.activeTrackId);
+          t.frames.splice(i, 1);
+        }
+      });
       if (t.frames.length === 0) t.frames.push(null);
       multiSelectedFrames.clear();
+      reconcileAllTracks();
       trimTrailingEmptyFrames();
       if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = AppState.frames.length - 1;
       if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
@@ -8470,6 +9103,7 @@ function importActionPresets() {
     const indices = Array.from(multiSelectedFrames).sort((a, b) => b - a);
     indices.forEach(i => {
       if (i < 0 || i >= AppState.frames.length) return;
+      prepareHoldBeforeSplice(i);
       AppState.frames.splice(i, 1);
       for (const id in AppState.tracks) {
         const t = AppState.tracks[id];
@@ -8477,6 +9111,7 @@ function importActionPresets() {
       }
     });
     multiSelectedFrames.clear();
+    reconcileAllTracks();
     trimTrailingEmptyFrames();
     if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = AppState.frames.length - 1;
     if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
@@ -8638,7 +9273,47 @@ function importActionPresets() {
   }
 
   const btnMultiTween = document.getElementById('btnMultiTween');
-  if (btnMultiTween) btnMultiTween.onclick = tweenSelectedFrames;
+  if (btnMultiTween) btnMultiTween.onclick = setKeyframesForSelected;
+
+  /* v7.0.0（R3 / D8）：多选不再「逐对补间」，改为给选中的每一帧批量打关键帧。
+     曲线是一次性作用于段的东西，不该跟「选中哪几帧」绑定。 */
+  function setKeyframesForSelected() {
+    if (!multiSelectMode || multiSelectedFrames.size === 0) return;
+    if (isPlaying) pause();
+    syncFrameRef();
+    const idxs = Array.from(multiSelectedFrames).sort((a, b) => a - b);
+    const sub = isSubTrackMode();
+    let on = 0;
+    for (const idx of idxs) {
+      for (const id of currentScopeTrackIds()) {
+        const t = AppState.tracks[id];
+        if (!t) continue;
+        if (!t.frames) t.frames = [];
+        while (t.frames.length <= idx) t.frames.push(null);
+        const slot = t.frames[idx];
+        if (KF.isKey(slot)) continue;
+        /* 派生帧要先把求值结果固化成快照，否则没有实体可当锚点 */
+        const data = KF.isDerived(slot) ? getTrackFrame(id, idx) : slot;
+        if (!KF.isReal(data)) continue;
+        t.frames[idx] = data;
+        KF.markKey(data, sub ? 'sub' : 'main');
+        on++;
+      }
+    }
+    reconcileAllTracks();
+    AppState.objects = getCombinedObjectsForRender();
+    if (sub) AppState.selected = getActiveTrackObject();
+    multiSelectedFrames.clear();
+    multiSelectMode = false;
+    const tgl = document.getElementById('multiSelectToggle');
+    if (tgl) tgl.checked = false;
+    updateMultiActions();
+    invalidateAllFrameThumbs();
+    updateFrameBar();
+    EventBus.emit('need:render'); EventBus.emit('need:syncUI');
+    EventBus.emit('history:save', '批量设关键帧');
+    showHistoryToast('已给 ' + idxs.length + ' 帧打上关键帧（' + on + ' 个锚点）', undefined, 1700);
+  }
 
   /* ==================== 多轨道空白帧辅助 ==================== */
   function findNextTrackFrameIndex(startIdx) {
@@ -8745,29 +9420,227 @@ function importActionPresets() {
     if (isSubTrackMode()) AppState.selected = getActiveTrackObject();
   }
 
-  /* ==================== 单对补间执行 ==================== */
-  document.getElementById('btnTween').onclick = () => {
-    if (AppState.frames.length < 2) { alert('至少需要两帧才能补间'); return; }
-    const subMode = isSubTrackMode();
-    if (!subMode && AppState.currentFrameIndex >= AppState.frames.length - 1) { alert('当前是最后一帧，无法向后补间'); return; }
-    const count = parseInt(document.getElementById('tweenCount').value) || 5;
-    if (count < 1 || count > 60) { alert('补间帧数需在 1-60 之间'); return; }
+  /* ==================== 关键帧开关 / 段内插帧（v7.0.0） ==================== */
+
+  /* 当前作用域下要操作的轨道：子轨 = 该元件；主轨 = 全部元件（R6 广播） */
+  function currentScopeTrackIds() {
+    if (isSubTrackMode()) return [String(AppState.activeTrackId)];
+    return Object.keys(AppState.tracks);
+  }
+
+  /* 插入 N 帧时，这一帧后面是否还落在一个段里（决定插派生帧还是克隆普通帧） */
+  function segmentAhead(frames, idx) {
+    if (!frames || !frames.length) return null;
+    const inside = KF.segmentContaining(frames, idx);
+    if (inside) return inside;
+    if (KF.isKey(frames[idx])) {
+      const b = KF.nextKeyIndex(frames, idx);
+      if (b > idx) return { a: idx, b: b };
+    }
+    return null;
+  }
+
+  /* v7.0.2：主轨打关键帧只落给「这一帧参数真的变了」的元件。
+     判据：拿轨道在这一帧的求值结果（= 没改过的样子）和画布上的活对象比。
+     改参数 / 拖动都会走 markCurrentFrameModified → 元素会被升成 sub 关键帧，
+     所以这里兜的是「没被升格、但内容确实和插值结果不一样」的边角情况。
+     —— 这样主轨按 K 不会再给没动过的元件凭空插一个锚点，把它的插值打断。 */
+  function sameObjectData(a, b) {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    const strip = (o) => JSON.stringify(o, (k, v) => ((k === '__k' || k === '__d' || k === 'img') ? undefined : v));
+    return strip(a) === strip(b);
+  }
+
+  function trackChangedAt(tid, idx, live) {
+    if (!live) return false;
+    const t = AppState.tracks[tid];
+    if (!t || !t.frames) return true;
+    /* 这条轨道还一个关键帧都没有（新工程 / 刚加的元件）：
+       整条轨道都还没被「关键帧化」，第一次按 K 必须真的落下锚点。 */
+    if (!KF.keyIndices(t.frames).length) return true;
+    if (idx >= t.frames.length) return true;
+    if (KF.isBlank(t.frames[idx])) return true;      /* 这一帧本来没这个元件 */
+    /* 这一帧不在任何段里（段外）：这里本来就没有插值，按 K 是有意义的「定边界」，
+       不能因为「看起来没变」就跳过 —— 否则「两端各按一次 K 再插帧」的流程会断。 */
+    if (!KF.segmentContaining(t.frames, idx)) return true;
+    const cur = getTrackFrame(tid, idx);             /* 走缓存，和渲染同一份数据 */
+    if (!KF.isReal(cur)) return true;
+    return !sameObjectData(cur, live);
+  }
+
+  /* R1 / R6 / D9 / D10：点击当前帧设为 / 取消关键帧。
+     子轨作用域 = 只锁该元件（origin='sub'）；
+     主轨作用域 = 广播，规则是「保留手动、只补变了参数的」：
+       · 已经有锚点的元件一律原样保留，不管它是谁打的；
+       · 只给「参数确实变了、又还没有锚点」的元件补一个 main 锚点；
+       · 取消时只回收 origin='main' 的锚点，手动锚点留着 → 主轨这一帧显示「部分关键帧」。
+     这样 D9「按来源删除」才是真的：删得掉广播、删不掉用户自己打的。 */
+  function toggleKeyframeAtCurrent() {
+    const idx = AppState.currentFrameIndex;
     if (isPlaying) pause();
     syncFrameRef();
-    const res = insertTweenFrames(AppState.currentFrameIndex, count);
-    if (!res.ok) {
-      if (res.reason === 'no-current') { alert('当前帧对当前轨道是空白帧，无法补间'); return; }
-      if (res.reason === 'no-target') { alert('当前帧之后没有该元件的下一个关键帧，无法补间'); return; }
-      alert('当前是最后一帧，无法向后补间');
+    const sub = isSubTrackMode();
+    const ids = currentScopeTrackIds();
+    const liveOf = (id) => AppState.objects.find(o => o && o.type !== 'video' && String(o.id) === String(id)) || null;
+
+    /* 子轨：单件开关，保持旧语义 */
+    if (sub) {
+      const id = String(AppState.activeTrackId);
+      const t = AppState.tracks[id];
+      if (!t) { alert('当前帧没有可打关键帧的元件'); return; }
+      if (!t.frames) t.frames = [];
+      const slot = (idx < t.frames.length) ? t.frames[idx] : undefined;
+      if (slot !== undefined && KF.isKey(slot)) {
+        KF.clearKey(slot);          /* 只删锚点，槽位数据留给 reconcile 判定 */
+        finishKfToggle(idx, sub, 0, 1, 0, [id]);
+        return;
+      }
+      const live = liveOf(id);
+      if (!live) { alert('当前帧没有可打关键帧的元件'); return; }
+      while (t.frames.length <= idx) t.frames.push(null);
+      t.frames[idx] = live;
+      KF.markKey(live, 'sub');
+      finishKfToggle(idx, sub, 1, 0, 0);
       return;
     }
-    if (subMode) AppState.selected = getActiveTrackObject();
+
+    /* 主轨：先摸清这一帧的现状 */
+    const rows = [];
+    for (const id of ids) {
+      const t = AppState.tracks[id];
+      if (!t) continue;
+      if (!t.frames) t.frames = [];
+      const slot = (idx < t.frames.length) ? t.frames[idx] : undefined;
+      const hasKey = slot !== undefined && KF.isKey(slot);
+      const live = liveOf(id);
+      if (!hasKey && !live) continue;      /* 这一帧本来就没这个元件，不参与广播 */
+      rows.push({ id: id, t: t, hasKey: hasKey, origin: hasKey ? KF.originOf(slot) : null, live: live });
+    }
+    if (!rows.length) { alert('当前帧没有可打关键帧的元件'); return; }
+
+    /* 这一帧已经是「主轨广播」状态吗？还缺锚点、且参数确实变了的元件有几个？
+       这两个数决定这次点击是「补」还是「收」。 */
+    const mainRows = rows.filter(r => r.origin === 'main');
+    const pending = rows.filter(r => !r.hasKey && trackChangedAt(r.id, idx, r.live));
+
+    let on = 0, off = 0, kept = 0, skipped = 0;
+    const cleared = [];
+
+    if (mainRows.length && !pending.length) {
+      /* 收回：只回收主轨广播出来的锚点 */
+      for (const r of mainRows) { KF.clearKey(r.t.frames[idx]); off++; cleared.push(r.id); }
+      kept = rows.length - mainRows.length;
+    } else {
+      /* 补齐：只给参数变了的元件补 main。
+         没变过的元件保持自己的插值（补一个锚点反而会把它的段打断），直接跳过。 */
+      for (const r of rows) {
+        if (r.hasKey) { kept++; continue; }
+        if (pending.indexOf(r) < 0) { skipped++; continue; }
+        while (r.t.frames.length <= idx) r.t.frames.push(null);
+        r.t.frames[idx] = r.live;
+        KF.markKey(r.live, 'main');
+        on++;
+      }
+      if (!on) {
+        if (kept === rows.length) {
+          showHistoryToast('这一帧的关键帧是手动打的，主轨取消不会删它们；要取消请到该元件的子轨里点', 'redo', 2600);
+        } else {
+          showHistoryToast('这一帧没有元件的参数发生变化，不用补关键帧（要锁住某个元件请到它的子轨里按 K）', 'redo', 2800);
+        }
+        return;
+      }
+    }
+    finishKfToggle(idx, sub, on, off, kept, cleared, skipped);
+  }
+
+  /* 打 / 取消关键帧之后的统一收尾（两条路径共用，避免逻辑漂移） */
+  function finishKfToggle(idx, sub, on, off, kept, cleared, skipped) {
+    reconcileAllTracks();
+    /* v7.0.1：删掉首 / 末关键帧后，落在段外的帧要延续相邻关键帧，不能变空白 */
+    for (const cid of (cleared || [])) {
+      const t = AppState.tracks[String(cid)];
+      if (!t || !t.frames) continue;
+      const nb = keyNeighbors(t.frames, idx);
+      if (nb.prev !== null && nb.next === null) fillHoldRange(t, nb.prev + 1, idx, nb.prev);
+      else if (nb.prev === null && nb.next !== null) fillHoldRange(t, idx, nb.next - 1, nb.next);
+    }
+    if (cleared && cleared.length) bumpKfEval();
     AppState.objects = getCombinedObjectsForRender();
+    if (sub) AppState.selected = getActiveTrackObject();
     invalidateAllFrameThumbs();
     updateFrameBar();
     EventBus.emit('need:render'); EventBus.emit('need:syncUI');
-    EventBus.emit('history:save', '生成补间帧');
-    alert(subMode ? `已在当前帧和下一个关键帧之间生成 ${count} 个补间帧` : `已在当前帧和下一帧之间生成 ${count} 个补间帧`);
+    EventBus.emit('history:save', on ? '设为关键帧' : '取消关键帧');
+    if (on) {
+      const extra = kept ? ('（' + kept + ' 个已有锚点保留原样）') : '';
+      const skip = skipped ? ('，' + skipped + ' 个参数没变已跳过') : '';
+      showHistoryToast((sub ? '已设为关键帧' : ('已设为关键帧 · ' + on + ' 个元件' + skip)) + extra, undefined, 1900);
+    } else {
+      showHistoryToast(kept
+        ? ('已取消 ' + off + ' 个广播锚点，保留 ' + kept + ' 个手动锚点')
+        : '已取消关键帧', 'redo', 1800);
+    }
+  }
+
+  /* 段内插入 N 帧：只改变段的长度，不生成任何画面数据。
+     段内的槽位插派生帧（由两端关键帧实时求值），段外维持原来的克隆行为。 */
+  function insertFramesInSegment(count) {
+    const idx = AppState.currentFrameIndex;
+    const at = idx + 1;
+    if (isPlaying) pause();
+    syncFrameRef();
+    const ids = Object.keys(AppState.tracks);
+    const usable = ids.filter(id => {
+      const t = AppState.tracks[id];
+      return t && t.frames && segmentAhead(t.frames, idx);
+    });
+    if (!usable.length) {
+      alert('当前帧不在关键帧段内。\n两侧都打好关键帧后再插帧，插出来的帧才会是自动补出来的画面。');
+      return;
+    }
+    const metas = [];
+    const dur = Math.round(1000 / defaultFPS);
+    for (let k = 0; k < count; k++) metas.push({ id: ++uid, duration: dur, isTween: false });
+    AppState.frames.splice(at, 0, ...metas);
+
+    for (const id of ids) {
+      const t = AppState.tracks[id];
+      if (!t) continue;
+      if (!t.frames) t.frames = [];
+      while (t.frames.length < at) t.frames.push(null);
+      if (segmentAhead(t.frames, idx)) {
+        t.frames.splice(at, 0, ...new Array(count).fill(KF.DERIVED_SLOT));
+      } else {
+        /* 段外：保持老行为——克隆当前帧，但绝不能把关键帧身份也带过去 */
+        const src = t.frames[idx];
+        const clones = [];
+        for (let k = 0; k < count; k++) {
+          const c = KF.isReal(src) ? cloneObjectKeepImg(src) : null;
+          if (c) { c.id = src.id; delete c[KF.KEY]; }
+          clones.push(c);
+        }
+        t.frames.splice(at, 0, ...clones);
+      }
+    }
+    reconcileAllTracks();
+    trimTrailingEmptyFrames();
+    AppState.objects = getCombinedObjectsForRender();
+    if (isSubTrackMode()) AppState.selected = getActiveTrackObject();
+    invalidateAllFrameThumbs();
+    updateFrameBar();
+    seekVideoToFrame(AppState.currentFrameIndex);
+    EventBus.emit('need:render'); EventBus.emit('need:syncUI');
+    EventBus.emit('history:save', '段内插入帧');
+  }
+
+  const btnKeyframe = document.getElementById('btnKeyframe');
+  if (btnKeyframe) btnKeyframe.onclick = () => toggleKeyframeAtCurrent();
+
+  document.getElementById('btnTween').onclick = () => {
+    const count = parseInt(document.getElementById('tweenCount').value) || 5;
+    if (count < 1 || count > 60) { alert('插入帧数需在 1-60 之间'); return; }
+    insertFramesInSegment(count);
   };
 
   /* ==================== 复制帧（多选） ==================== */
@@ -8788,9 +9661,17 @@ function importActionPresets() {
       if (subMode) {
         const t = ensureTrack(AppState.activeTrackId, (AppState.selected && AppState.selected.name) || AppState.activeTrackId);
         const copies = indices.map(idx => {
-          const src = getFrameTrackObject(null, idx);
-          const c = src ? cloneObjectKeepImg(src) : null;
-          if (c && src) c.id = src.id;
+          const slot = t.frames[idx];
+          /* v7.0.1：复制关键帧 = 新关键帧（D8）。子轨也要取「存着的槽位」而不是求值结果，
+             否则 __k 标记会在 getFrameTrackObject 求值时被剥掉，复制品会变成普通帧。 */
+          let c = null;
+          if (KF.isKey(slot)) c = cloneObjectKeepImg(slot);
+          else if (KF.isDerived(slot)) c = KF.DERIVED_SLOT;
+          else {
+            const src = getFrameTrackObject(null, idx);
+            c = src ? cloneObjectKeepImg(src) : null;
+          }
+          if (c && KF.isReal(c)) c.id = (KF.isReal(slot) ? slot.id : c.id);
           return c;
         });
         while (t.frames.length < insertPos) t.frames.push(null);
@@ -8826,6 +9707,7 @@ function importActionPresets() {
       }
       AppState.canvasSelected = false;
       multiSelectedFrames.clear();
+      reconcileAllTracks();   /* v7.0.0：多选复制的槽位也要按段重新归一化 */
       invalidateAllFrameThumbs();
       updateFrameBar();
       EventBus.emit('need:render'); EventBus.emit('need:syncUI');
@@ -8834,9 +9716,16 @@ function importActionPresets() {
     }
     if (subMode) {
       const t = ensureTrack(AppState.activeTrackId, (AppState.selected && AppState.selected.name) || AppState.activeTrackId);
-      const srcObj = getFrameTrackObject(null, AppState.currentFrameIndex);
-      const clone = srcObj ? cloneObjectKeepImg(srcObj) : null;
-      if (clone && srcObj) clone.id = srcObj.id;
+      /* v7.0.1：复制关键帧 = 新关键帧。必须克隆「存着的槽位」，求值结果是不带 __k 的。 */
+      const curSlot = t.frames[AppState.currentFrameIndex];
+      let clone = null;
+      if (KF.isKey(curSlot)) { clone = cloneObjectKeepImg(curSlot); clone.id = curSlot.id; }
+      else if (KF.isDerived(curSlot)) clone = KF.DERIVED_SLOT;
+      else {
+        const srcObj = getFrameTrackObject(null, AppState.currentFrameIndex);
+        clone = srcObj ? cloneObjectKeepImg(srcObj) : null;
+        if (clone && srcObj) clone.id = srcObj.id;
+      }
       const nextIdx = AppState.currentFrameIndex + 1;
       if (nextIdx < t.frames.length && t.frames[nextIdx] == null) {
         /* 下一帧对当前轨道是空白帧：直接占用该槽位，不把后面的帧挤开 */
@@ -8846,6 +9735,7 @@ function importActionPresets() {
         t.frames.splice(nextIdx, 0, clone);
       }
       AppState.currentFrameIndex = nextIdx;
+      reconcileAllTracks();
       syncMainLengthFromTracks();
       trimTrailingEmptyFrames();
       invalidateAllFrameThumbs();
@@ -8873,10 +9763,12 @@ function importActionPresets() {
       if (!t.frames) t.frames = [];
       while (t.frames.length < insertAt) t.frames.push(null);
       const src = t.frames[AppState.currentFrameIndex];
-      const clone = src ? cloneObjectKeepImg(src) : null;
-      if (clone && src) clone.id = src.id;
+      /* v7.0.0：派生槽位直接沿用哨兵；关键帧/普通帧照常克隆（复制关键帧 = 新关键帧，D8） */
+      const clone = KF.isReal(src) ? cloneObjectKeepImg(src) : (KF.isDerived(src) ? KF.DERIVED_SLOT : null);
+      if (clone && KF.isReal(clone)) clone.id = src.id;
       t.frames.splice(insertAt, 0, clone);
     }
+    reconcileAllTracks();
     syncMainLengthFromTracks();
     AppState.currentFrameIndex = insertAt;
     invalidateAllFrameThumbs();
@@ -12211,6 +13103,25 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     return true;
   }
 
+  /* v7.0.2：按屏幕像素平移视图。
+     画布的双指拖动走的是自己的 pointer 逻辑，画笔 overlay 把画布盖住了，
+     双指平移得由它转交到这里，两边手感才一致。 */
+  function panViewBy(dx, dy) {
+    if (!isFinite(dx) || !isFinite(dy)) return false;
+    if (!dx && !dy) return false;
+    if (SKFE.systems.camera.getCameraViewObject()) return false;  /* 摄像机视角另有自己的平移 */
+    if (viewPinned && pinnedView && AppState.viewScale <= pinnedView.scale + 0.0001) {
+      AppState.viewOffset.x = pinnedView.offset.x;
+      AppState.viewOffset.y = pinnedView.offset.y;
+      EventBus.emit('need:render');
+      return false;
+    }
+    AppState.viewOffset.x += dx;
+    AppState.viewOffset.y += dy;
+    EventBus.emit('need:render');
+    return true;
+  }
+
   document.getElementById('btnNew').onclick = addFigure;
   document.getElementById('btnBubble').onclick = addBubble;
   document.getElementById('btnShapeCircle').onclick = () => addShape('circle');
@@ -12839,6 +13750,33 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     if (refVideo) seekVideoToFrame(0);
   };
 
+  /* v7.0.1：连点水印 5 次 → 导出诊断报告（主要给安卓真机排查「导出没反应」用） */
+  (function bindExportDiag() {
+    const wm = document.getElementById('watermark');
+    if (!wm) return;
+    let taps = 0, timer = null;
+    wm.style.cursor = 'default';
+    wm.addEventListener('click', () => {
+      taps++;
+      clearTimeout(timer);
+      timer = setTimeout(() => { taps = 0; }, 3000);
+      if (taps < 5) return;
+      taps = 0;
+      if (!SKFE.platform || typeof SKFE.platform.diag !== 'function') {
+        alert('诊断不可用：platform.diag 缺失（platform.js 版本过旧）');
+        return;
+      }
+      SKFE.platform.diag().then(txt => {
+        /* 手机上一串 alert 文本没法复制，顺手给个「存成 txt 再分享」的出口 */
+        if (confirm(txt + '\n\n把这份报告存成 txt 分享出去？')) {
+          try {
+            SKFE.platform.save(new Blob([txt], { type: 'text/plain' }), 'skfe_diag_' + Date.now() + '.txt');
+          } catch (_) {}
+        }
+      }).catch(e => alert('诊断失败：' + (e && e.message)));
+    });
+  })();
+
   document.getElementById('timelineScrubber').addEventListener('input', (e) => { goToFrame(+e.target.value); });
   document.getElementById('fpsSlider').addEventListener('input', e => { applyFPS(+e.target.value); EventBus.emit('need:render'); });
   document.getElementById('fpsSlider').addEventListener('change', () => EventBus.emit('history:save', '修改帧率'));
@@ -13276,6 +14214,8 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     worldToScreen: (p) => worldToScreenPoint(p),
     /* v6.2.0：画笔 overlay 会挡住滚轮/双指，缩放要转交给这个实现 */
     zoomViewAt: (clientX, clientY, factor) => zoomViewAt(clientX, clientY, factor),
+    /* v7.0.2：双指拖动平移也一起转交 */
+    panView: (dx, dy) => panViewBy(dx, dy),
     getInkLocalMatrix,
     getBindTransform, getBoundFigureTransform, getBindBase, getAnchorOffset,
     jointData,
@@ -13426,8 +14366,8 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       syncUI();
     });
 
-    EventBus.on('history:save', (label) => {
-      saveHistory(label);
+    EventBus.on('history:save', (label, coalesceMs) => {
+      saveHistory(label, coalesceMs);
     });
 
     // 低频综合更新：同时重绘、同步UI、记历史
@@ -13474,4 +14414,44 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     if (typeof window.SKFE_REFRESH_I18N === 'function') window.SKFE_REFRESH_I18N();
     saveHistory('初始化');
   })();
+
+  /* v7.0.0：调试入口（只在 ?debug=1 时挂到 window，方便无头测试与排障）。
+     不参与任何功能逻辑，正式使用时不会存在。 */
+  if (/[?&]debug=1/.test(location.search)) {
+    window.__skfe = {
+      AppState, KF, EventBus, TRACK_ALL_ID,
+      getTrackFrame, getTrackSlot, getObjectsForFrameAt, getCombinedObjectsForRender,
+      goToFrame, updateFrameBar, syncFrameRef, bumpKfEval, reconcileAllTracks,
+      renderFrameToDataURL, renderScene, markCurrentFrameModified,
+      toggleKeyframe: () => toggleKeyframeAtCurrent(),
+      insertFrames: (n) => insertFramesInSegment(n),
+      trimTrailingEmptyFrames, addFrame, deleteFrame,
+      deleteSelectedFrames, deleteSelected,
+      applyEase: (k) => applyEaseToCurrentSegments(k),
+      applyChannelEase: (objId, part, k) => pushChannelEaseToSegments(objId, part, k),
+      exportProjectJSON, importProjectJSON, deserializeProject, applyLoadedProject,
+      projectVersion: PROJECT_VERSION,
+      historySize: () => undoStack.length,
+      historyTop: () => (undoStack[undoStack.length - 1] || {}).label || null,
+      addObjectToFrames, makeFigure, mainKeyStateAt, kfPartialNames,
+      kfChipKind: (i) => kfChipKind(i),
+      segmentAhead: (trackId, idx) => {
+        const t = AppState.tracks[String(trackId)];
+        return t && t.frames ? segmentAhead(t.frames, typeof idx === 'number' ? idx : AppState.currentFrameIndex) : null;
+      },
+      goto: (i) => { goToFrame(i); EventBus.emit('need:render'); },
+      markKey: (trackId, idx, origin) => {
+        const t = AppState.tracks[String(trackId)];
+        if (!t) return false;
+        while (t.frames.length <= idx) t.frames.push(null);
+        if (!KF.isReal(t.frames[idx])) return false;
+        KF.markKey(t.frames[idx], origin || 'sub');
+        reconcileAllTracks();
+        bumpKfEval();
+        return true;
+      }
+    };
+    /* 兼容早前的调试钩子名（无头回归脚本仍在用） */
+    window.__SKFE_DBG = window.__skfe;
+  }
 })();

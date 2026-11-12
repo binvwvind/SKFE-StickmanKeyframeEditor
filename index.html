@@ -3,7 +3,7 @@
 <head> <!-- 网页头部，包含元数据和外部引用 -->
 <meta charset="UTF-8"> <!-- 设置字符编码为 UTF-8，防止中文乱码 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover"> <!-- 移动端视口设置：宽度同设备，允许缩放，适配刘海屏 -->
-<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v6.4.1</title> <!-- 网页标题，带有多语言属性 -->
+<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.0.2</title> <!-- 网页标题，带有多语言属性 -->
 <link rel="stylesheet" href="./style.css"> <!-- 引入外部样式表 -->
 </head> <!-- 头部结束 -->
 <body> <!-- 网页主体开始 -->
@@ -91,7 +91,7 @@
   <div id="uiDragHandle"><div class="bar"></div></div> <!-- 面板顶部的拖拽把手 -->
 
   <div id="watermark"> <!-- 控制面板顶部的作者/版本水印 -->
-    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v6.4.1</div> <!-- 软件名称及版本 -->
+    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.0.2</div> <!-- 软件名称及版本 -->
     <div class="author" data-i18n="watermark.author">Author: binvwvind qq交流分享群:1121039855</div> <!-- 作者信息及群号 -->
   </div> <!-- 水印结束 -->
 
@@ -855,6 +855,7 @@
 <div id="timeline"> <!-- ==================== 时间轴（动画面板）主容器 ==================== -->
   <button id="btnHideTimeline">收起 ▼</button> <!-- 收起时间轴按钮 -->
   <div id="frameBar"></div> <!-- 帧列表容器（横向滚动，由 JS 渲染） -->
+  <div id="kfCurveWrap"><canvas id="kfCurveStrip"></canvas></div> <!-- v7.0.0：段曲线可视化（无段时自动隐藏） -->
   <div id="scrubberWrap"> <!-- 帧进度条和时间文字包裹层 -->
     <input type="range" id="timelineScrubber" min="0" max="0" value="0" step="1"> <!-- 拖动滑条 -->
     <span id="scrubberTimeNow" class="scrubber-time"></span> <!-- 当前帧时间文字 -->
@@ -875,13 +876,14 @@
       <button id="btnMultiTween" class="btn-soft btn-xs" title="在选中的相邻帧之间逐对补间" data-i18n="timeline.multiTween" data-i18n-title="timeline.multiTweenTitle">✨ 多选补间</button> <!-- 对多选帧进行连续补间 -->
     </span> <!-- 多选操作区结束 -->
     <span class="sep">|</span> <!-- 分隔符 -->
-    <div class="tween-group"> <!-- 补间设置组 -->
-      <button id="btnTween" class="btn-soft" title="在当前帧和下一帧之间插入补间动画" data-i18n="timeline.tween" data-i18n-title="timeline.tweenTitle">✨ 补间</button> <!-- 执行补间按钮 -->
-      <input type="number" id="tweenCount" value="5" min="1" max="60" title="补间帧数" data-i18n-title="timeline.tweenCountTitle"> <!-- 补间生成数量 -->
-      <button id="btnTweenMore" class="tween-more-toggle" title="补间设置（缓动/分部）" aria-haspopup="menu" aria-expanded="false" aria-controls="tweenMoreMenu"> <!-- 展开补间高级设置 -->
+    <div class="tween-group"> <!-- 关键帧 / 插帧 / 曲线 -->
+      <button id="btnKeyframe" class="btn-soft btn-keyframe" title="把当前帧设为 / 取消关键帧" data-i18n="timeline.keyframe" data-i18n-title="timeline.keyframeTitle">◆ 关键帧</button> <!-- 关键帧开关（R1） -->
+      <button id="btnTween" class="btn-soft" title="在当前段的关键帧之间插入 N 帧（只拉长段，不烘焙画面）" data-i18n="timeline.insertFrames" data-i18n-title="timeline.insertFramesTitle">＋ 插 N 帧</button> <!-- 段内插帧（替代原来的补间） -->
+      <input type="number" id="tweenCount" value="5" min="1" max="60" title="插入帧数" data-i18n-title="timeline.insertCountTitle"> <!-- 插入帧数量 -->
+      <button id="btnTweenMore" class="tween-more-toggle" title="段曲线设置（缓动/分部）" aria-haspopup="menu" aria-expanded="false" aria-controls="tweenMoreMenu"> <!-- 展开段曲线设置 -->
         <span id="tweenEaseName" class="ease-name">匀速</span><span class="caret">▾</span> <!-- 当前缓动曲线名称和下拉箭头 -->
       </button> <!-- 展开按钮结束 -->
-      <div class="tween-more-menu" id="tweenMoreMenu" role="menu" aria-label="补间设置" hidden> <!-- 补间设置下拉菜单（默认隐藏） -->
+      <div class="tween-more-menu" id="tweenMoreMenu" role="menu" aria-label="段曲线设置" hidden> <!-- 段曲线下拉菜单（默认隐藏） -->
         <div class="tm-section" style="justify-content: center;"> <!-- 顶部操作区 -->
           <button id="btnJointEase" class="btn-soft btn-xs" title="为不同分部（位置/缩放/旋转/关节）分别设置缓动曲线" data-i18n="timeline.jointEase" data-i18n-title="timeline.jointEaseTitle">🎯 分部</button> <!-- 打开分部缓动面板 -->
         </div> <!-- 顶部操作区结束 -->
@@ -1063,6 +1065,7 @@
 <script src="./js/systems/brush.js"></script> <!-- 画笔元件系统 v5.1.0（矢量笔迹绘制） -->
 <script src="./js/systems/camera.js"></script>
 <script src="./js/systems/headShapes.js"></script> <!-- 手绘头型数据 v6.4.0（由 tools/gen_head_shapes.js 生成） -->
+<script src="./js/systems/keyframes.js"></script> <!-- 关键帧数据层 v7.0.0（槽位身份 / 段 / 曲线挂在关键帧上） -->
 
 <script src="./js/platform.js"></script> <!-- 运行环境适配层：浏览器/桌面/移动端的文件保存差异 -->
 <script src="./js/app.js"></script> <!-- 引入主程序逻辑 -->

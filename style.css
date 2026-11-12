@@ -290,6 +290,44 @@
     transition: none; /* v6.3.1：拖动跟手不要过渡；其余帧块的让位动效交给它们自己的 transform 过渡 */
     will-change: transform;
   } /* 拖拽帧块样式结束 */
+
+  /* ==================== v7.0.0 关键帧标记 ==================== */
+  .frame-chip.kf-key::after, /* 关键帧：右上角实心菱形 */
+  .frame-chip.kf-partial::after { /* 部分关键帧：空心菱形 */
+    content: ''; position: absolute; top: 3px; right: 3px;
+    width: 5px; height: 5px; transform: rotate(45deg);
+    border-radius: 1px; box-sizing: border-box;
+    background: var(--color-primary); border: 1px solid var(--color-primary);
+  }
+  .frame-chip.kf-partial::after { background: transparent; }
+  .frame-chip.kf-key.active::after,
+  .frame-chip.kf-partial.active::after { background: var(--color-primary-text); border-color: var(--color-primary-text); }
+  .frame-chip.kf-partial.active::after { background: transparent; }
+  .frame-chip.kf-seg { box-shadow: inset 0 -2px 0 0 var(--color-primary); } /* 整段高亮：底部一条主题色 */
+  .frame-chip.kf-seg.active { box-shadow: inset 0 -2px 0 0 var(--color-primary-text); }
+  .frame-chip.kf-nodrag { cursor: default; } /* 派生帧不可拖动 */
+  /* v7.0.0：段曲线可视化。没有段时整块不占位，不影响老工程的布局。 */
+  #kfCurveWrap {
+    display: none; position: relative; overflow: hidden;
+    height: 26px; margin: 2px 0 0; border-radius: var(--radius-control);
+    background: color-mix(in srgb, var(--text-sub) 7%, transparent);
+  }
+  #kfCurveWrap.visible { display: block; }
+  #kfCurveStrip { display: block; height: 26px; pointer-events: none; }
+  #kfCurveWrap .kf-curve-hint {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    font-size: 10px; color: var(--text-sub); pointer-events: none; opacity: .8;
+  }
+  /* v7.0.0：关键帧按钮三态 —— 实心 = 这一帧全是关键帧，描边 = 部分关键帧 */
+  #btnKeyframe.kf-on {
+    background: var(--color-primary); color: var(--color-primary-text);
+    border-color: var(--color-primary);
+  }
+  #btnKeyframe.kf-partial-on {
+    color: var(--color-primary); border-color: var(--color-primary);
+    background: transparent; box-shadow: inset 0 0 0 1px var(--color-primary);
+  }
+  /* ==================== 关键帧标记结束 ==================== */
   
   .theme-preset-list { /* 主题预设列表容器 */
     display: flex; flex-direction: column; gap: 8px; /* 纵向弹性布局，间距 8px */

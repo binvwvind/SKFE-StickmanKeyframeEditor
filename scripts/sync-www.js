@@ -63,6 +63,12 @@ const bodyInject = [
   '  <script>',
   '  (function () {',
   "    if (!/^https?:$/.test(location.protocol)) return;",
+  '    /* v7.0.1：原生壳（Capacitor）里资源本来就是本地的，再套一层 SW 只会让',
+  '       升级后仍旧跑到旧缓存里的 JS —— 那时表现就是「导出全部没反应」。直接跳过。 */',
+  '    try {',
+  '      var C = window.Capacitor;',
+  '      if (C && ((typeof C.isNativePlatform === "function" && C.isNativePlatform()) || C.isNative === true)) return;',
+  '    } catch (e) {}',
   "    if ('serviceWorker' in navigator) {",
   "      window.addEventListener('load', function () {",
   "        navigator.serviceWorker.register('./sw.js').catch(function () {});",
@@ -85,7 +91,7 @@ if (!html.includes("navigator.serviceWorker.register")) {
 fs.writeFileSync(idxPath, html);
 
 // 自检：确保关键文件都在
-const required = ['index.html', 'style.css', 'js/app.js', 'js/systems/headShapes.js', 'manifest.webmanifest', 'sw.js'];
+const required = ['index.html', 'style.css', 'js/app.js', 'js/systems/headShapes.js', 'js/systems/keyframes.js', 'manifest.webmanifest', 'sw.js'];
 const missing = required.filter(f => !fs.existsSync(path.join(OUT, f)));
 if (missing.length) {
   console.error('[sync] 缺少文件: ' + missing.join(', '));

@@ -46,8 +46,9 @@ SKFE.systems.brush = (function () {
   let lastTickAt = 0;               // 上一次 tick 的时间戳（判断 rAF 是否被节流）
   let isPenPointer = false;
   let tipPressure = 0.5;
-  let pointers = new Map();         // v6.2.0：按下的指针（双指 = 缩放画布）
+  let pointers = new Map();         // v6.2.0：按下的指针（双指 = 缩放/平移画布）
   let pinchLastDist = 0;            // 上一次双指间距，用于算缩放倍率
+  let pinchLastMid = null;          // v7.0.2：上一次双指中点，用于双指拖动平移视图
   let _prevSelected = null;         // 进入前的选中状态
   let _prevUndoDepth = 0;
 
@@ -932,7 +933,7 @@ SKFE.systems.brush = (function () {
 
   function resetSession() {
     if (finishTimer) { clearTimeout(finishTimer); finishTimer = 0; }
-    pointers.clear(); pinchLastDist = 0;   /* v6.2.0：清掉多指状态，避免下次进画笔还停在缩放态 */
+    pointers.clear(); pinchLastDist = 0; pinchLastMid = null;   /* v6.2.0：清掉多指状态，避免下次进画笔还停在缩放态 */
     resetQuickShape(); lastMoveAt = 0;
     editingInk = null;
     baseStrokes.length = 0;
@@ -1502,6 +1503,34 @@ SKFE.systems.brush = (function () {
 
   function resetQuickShape() { qs = null; }
 
+  /* v7.0.2：这一笔到现在为止是不是只有「一个点」。
+     双指手势的第一根手指落下时必然会先起笔，如果随后马上按下第二根手指，
+     这一笔实际什么都没画 —— 判成点就整笔丢掉，否则画布上会凭空多个黑点。 */
+  function isDotStroke() {
+    if (!current || !current.data || !current.data.points) return true;
+    const pts = current.data.points;
+    if (pts.length <= 1) return true;
+    const kv = worldUnitScreenLen();
+    const p0 = pts[0];
+    let maxD = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const d = Math.hypot(pts[i].x - p0.x, pts[i].y - p0.y);
+      if (d > maxD) maxD = d;
+    }
+    return maxD * kv <= 12;   /* 屏幕位移不到 12px，当点处理 */
+  }
+
+  /* 丢掉当前这一笔（不提交、不进历史） */
+  function discardCurrentStroke() {
+    if (finishTimer) { clearTimeout(finishTimer); finishTimer = 0; }
+    current = null;
+    drawing = false;
+    resetQuickShape();
+    stopLoop();
+    renderOverlay();
+    refreshButtons();
+  }
+
   function finishCurrentStroke() {
     if (finishTimer) { clearTimeout(finishTimer); finishTimer = 0; }
     if (!current) { drawing = false; resetQuickShape(); stopLoop(); renderOverlay(); return; }
@@ -1544,13 +1573,17 @@ SKFE.systems.brush = (function () {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
 
-    /* v6.2.0：第二根手指按下 = 双指缩放画布。
-       正在画的那一笔先提交（已画出来的部分保留），之后一指继续拖动就是缩放。 */
+    /* v6.2.0：第二根手指按下 = 进入双指手势（缩放 + 拖动平移）。
+       v7.0.2：正在起笔的那一下如果是「一个点」，直接丢掉 —— 双指是操作视图，不是画画。 */
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size >= 2) {
-      if (drawing || current) { drawing = false; finishCurrentStroke(); }
+      if (drawing || current) {
+        if (isDotStroke()) discardCurrentStroke();
+        else finishCurrentStroke();
+      }
       const arr = Array.from(pointers.values());
       pinchLastDist = Math.hypot(arr[0].x - arr[1].x, arr[0].y - arr[1].y);
+      pinchLastMid = { x: (arr[0].x + arr[1].x) / 2, y: (arr[0].y + arr[1].y) / 2 };
       try { overlay.setPointerCapture(e.pointerId); } catch (_) {}
       return;
     }
@@ -1603,20 +1636,29 @@ SKFE.systems.brush = (function () {
     if (!brushOn) return;
     if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-    /* 双指：按两指中点为锚缩放画布，不落笔 */
+    /* 双指：以两指中点为锚缩放，并把中点的位移当成拖动平移 —— 不落笔 */
     if (pointers.size >= 2) {
       e.preventDefault();
       const arr = Array.from(pointers.values());
       const d = Math.hypot(arr[0].x - arr[1].x, arr[0].y - arr[1].y);
+      const mx = (arr[0].x + arr[1].x) / 2;
+      const my = (arr[0].y + arr[1].y) / 2;
       if (pinchLastDist > 2 && d > 2) {
         const factor = d / pinchLastDist;
         if (Math.abs(factor - 1) > 0.002 && D.zoomViewAt) {
-          const mx = (arr[0].x + arr[1].x) / 2;
-          const my = (arr[0].y + arr[1].y) / 2;
           if (D.zoomViewAt(mx, my, factor)) renderOverlay();
         }
         pinchLastDist = d;
       }
+      /* v7.0.2：双指平移。缩放已经把中点钉在原地，这里补上中点自身的位移，
+         手感就和画布上直接双指拖动一致：两指一起挪，画面跟着走。 */
+      if (pinchLastMid && D.panView) {
+        const dx = mx - pinchLastMid.x, dy = my - pinchLastMid.y;
+        if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+          if (D.panView(dx, dy)) renderOverlay();
+        }
+      }
+      pinchLastMid = { x: mx, y: my };
       return;
     }
 
@@ -1661,7 +1703,7 @@ SKFE.systems.brush = (function () {
 
   function onUp(e) {
     pointers.delete(e.pointerId);
-    if (pointers.size < 2) pinchLastDist = 0;
+    if (pointers.size < 2) { pinchLastDist = 0; pinchLastMid = null; }
     if (!drawing) {
       try { overlay.releasePointerCapture(e.pointerId); } catch (_) {}
       return;
@@ -1975,6 +2017,14 @@ SKFE.systems.brush = (function () {
     getPresets: () => presets.map(p => ({ id: p.id, name: p.name, bindTo: p.bindTo, offX: p.offX, offY: p.offY })),
     savePreset: () => savePresetFromSelection(),
     applyPresetById: (id) => applyPreset(presets.find(p => p.id === id)),
-    deletePresetById
+    deletePresetById,
+    /* v7.0.2：无头回归用的状态快照，不参与任何功能 */
+    _debug: () => ({
+      on: brushOn,
+      drawing: drawing,
+      ops: ops.length,
+      points: (current && current.data && current.data.points) ? current.data.points.length : -1,
+      pointers: pointers.size
+    })
   };
 })();

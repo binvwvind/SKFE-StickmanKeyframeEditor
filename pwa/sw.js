@@ -1,7 +1,7 @@
 /* SKFE PWA service worker
    策略：核心壳文件 stale-while-revalidate（先给缓存、后台更新），
    其余同源 GET 运行时缓存。版本号变了就整体换新，避免旧缓存卡住。 */
-const VERSION = 'skfe-v6.4.1';
+const VERSION = 'skfe-v7.0.2';
 const SHELL = ['./', './index.html', './style.css', './manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {

@@ -33,7 +33,31 @@
     --overlay-toast: rgba(48, 52, 59, .92); /* 提示条（Toast）的背景色：深色半透明 */
   } /* :root 变量定义结束 */
 
-  * { box-sizing: border-box; } /* 全局设置：让元素的宽高包含 padding 和 border，方便布局 */
+  /* ===== SKFE UI 图标库（IconPark 矢量图标，替换原 emoji） ===== */
+[data-icon] { /* 占位元素：内部由 SKFEApplyIcons 注入 <svg> */
+    display: inline-flex; /* 让图标和文字基线对齐 */
+    align-items: center;
+    justify-content: center;
+    width: 1em; /* 跟随当前字号，13px 按钮里就是 13px */
+    height: 1em;
+    flex: 0 0 auto;
+    vertical-align: -0.12em; /* 视觉上压到文字中线 */
+    margin-right: 0; /* 默认不留距；后面跟文字时由 JS 加 .ic-gap */
+}
+/* 间距由 skfe-icons.js 判定后写内联 margin-right：
+   CSS 的 :only-child / :last-child 都不看纯文本节点，
+   「<i>图标</i>文字」这种结构会被误判成纯图标按钮，所以不能在 CSS 里清零。 */
+[data-icon].ic-gap { margin-right: .36em; }
+[data-icon] > svg.skfe-ic { width: 100%; height: 100%; display: block; margin-right: 0; }
+svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着文字，默认留距） */
+    width: 1em;
+    height: 1em;
+    display: inline-block;
+    vertical-align: -0.12em;
+    margin-right: .36em;
+}
+
+* { box-sizing: border-box; } /* 全局设置：让元素的宽高包含 padding 和 border，方便布局 */
 
   html, body { /* 网页根标签和主体标签的全局设置 */
     margin: 0; padding: 0; height: 100%; overflow: hidden; /* 清除默认边距，高度占满屏幕，禁止页面出现滚动条 */
@@ -122,15 +146,17 @@
   #uiBottomBar.dragging { cursor: grabbing; } /* 拖动中 */
   #uiBottomBar.dragging * { cursor: grabbing !important; } /* 拖动中统一手势 */
 
-  .ui-tab { /* 底部栏的入口按钮 */
+  .ui-tab { /* 底部栏的入口按钮（v7.1.0：文字换成矢量图标，只留图标） */
     flex: 0 0 auto; /* 不压缩，溢出就滑动 */
-    padding: 5px 8px; min-height: 30px; /* v7.0.6：入口加到 7 个，左右内边距收到 8px 才放得下 */
+    display: inline-flex; align-items: center; justify-content: center; /* 图标居中 */
+    padding: 5px 10px; min-height: 30px; min-width: 36px; /* 图标按钮的方形热区 */
     font-size: 12px; font-weight: 500; /* 字号字重 */
     color: var(--text-sub); background: transparent; /* 未选中：次要色 */
     border: 1px solid transparent; border-radius: 999px; /* 胶囊 */
     cursor: pointer; white-space: nowrap; /* 不换行 */
     transition: background .15s, color .15s; /* 过渡 */
   } /* 入口按钮基础样式结束 */
+  .ui-tab [data-icon] { font-size: 17px; } /* 图标 17px，比正文大一点才看得清 */
   .ui-tab:hover { background: var(--btn-hover); color: var(--text-main); } /* 悬停 */
   .ui-tab.active { /* 当前打开的分区 */
     background: var(--color-primary); color: var(--color-primary-text); /* 主题色实底 */
@@ -841,9 +867,18 @@
   .row.slider:has(input[type="range"]) > label, /* 左侧文字标签 */
   .row.slider .field-label { /* 字段标签 */
     flex: 0 0 64px; /* 固定宽度 64px，刚好放下5个中文字 */
+    min-width: 0; /* 关键：flex 项默认 min-width:auto 会被内容撑开，6 字标签会把滑条挤短 */
     justify-content: center; /* 内容居中 */
     white-space: nowrap; /* 不换行 */
   } /* 标签样式结束 */
+  /* 滑条行的标签只放纯文字，改成块级：超长时用省略号收尾，
+     而不是把滑条挤短（英文词条比中文长，这条必须留着） */
+  .row.slider:has(input[type="range"]) > label {
+    display: block; /* 块级才能用 text-overflow */
+    text-align: center; /* 文字居中，和原来 flex 居中一致 */
+    overflow: hidden; /* 超出 64px 的部分裁掉 */
+    text-overflow: ellipsis; /* 末尾显示省略号 */
+  } /* 标签截断样式结束 */
   /* 右侧数值固定宽度靠右对齐 */
   .row.slider .val { /* 右侧数值 */
     flex: 0 0 38px; /* 固定宽度 38px */
@@ -1070,6 +1105,14 @@
     opacity: .5; transition: opacity .15s, background .15s;
   }
   .lp-lock:hover { background: var(--btn-hover); opacity: .85; }
+  .lp-del { /* v7.1.0：每行的删除按钮 */
+    border: none; background: transparent; cursor: pointer;
+    font-size: 13px; line-height: 1; padding: 4px; border-radius: 6px;
+    opacity: .6; color: var(--color-danger, #d9534f);
+    transition: opacity .15s, background .15s;
+  }
+  .lp-del:hover { background: var(--btn-hover); opacity: 1; }
+  .lp-del:active { transform: scale(.92); }
   .lp-lock.on { opacity: 1; } /* 已锁定：实心图标，全不透明 */
   .lp-drag { /* 长按拖动的横线手柄 */
     width: 24px; height: 26px; display: flex; align-items: center; justify-content: center;
@@ -1314,9 +1357,12 @@
   #videoProgress .vp-fill { height: 100%; width: 0%; background: var(--color-primary); border-radius: 999px; transition: width .15s ease; } /* 进度条填充：全高，初始 0% 宽，主题色，平滑过渡 */
   #videoProgress .vp-pct { font-size: 12px; margin-top: 8px; color: var(--text-sub); font-variant-numeric: tabular-nums; } /* 进度百分比：字号，上边距，次要色，等宽数字 */
 
-  .sticky-header { /* 吸顶头部（用于图层列表等） */
-    position: sticky; top: -10px; /* 粘性定位，向上偏移 -10px 以遮盖间隙 */
+  .sticky-header { /* 吸顶头部（元件横向条）—— v7.1.0 恢复 */
+    position: sticky; top: 0; /* 粘性定位：贴住滚动区顶部（原来是 -10px，会把元件条切掉一截） */
     background: var(--bg-panel); /* 面板色背景，防止内容穿透 */
+    /* 面板底色是半透明的（rgba .62），不模糊的话滚上去的内容会透出字影 */
+    -webkit-backdrop-filter: blur(18px) saturate(1.25);
+    backdrop-filter: blur(18px) saturate(1.25);
     z-index: 20; padding: 4px 0 2px; /* 层级 20，内边距 */
     margin: 0 -12px; /* 负边距，使背景占满整个面板宽度 */
     padding-left: 12px; padding-right: 12px; /* 左右内边距补偿 */
@@ -1326,7 +1372,7 @@
   /* PC / 移动端通用：更多设置 chips 悬浮在元件列表（sticky-header）下方 */
   .settings-chips-wrapper { /* 更多设置工具芯片的包裹层 */
     position: sticky; /* 粘性定位 */
-    top: calc(var(--sticky-header-h, 44px) - 11px); /* 紧贴在吸顶头部下方 */
+    top: calc(var(--sticky-header-h, 44px)); /* 紧贴在元件横向条下方（v7.1.0：条恢复了，不再上叠 11px） */
     z-index: 19; /* 层级略低于吸顶头部 */
     background: var(--bg-panel); /* 面板色背景 */
     margin: 0 -12px; /* 负边距占满宽度 */

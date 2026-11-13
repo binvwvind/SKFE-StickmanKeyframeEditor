@@ -221,7 +221,7 @@ SKFE.features.colorTools = (function () {
       const eye = document.createElement('button');
       eye.type = 'button';
       eye.className = 'color-tool-btn eyedropper';
-      eye.textContent = '💧';
+      eye.innerHTML = (typeof SKFEIcon === 'function') ? SKFEIcon('water') : '💧';
       eye.title = '画面吸色';
       eye.setAttribute('aria-label', '画面吸色');
       eye.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); startColorPick(inp, eye); });

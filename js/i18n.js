@@ -82,6 +82,7 @@
     try { localStorage.setItem(STORAGE_KEY, next); } catch (e) {}
     document.documentElement.setAttribute('lang', next);
     applyTranslations(document);
+    if (typeof window.SKFEApplyIcons === 'function') window.SKFEApplyIcons(document);
     if (typeof window.SKFE_REFRESH_I18N === 'function') window.SKFE_REFRESH_I18N();
     return next;
   }
@@ -102,6 +103,7 @@
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
       applyTranslations(document);
+      if (typeof window.SKFEApplyIcons === 'function') window.SKFEApplyIcons(document);
     });
   }
 })();

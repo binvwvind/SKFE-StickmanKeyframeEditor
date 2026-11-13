@@ -270,6 +270,18 @@
       if (o1.color && o2.color) obj.color = col(o1.color, o2.color, tt);
       if (o1.light && o1.light.color && o2.light && o2.light.color) obj.light.color = col(o1.light.color, o2.light.color, tt);
       if (o1.glow && o1.glow.color && o2.glow && o2.glow.color) obj.glow.color = col(o1.glow.color, o2.glow.color, tt);
+      /* v7.2.0：描边阴影的偏移 / 羽化 / 扩展 / 不透明度也走插值，不然段内阴影是硬跳的 */
+      if (o1.glow && o2.glow) {
+        const g = obj.glow = obj.glow || {};
+        g.blur = lerp(o1.glow.blur || 0, o2.glow.blur || 0, tt);
+        g.spread = lerp(o1.glow.spread || 0, o2.glow.spread || 0, tt);
+        g.offsetX = lerp(o1.glow.offsetX || 0, o2.glow.offsetX || 0, tt);
+        g.offsetY = lerp(o1.glow.offsetY || 0, o2.glow.offsetY || 0, tt);
+        g.alpha = lerp(o1.glow.alpha == null ? 1 : o1.glow.alpha, o2.glow.alpha == null ? 1 : o2.glow.alpha, tt);
+        /* 开关是离散量：段内取起点（与 D6 一致） */
+        g.enabled = !!o1.glow.enabled;
+        g.color = obj.glow.color || o1.glow.color || '#000000';
+      }
       if (o1.joint && o1.joint.color && o2.joint && o2.joint.color) obj.joint.color = col(o1.joint.color, o2.joint.color, tt);
       if (o1.depth && o2.depth) {
         if (!obj.depth) obj.depth = {};

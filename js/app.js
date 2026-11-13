@@ -2,6 +2,11 @@
 (function () {
   'use strict';
 
+  /* ==================== 图标助手（v7.1.0） ====================
+     界面上的 emoji 全部换成 IconPark 矢量图标（js/skfe-icons.js）。
+     统一走 ic(name)：拿到一段 <svg>，颜色跟随文字，深色/浅色主题都不用改。 */
+  function ic(name) { return typeof SKFEIcon === 'function' ? SKFEIcon(name) : ''; }
+
   /* ==================== 外部模块解构（SKFE.core） ==================== */
   const { P, TAU, displayY, TRACK_ALL_ID } = SKFE.core.constants;
 
@@ -1015,8 +1020,8 @@ function syncDistortToAllFrames(obj) {
       return; 
     }
     ctrls.style.display = 'inline-flex';
-    btnToggle.textContent = refVideoVisible ? '👁' : '🚫';
-    btnPlay.textContent = (refVideoPlaying && refVideo && !refVideo.paused) ? '⏸' : '▶';
+    btnToggle.innerHTML = refVideoVisible ? ic('preview-open') : ic('forbid');
+    btnPlay.innerHTML = (refVideoPlaying && refVideo && !refVideo.paused) ? ic('pause') : ic('play');
     if (btnRefTop) btnRefTop.style.display = 'block';
   }
 
@@ -1210,11 +1215,11 @@ function syncDistortToAllFrames(obj) {
       const metaDiv = document.createElement('div');
       metaDiv.className = 'preset-meta';
       let metaHtml = `<span>LW:${(+p.data.lw).toFixed(1)}</span>`;
-      if (p.data.glow.enabled) metaHtml += ' <span>✨发光</span>';
-      if (p.data.light.enabled) metaHtml += ' <span>💡高光</span>';
-      if (p.data.extremity.enabled) metaHtml += ' <span>🦵手脚</span>';
-      if (p.data.depth && p.data.depth.enabled) metaHtml += ' <span>🌗深色</span>';
-      if (p.accessories && p.accessories.length > 0) metaHtml += ` <span>🎀x${p.accessories.length}</span>`;
+      if (p.data.glow.enabled) metaHtml += ' <span>' + ic('star-one') + '描边阴影</span>';
+      if (p.data.light.enabled) metaHtml += ' <span>' + ic('high-light') + '高光</span>';
+      if (p.data.extremity.enabled) metaHtml += ' <span>' + ic('foot') + '手脚</span>';
+      if (p.data.depth && p.data.depth.enabled) metaHtml += ' <span>' + ic('contrast') + '深色</span>';
+      if (p.accessories && p.accessories.length > 0) metaHtml += ` <span>${ic('crown')}x${p.accessories.length}</span>`;
       metaDiv.innerHTML = metaHtml;
       infoDiv.appendChild(nameDiv);
       infoDiv.appendChild(metaDiv);
@@ -1223,7 +1228,7 @@ function syncDistortToAllFrames(obj) {
       btns.className = 'preset-actions';
       const renameBtn = document.createElement('div');
       renameBtn.className = 'preset-rename';
-      renameBtn.textContent = '✎';
+      renameBtn.innerHTML = ic('pencil');
       renameBtn.title = '重命名预设';
       renameBtn.onclick = (e) => {
         e.stopPropagation();
@@ -1236,7 +1241,7 @@ function syncDistortToAllFrames(obj) {
       };
       const delBtn = document.createElement('div');
       delBtn.className = 'preset-del';
-      delBtn.textContent = '✕';
+      delBtn.innerHTML = ic('close');
       delBtn.title = '删除';
       delBtn.onclick = (e) => {
         e.stopPropagation();
@@ -1291,7 +1296,7 @@ function syncDistortToAllFrames(obj) {
     updatePresetListUI();
     nameInput.value = '';
     const btn = document.getElementById('btnSavePreset');
-    btn.textContent = '已保存 ✓';
+    btn.innerHTML = '已保存' + ic('check-correct');
     btn.classList.add('is-saved');
     setTimeout(() => { btn.textContent = '保存预设'; btn.classList.remove('is-saved'); }, 1000);
   }
@@ -1312,7 +1317,7 @@ function syncDistortToAllFrames(obj) {
     f.bodyScale = JSON.parse(JSON.stringify(d.bodyScale));
     f.headAngle = d.headAngle;
     f.light = JSON.parse(JSON.stringify(d.light));
-    f.glow = JSON.parse(JSON.stringify(d.glow));
+    f.glow = glowFill(JSON.parse(JSON.stringify(d.glow || {})));
     f.joint = JSON.parse(JSON.stringify(d.joint));
     f.extremity = JSON.parse(JSON.stringify(d.extremity));
     f.layer = JSON.parse(JSON.stringify(d.layer));
@@ -1403,7 +1408,7 @@ function syncDistortToAllFrames(obj) {
     applyBtn.onclick = (e) => { e.stopPropagation(); applyActionPreset(p); };
     const delBtn = document.createElement('div');
     delBtn.className = 'preset-del';
-    delBtn.textContent = '✕';
+    delBtn.innerHTML = ic('close');
     delBtn.onclick = (e) => {
       e.stopPropagation();
       if (confirm('确定删除该动作吗？')) {
@@ -1990,7 +1995,7 @@ function importActionPresets() {
 
   function updateLockPanelUI() {
     if (!btnLockPanel) return;
-    btnLockPanel.textContent = isPanelLocked ? '🔓 解锁面板位置' : '🔒 锁定面板位置';
+    btnLockPanel.innerHTML = (isPanelLocked ? ic('unlock') : ic('lock')) + (isPanelLocked ? '解锁面板位置' : '锁定面板位置');
     btnLockPanel.classList.toggle('active', isPanelLocked);
     uiPanel.classList.toggle('ui-locked', isPanelLocked);
   }
@@ -2062,7 +2067,7 @@ function importActionPresets() {
 
   function syncResizeUI() {
     if (btnToggleResize) {
-      btnToggleResize.textContent = uiResizable ? '📐 关闭自由缩放' : '📐 开启自由缩放';
+      btnToggleResize.innerHTML = ic('scale') + (uiResizable ? '关闭自由缩放' : '开启自由缩放');
       btnToggleResize.classList.toggle('active', uiResizable);
     }
     if (uiResizeHandle) {
@@ -2269,7 +2274,7 @@ function importActionPresets() {
     });
     setTimeout(resize, 100);
     const tip = document.createElement('div');
-    tip.textContent = '💡 双指拖动平移，捏合缩放';
+    tip.innerHTML = ic('tips') + '双指拖动平移，捏合缩放';
     tip.className = 'ui-toast mobile-tip';
     document.body.appendChild(tip);
     setTimeout(() => { tip.style.opacity = '0'; }, 2500);
@@ -2383,7 +2388,8 @@ function importActionPresets() {
       headAngle: -Math.PI / 2 - 15 * Math.PI / 180,
       headOffset: { x: 0, y: 0 },
       light: { enabled: false, color: '#ffbb66', size: 1.0, angle: 315 },
-      glow: { enabled: false, color: '#ff9d3d', alpha: 0.8, blur: 18 },
+      /* v7.2.0：默认值换成描边阴影的常规参数（右下轻投影），旧字段名保留兼容老工程 */
+      glow: { enabled: false, color: '#000000', alpha: 0.45, blur: 14, offsetX: 3, offsetY: -4, spread: 0, includeAcc: false },
       joint: { enabled: false, color: '#ff0000', len: 0.5 },
       jointSmooth: 1,
       extremity: {
@@ -3115,94 +3121,198 @@ function importActionPresets() {
     });
   }
 
-  /* ==================== 轮廓外发光 ==================== */
-  function drawFigureGlow(f, j, curLW, radius, alphaMul, armLpts, armRpts, legLpts, legRpts) {
-    const allPts = [j.pelvis, j.waistPoint, j.neck, j.headC, ...armLpts, ...armRpts, ...legLpts, ...legRpts];
-    let minX = j.headC.x - j.headR, maxX = j.headC.x + j.headR;
-    let minY = j.headC.y - j.headR, maxY = j.headC.y + j.headR;
-    for (const p of allPts) {
-      if (p.x < minX) minX = p.x;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.y > maxY) maxY = p.y;
-    }
-    const pad = curLW + (f.glow.blur || 0) * 2 + 24;
-    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
-    const w = maxX - minX, h = maxY - minY;
-    if (w <= 1 || h <= 1 || w > 4000 || h > 4000) return;
+  /* ==================== 描边阴影（v7.2.0，原「轮廓外发光」） ====================
+     剪影不再是「手画一遍线条」，而是把【人物 + 勾选的绑定件】整组交给
+     renderScene() 走正常渲染管线画进离屏，再压成一个纯色罩子。
+     这样画笔(ink)、形状、对话框、配饰、扭曲……全都不用手写第二套画法。
 
-    const off = document.createElement('canvas');
-    off.width = Math.ceil(w);
-    off.height = Math.ceil(h);
-    const octx = off.getContext('2d');
-    octx.translate(-minX, -minY);
-    octx.strokeStyle = f.glow.color;
-    octx.fillStyle = f.glow.color;
-    octx.lineWidth = curLW;
+     两个曾经踩过的坑，写在这里免得再犯：
+     ① 剪影离屏必须按**当前设备比例**开（k = hypot(m.a, m.b)）。
+        1:1 画完再放大，边缘会被重采样成毛边 —— 羽化滑条拉到 0 还是一圈糊边，
+        就是这个原因（不是羽化没关掉）。
+     ② 不能用主画布的 ctx.shadow*：shadowBlur / shadowOffset 是设备像素、不吃 CTM，
+        为了让阴影和本体分开又得把源图推到画布外，缩放一大 Chrome 就整块裁掉。 */
+
+  /* 描边阴影的调试输出：只有 ?debug=1 且打开 __glowDebug 时才写，平时零开销 */
+  function gdbg(k, v) {
+    if (!window.__glowDebug) return;
+    if (!window.__glowDbg) window.__glowDbg = {};
+    window.__glowDbg[k] = v;
+  }
+
+  /* 挂在这个火柴人身上的所有绑定件（配饰 / 画笔 / 形状 / 对话框 / 图片） */
+  function boundObjsOf(f) {
+    const list = _renderList || AppState.objects || [];
+    const out = [];
+    for (const o of list) {
+      if (!o || o === f || o.hidden) continue;
+      if (o.type === 'camera' || o.type === 'figure' || o.type === 'video') continue;
+      if (o.bindTo === 'none' || !o.targetId) continue;
+      if (String(o.targetId) !== String(f.id)) continue;
+      out.push(o);
+    }
+    return out;
+  }
+
+  function drawFigureGlow(f, j, curLW, radius, alphaMul, armLpts, armRpts, legLpts, legRpts) {
+    const gBlur = Math.max(0, +f.glow.blur || 0);
+    const gSpread = Math.max(0, +f.glow.spread || 0);
+    const gOffX = +f.glow.offsetX || 0;
+    /* 面板上的 Y 正数 = 向上（和坐标输入、Y 轴吸附保持同一套 displayY 约定），
+       画布 y 轴向下，所以这里取负。 */
+    const gOffY = -(+f.glow.offsetY || 0);
+    const gColor = f.glow.color || '#000000';
+    const group = f.glow.includeAcc ? boundObjsOf(f) : [];
+    gdbg('inc', !!f.glow.includeAcc);
+    gdbg('ids', group.map(o => o.id + ':' + o.type));
+
+    /* ---- 包围盒：人物 + 并进来的绑定件（统一用 getObjectBounds，各类型都覆盖到了） ----
+       任何一个元件算不出有效包围盒（比如图元还没加载出 img，w/h 是 undefined → NaN），
+       都不能把它并进来、更不能让它把整体的 min/max 污染成 NaN —— 那会让整个阴影直接消失。 */
+    const okBox = (b) => !!b && Number.isFinite(b.left) && Number.isFinite(b.right)
+      && Number.isFinite(b.top) && Number.isFinite(b.bottom);
+    const fb = getObjectBounds(f);
+    if (!okBox(fb)) return;
+    let minX = fb.left, maxX = fb.right, minY = fb.top, maxY = fb.bottom;
+    for (const o of group) {
+      let b = null;
+      try { b = getObjectBounds(o); } catch (_) { b = null; }
+      if (!okBox(b)) continue;
+      if (b.left < minX) minX = b.left;
+      if (b.right > maxX) maxX = b.right;
+      if (b.top < minY) minY = b.top;
+      if (b.bottom > maxY) maxY = b.bottom;
+    }
+    gdbg('bb', [Math.round(minX), Math.round(minY), Math.round(maxX), Math.round(maxY)]);
+    const reach = gBlur * 2.5 + gSpread + Math.max(Math.abs(gOffX), Math.abs(gOffY)) + 8;
+    minX -= reach; minY -= reach; maxX += reach; maxY += reach;
+    const W = maxX - minX, H = maxY - minY;
+    if (!(W > 1) || !(H > 1)) return;
+
+    /* ---- 设备比例：按它开离屏，羽化为 0 时边缘才是干净的 ---- */
+    let k = 1;
+    try {
+      const m = ctx.getTransform ? ctx.getTransform() : null;
+      /* 缩放小于 1（缩小视图）时也不要低于 1:1：宁可多几个像素，
+         否则离屏先降采样、贴回时再放大，羽化为 0 也会带出一圈毛边。 */
+      if (m) { const v = Math.hypot(m.a, m.b); if (v > 0.05) k = Math.min(3, Math.max(1, v)); }
+    } catch (_) { k = 1; }
+    if (W * k > 4096) k = 4096 / W;
+    if (H * k > 4096) k = 4096 / H;
+    if (!(k > 0.15)) return;
+
+    const offCv = document.createElement('canvas');
+    offCv.width = Math.max(1, Math.ceil(W * k));
+    offCv.height = Math.max(1, Math.ceil(H * k));
+    const octx = offCv.getContext('2d');
+    octx.setTransform(k, 0, 0, k, -minX * k, -minY * k);
     octx.lineCap = 'round';
     octx.lineJoin = 'round';
 
+    /* ---- 剪影：整组走一遍正常渲染管线 ----
+       逐个元件单独画：剪影是并集，绘制顺序无关紧要，但**一个元件抛错不能连坐整组**。
+       （早先整组一次 renderScene，配饰里只要有一个画不出来，人物的阴影也一起没了。）
+       每个元件外面套 save/restore，抛错时把画布状态完整恢复，避免脏 CTM 污染后面的元件。 */
     const savedCtx = ctx;
     ctx = octx;
+    /* ctx 是模块级共享变量，必须在 finally 里换回来 ——
+       否则中途抛出会让后续所有绘制都画进这个离屏画布。 */
     try {
-      const drawGlowLimb = (limbName, pts) => {
-        const needsMask = f.layer[limbName] < f.layer.head && !(f.headFilled || f.headFillCustom);
-        if (needsMask) {
-          ctx.save();
-          clipOutHeadHole(ctx, f, j, curLW);
-        }
-        ctx.beginPath(); smoothPolyline(pts, radius); ctx.stroke();
-        const startP = pts[0], endP = pts[pts.length - 1];
-        ctx.beginPath(); ctx.arc(startP.x, startP.y, curLW / 2, 0, TAU); ctx.fill();
-        ctx.beginPath(); ctx.arc(endP.x, endP.y, curLW / 2, 0, TAU); ctx.fill();
-        if (needsMask) ctx.restore();
-      };
-
-      const drawGlowHead = () => {
-        const hShape = headShapeOf(f);
-        if (hShape) {
-          /* 外发光也沿手绘头型走，否则会在圆形位置冒出个光晕 */
-          paintHeadShape(ctx, j, f, hShape, ctx.fillStyle, (f.headFilled || f.headFillCustom) ? 'solid' : 'ring');
-          return;
-        }
-        ctx.beginPath(); ctx.arc(j.headC.x, j.headC.y, j.headR, 0, TAU);
-        if (f.headFilled || f.headFillCustom) ctx.fill(); else ctx.stroke();
-      };
-
-      const drawGlowBody = () => {
-        const needsMask = f.layer.body < f.layer.head && !(f.headFilled || f.headFillCustom);
-        if (needsMask) {
-          ctx.save();
-          clipOutHeadHole(ctx, f, j, curLW);
-        }
-        ctx.beginPath(); smoothPolyline([j.pelvis, j.waistPoint, j.neck], radius); ctx.stroke();
-        if (needsMask) ctx.restore();
-      };
-
-      let layerLegL = f.layer.legL;
-      let layerArmL = f.layer.armL;
-      if (f.depth && f.depth.enabled) {
-        layerLegL = Math.min(layerLegL, f.layer.body - 1);
-        layerArmL = Math.min(layerArmL, f.layer.body - 1);
+      const refList = _renderList || AppState.objects;
+      const silList = group.length ? [f].concat(group) : [f];
+      let drewAny = false;
+      for (const o of silList) {
+        octx.save();
+        try {
+          /* isGhost 会关掉它自己的发光/地面投影/高光 —— 这里正好用来防递归 */
+          renderScene([o], { isExporting: true, isGhost: true, refList });
+          drewAny = true;
+        } catch (err) {
+          gdbg('err', (window.__glowDbg && window.__glowDbg.err ? window.__glowDbg.err + ' | ' : '') + (o.type + ':' + o.id + ' ' + String(err && err.message || err)));
+        } finally { octx.restore(); }
       }
-
-      const items = [
-        { level: layerLegL, draw: () => drawGlowLimb('legL', legLpts) },
-        { level: layerArmL, draw: () => drawGlowLimb('armL', armLpts) },
-        { level: f.layer.legR, draw: () => drawGlowLimb('legR', legRpts) },
-        { level: f.layer.armR, draw: () => drawGlowLimb('armR', armRpts) },
-        { level: f.layer.head, draw: drawGlowHead },
-        { level: f.layer.body, draw: drawGlowBody }
-      ];
-      items.sort((a, b) => a.level - b.level);
-      for (const it of items) it.draw();
+      if (!drewAny) {
+        /* 一个都画不出来时，退回只描人物躯干+头，至少还有个轮廓 */
+        try {
+          octx.strokeStyle = gColor;
+          octx.fillStyle = gColor;
+          octx.lineWidth = curLW;
+          octx.beginPath();
+          smoothPolyline([j.pelvis, j.waistPoint, j.neck], radius);
+          octx.stroke();
+          octx.beginPath();
+          octx.arc(j.headC.x, j.headC.y, j.headR, 0, TAU);
+          octx.stroke();
+        } catch (_) { /* 彻底放弃 */ }
+      }
     } finally { ctx = savedCtx; }
 
+    /* ---- 压成纯色罩子：配饰/画笔本身是彩色的，不压阴影会变成彩色的 ---- */
+    octx.setTransform(1, 0, 0, 1, 0, 0);
+    octx.globalCompositeOperation = 'source-in';
+    octx.globalAlpha = 1;
+    octx.fillStyle = gColor;
+    octx.fillRect(0, 0, offCv.width, offCv.height);
+    octx.globalCompositeOperation = 'source-over';
+    if (window.__glowDebug) {
+      try {
+        const px = octx.getImageData(0, 0, offCv.width, offCv.height).data;
+        let n = 0; for (let i = 3; i < px.length; i += 4) if (px[i] > 8) n++;
+        gdbg('off', n);
+      } catch (_) {}
+    }
+
+    /* ---- 扩展（扩散）：按圆周把罩子向外膨胀，半径是设备像素 ---- */
+    let srcCv = offCv, sw = offCv.width, sh = offCv.height, sxDev = 0, syDev = 0;
+    const spDev = gSpread * k;
+    if (spDev > 0.5) {
+      const d = Math.ceil(spDev);
+      const dw = sw + d * 2, dh = sh + d * 2;
+      if (dw <= 4096 && dh <= 4096) {
+        const dc = document.createElement('canvas');
+        dc.width = dw; dc.height = dh;
+        const dctx = dc.getContext('2d');
+        const passes = Math.min(28, Math.max(8, Math.ceil(spDev * 1.2)));
+        for (let i = 0; i < passes; i++) {
+          const a = i / passes * TAU;
+          dctx.drawImage(offCv, d + Math.cos(a) * spDev, d + Math.sin(a) * spDev);
+        }
+        srcCv = dc; sw = dw; sh = dh; sxDev = -d; syDev = -d;
+      }
+    }
+
+    /* ---- 偏移 + 羽化：全在设备像素里做，最后一次性贴回 ---- */
+    const blurDev = gBlur * k;
+    const offDevX = gOffX * k, offDevY = gOffY * k;
+    const bleed = Math.ceil(blurDev * 2.5 + Math.abs(offDevX) + Math.abs(offDevY) + 6);
+    const scW = sw + bleed * 2, scH = sh + bleed * 2;
+    if (scW > 4096 || scH > 4096) return;
+    const shCv = document.createElement('canvas');
+    shCv.width = scW; shCv.height = scH;
+    const sctx = shCv.getContext('2d');
+    if (blurDev > 0.15 && typeof sctx.filter === 'string') {
+      sctx.filter = 'blur(' + blurDev + 'px)';
+      sctx.drawImage(srcCv, bleed + offDevX, bleed + offDevY, sw, sh);
+      sctx.filter = 'none';
+    } else if (blurDev > 0.15) {
+      /* 老浏览器没有 ctx.filter：退回 shadow 影子法（源图推到这张小画布外，只留阴影） */
+      const G = scW + 200;
+      sctx.shadowColor = gColor;
+      sctx.shadowBlur = blurDev;
+      sctx.shadowOffsetX = offDevX + G;
+      sctx.shadowOffsetY = offDevY;
+      sctx.drawImage(srcCv, bleed - G, bleed, sw, sh);
+    } else {
+      /* 羽化 0：直接贴，不加任何滤镜 —— 边缘保持原始清晰度 */
+      sctx.drawImage(srcCv, bleed + offDevX, bleed + offDevY, sw, sh);
+    }
+
+    const dx = minX + (sxDev - bleed) / k;
+    const dy = minY + (syDev - bleed) / k;
     ctx.save();
-    ctx.globalAlpha = f.alpha * f.glow.alpha * alphaMul;
-    ctx.shadowColor = f.glow.color;
-    ctx.shadowBlur = f.glow.blur;
-    ctx.drawImage(off, minX, minY, w, h);
+    ctx.globalAlpha = Math.max(0, Math.min(1, f.alpha * (f.glow.alpha == null ? 1 : f.glow.alpha) * alphaMul));
+    gdbg('draw', { a: +ctx.globalAlpha.toFixed(3), dx: Math.round(dx), dy: Math.round(dy), w: Math.round(scW / k), h: Math.round(scH / k), k: +k.toFixed(3), cv: [offCv.width, offCv.height] });
+    ctx.drawImage(shCv, dx, dy, scW / k, scH / k);
     ctx.restore();
   }
 
@@ -3231,7 +3341,11 @@ function importActionPresets() {
     /* 画到盒外的元素（发光 / 描边偏移 / 地面投影）要留出余量，否则会被切掉。
        余量只是把「源矩形」放大，单应性本身不变，所以控制点位置完全不受影响。 */
     let margin = 8;
-    if (f.glow && f.glow.enabled && f.glow.blur > 0) margin += f.glow.blur;
+    if (f.glow && f.glow.enabled) {
+      const gb = +f.glow.blur || 0, gs = +f.glow.spread || 0;
+      const gx = Math.abs(+f.glow.offsetX || 0), gy = Math.abs(+f.glow.offsetY || 0);
+      margin += Math.max(gb * 2.5, 0) + gs + Math.max(gx, gy);
+    }
     if (f.light && f.light.enabled) margin += 2 * (f.light.size || 1) + 4;
     if (groundShadowEnabled) margin += 48;
 
@@ -3408,10 +3522,23 @@ function importActionPresets() {
       };
     };
 
-    if (!isGhost && f.glow.enabled && f.glow.blur > 0) {
+    /* v7.2.0：描边阴影不只是模糊 —— 扩展 / 偏移任意一项非 0 都要画 */
+    const glowOn = f.glow && f.glow.enabled &&
+      ((+f.glow.blur || 0) > 0 || (+f.glow.spread || 0) > 0 || (+f.glow.offsetX || 0) !== 0 || (+f.glow.offsetY || 0) !== 0);
+    if (!isGhost && glowOn) {
       renderQueue.push({
         level: minOwnLayer - 1,
-        draw: wrapFig(() => drawFigureGlow(f, j, curLW, radius, alphaMul, armLpts, armRpts, legLpts, legRpts))
+        /* 包一层 try/catch：描边阴影出任何岔子都只是「没有阴影」，
+           绝不能把人物的绘制一起带崩（否则整个画布都画不出来）。 */
+        /* 注意：这里**不能**套 wrapFig。剪影是在离屏里用 renderScene 重画的，
+           人物自身的 f.rot / f.mirror 已经在那一次里烘焙进去了；再套一层 wrapFig
+           会把整张阴影贴图按 f.x/f.y 再转一次 —— 表现就是「影子转到人物另一边」。 */
+        draw: () => {
+          const st = ctx.save ? (ctx.save(), true) : false;
+          try { drawFigureGlow(f, j, curLW, radius, alphaMul, armLpts, armRpts, legLpts, legRpts); }
+          catch (err) { try { console.warn('[glow] 描边阴影绘制失败：', err); } catch (_) {} }
+          finally { if (st) { try { ctx.restore(); } catch (_) {} } }
+        }
       });
     }
 
@@ -5485,26 +5612,26 @@ function importActionPresets() {
     if (!el) return;
     
     if (AppState.canvasSelected && AppState.canvasBoundsEnabled && !isPlaying) {
-      document.getElementById('coordType').textContent = '🖼 画布';
+      document.getElementById('coordType').innerHTML = ic('picture') + ' 画布';
       document.getElementById('coordXY').textContent =
         `X: ${Math.round(AppState.canvasBounds.x + AppState.canvasBounds.w / 2)}  Y: ${Math.round(displayY(AppState.canvasBounds.y + AppState.canvasBounds.h / 2))}`;
     } else if (AppState.selected && !isPlaying) {
       let x, y, typeIcon, typeName;
       if (AppState.selected.type === 'figure' || AppState.selected.type === 'image' || AppState.selected.type === 'video') {
         x = AppState.selected.x; y = AppState.selected.y;
-        typeIcon = AppState.selected.type === 'figure' ? '🖤' : AppState.selected.type === 'image' ? '🌇' : '🎥';
+        typeIcon = AppState.selected.type === 'figure' ? 'stickman' : AppState.selected.type === 'image' ? 'add-picture' : 'videocamera';
         typeName = AppState.selected.name;
       } else if (AppState.selected.type === 'camera') {
         x = AppState.selected.x; y = AppState.selected.y;
-        typeIcon = '🎥';
+        typeIcon = 'videocamera';
         typeName = AppState.selected.name;
       } else {
         const tr = getBindTransform(AppState.selected);
         x = tr.x; y = tr.y;
-        typeIcon = AppState.selected.type === 'acc' ? '👑' : AppState.selected.type === 'shape' ? '🔷' : '💬';
+        typeIcon = AppState.selected.type === 'acc' ? 'crown' : AppState.selected.type === 'shape' ? 'square' : 'comment-one';
         typeName = AppState.selected.name;
       }
-      document.getElementById('coordType').textContent = typeIcon + ' ' + typeName;
+      document.getElementById('coordType').innerHTML = ic(typeIcon) + ' ' + typeName;
       document.getElementById('coordXY').textContent = `X: ${Math.round(x)}  Y: ${Math.round(displayY(y))}`;
     } else {
       if (!tboxDrag && !coordFlashTimer && el.style.opacity !== '0' && el.style.display !== 'none') {
@@ -6362,15 +6489,16 @@ function importActionPresets() {
       .sort((a, b) => layerSortVal(b) - layerSortVal(a));
   }
 
-  function layerItemEmoji(o) {
-    if (o.type === 'figure') return '🖤';
-    if (o.type === 'image') return '🌇';
-    if (o.type === 'acc') return '👑';
-    if (o.type === 'shape') return '🔷';
-    if (o.type === 'bubble') return '💬';
-    if (o.type === 'ink') return '🖌';
-    if (o.type === 'camera') return '🎥';
-    return '❓';
+  /* 元件类型 → 图标 id（原来是 emoji，现在是 SVG，统一交给 ic() 渲染） */
+  function layerItemIconId(o) {
+    if (o.type === 'figure') return 'stickman';
+    if (o.type === 'image') return 'add-picture';
+    if (o.type === 'acc') return 'crown';
+    if (o.type === 'shape') return 'square';
+    if (o.type === 'bubble') return 'comment-one';
+    if (o.type === 'ink') return 'pencil';
+    if (o.type === 'camera') return 'videocamera';
+    return 'help';
   }
 
   function layerThumbURL(o) {
@@ -6506,7 +6634,7 @@ function importActionPresets() {
       } else {
         const em = document.createElement('span');
         em.className = 'lp-emoji';
-        em.textContent = layerItemEmoji(o);
+        em.innerHTML = ic(layerItemIconId(o));
         wrap.appendChild(em);
       }
       item.appendChild(wrap);
@@ -6517,7 +6645,7 @@ function importActionPresets() {
       const eye = document.createElement('button');
       eye.type = 'button';
       eye.className = 'lp-eye' + (o.hidden ? ' on' : '');
-      eye.textContent = o.hidden ? '🙈' : '👁';
+      eye.innerHTML = o.hidden ? ic('forbid') : ic('preview-open');
       eye.title = o.hidden ? tr2('layerPop.showTip', '点击显示（全帧生效）') : tr2('layerPop.hideTip', '点击隐藏（全帧生效）');
       eye.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
       eye.addEventListener('click', (e) => {
@@ -6531,7 +6659,7 @@ function importActionPresets() {
       const lock = document.createElement('button');
       lock.type = 'button';
       lock.className = 'lp-lock' + (o.locked ? ' on' : '');
-      lock.textContent = o.locked ? '🔒' : '🔓';
+      lock.innerHTML = o.locked ? ic('lock') : ic('unlock');
       lock.title = o.locked ? tr2('layerPop.unlockTip', '点击解锁') : tr2('layerPop.lockTip', '点击锁定（锁定后画布上无法拖动/选中）');
       lock.setAttribute('aria-pressed', o.locked ? 'true' : 'false');
       lock.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
@@ -6545,6 +6673,22 @@ function importActionPresets() {
       });
       rail.appendChild(lock);
 
+      /* v7.1.0：每行一个删除按钮 —— 顶部那排的「删除」已经拿掉，删除统一在这里做。
+         点哪行删哪行，不用先选中；删火柴人时挂在他身上的配饰/画笔会一起删（deleteSelected 的逻辑）。 */
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'lp-del';
+      del.innerHTML = ic('delete');
+      del.title = tr2('layerPop.delTip', '删除这个元件');
+      del.setAttribute('aria-label', tr2('layerPop.delTip', '删除这个元件'));
+      del.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (AppState.selected !== o) select(o);   /* deleteSelected 作用于当前选中项 */
+        deleteSelected();
+      });
+      rail.appendChild(del);
+
       const handle = document.createElement('div');
       handle.className = 'lp-drag';
       handle.textContent = '≡';
@@ -6556,12 +6700,13 @@ function importActionPresets() {
 
       const name = document.createElement('span');
       name.className = 'lp-name';
-      name.textContent = o.name || layerItemEmoji(o);
+      if (o.name) name.textContent = o.name;
+      else name.innerHTML = ic(layerItemIconId(o));
       item.appendChild(name);
 
       item.title = (o.name || '') + (o.hidden ? '（已隐藏）' : '') + (o.locked ? '（已锁定）' : '');
       item.addEventListener('click', (e) => {
-        if (e.target.closest('.lp-eye') || e.target.closest('.lp-drag') || e.target.closest('.lp-lock')) return;
+        if (e.target.closest('.lp-eye') || e.target.closest('.lp-drag') || e.target.closest('.lp-lock') || e.target.closest('.lp-del')) return;
         select(o);
         EventBus.emit('need:render');
         renderLayerPop();
@@ -6771,8 +6916,9 @@ function importActionPresets() {
   }
 
   function updateLayerList() {
-    /* v7.0.6：横向缩略图条已从面板里删掉，元件列表统一由 #layerPop 的纵向列表承担。
-       这里保留函数签名（多处 syncUI 会调），只把「浮窗该重画了」这个信号转发出去。 */
+    /* v7.1.0：横向缩略图条恢复了（住在「基础属性」正上方，吸顶）。
+       v7.0.6 期间它被删掉、这个函数只转发重绘信号；现在有 #layerList 就正常画，
+       没有（老 HTML）就退回只刷新纵向列表。 */
     if (!layerListEl) { scheduleRenderLayerPop(); return; }
     layerListEl.innerHTML = '';
     let idx = 1;
@@ -6794,16 +6940,16 @@ function importActionPresets() {
       if (o.locked === undefined) o.locked = false;
       const btn = document.createElement('div');
       btn.className = 'layer-btn' + (o === AppState.selected ? ' active' : '') + (o.locked ? ' locked' : '');
-      let icon = '❓';
-      if (o.type === 'figure') icon = '🖤';
-      else if (o.type === 'image') icon = '🌇';
-      else if (o.type === 'acc') icon = '👑';
-      else if (o.type === 'shape') icon = '🔷';
-      else if (o.type === 'bubble') icon = '💬';
-      else if (o.type === 'ink') icon = '🖌'; // brush-v5.1.0: §6.3.9
-      else if (o.type === 'camera') icon = '🎥';
-      else if (o.type === 'video') icon = '🎞'; /* 兜底：万一别处把视频带进来，也不要显示 ❓ */
-      btn.innerHTML = `<span>${icon}</span><span class="idx">${idx++}</span>`;
+      let icon = 'help';
+      if (o.type === 'figure') icon = 'stickman';
+      else if (o.type === 'image') icon = 'add-picture';
+      else if (o.type === 'acc') icon = 'crown';
+      else if (o.type === 'shape') icon = 'square';
+      else if (o.type === 'bubble') icon = 'comment-one';
+      else if (o.type === 'ink') icon = 'pencil'; // brush-v5.1.0: §6.3.9
+      else if (o.type === 'camera') icon = 'videocamera';
+      else if (o.type === 'video') icon = 'video'; /* 兜底：万一别处把视频带进来，也不要显示问号 */
+      btn.innerHTML = `<span>${ic(icon)}</span><span class="idx">${idx++}</span>`;
       attachLayerName(btn, o);
       if (o.hidden) { btn.classList.add('hidden-obj'); btn.title = (o.name || '') + '（已隐藏）'; }
       btn.onclick = () => { select(o); EventBus.emit('need:render'); };
@@ -6813,10 +6959,10 @@ function importActionPresets() {
     if (AppState.selected && btnToggleLock) {
       btnToggleLock.style.display = 'block';
       if (AppState.selected.locked) {
-        btnToggleLock.textContent = '🔒 解锁';
+        btnToggleLock.innerHTML = ic('unlock') + '解锁';
         btnToggleLock.classList.add('danger');
       } else {
-        btnToggleLock.textContent = '🔓 锁定';
+        btnToggleLock.innerHTML = ic('lock') + '锁定';
         btnToggleLock.classList.remove('danger');
       }
     } else if (btnToggleLock) {
@@ -7489,6 +7635,155 @@ function importActionPresets() {
     return (lo === null) ? null : { lo: lo, hi: hi };
   }
 
+  /* ==================== 帧槽位移动（v7.2.0） ====================
+     拖动帧块和调试入口共用这一份逻辑。
+
+     以前有个憋屈的现象：9 帧的动画、k9 是这一段的最后一个关键帧，
+     把 k9 拖到第 5 帧之后，第 6~9 帧会集体变空白 ——
+     段变成 1→5 之后，第 5 帧后面那些派生帧既不在任何段里（orphan），
+     又被当成「没有内容的槽位」，于是整条尾巴一起消失。
+
+     现在分两步：
+     ① 落点：把源帧的槽位数据搬到落点（覆盖落点原来的内容），源位留空；
+     ② 补空：第一个关键帧之前、最后一个关键帧之后的空槽 / 悬空派生槽，
+        一律补成最近关键帧的复制帧（普通帧，不带关键帧身份），
+        姿态自然延展到首尾；有实体数据的普通帧保持原样，不会被覆盖。
+     段内的空槽交给 reconcile 归一化成派生帧，不做实体复制。
+
+     第 ① 步为什么用「覆盖」而不是「插入位移」：
+     帧是姿态，不是列表项。k9 拖到第 5 格，就是「第 5 格改用 k9 的姿态」，
+     后面的 6~9 跟着这个姿态延展；如果改成插入位移，被挤到后面的旧 k5
+     会插在中间，尾巴就不是同一姿态了。 */
+  function fillLooseFrames(trackId) {
+    const t = AppState.tracks[trackId];
+    if (!t || !t.frames || !t.frames.length) return 0;
+    const arr = t.frames;
+    let first = -1, last = -1;
+    for (let i = 0; i < arr.length; i++) { if (KF.isKey(arr[i])) { first = i; break; } }
+    if (first < 0) return 0;                     /* 一个关键帧都没有，无从补起 */
+    for (let i = arr.length - 1; i >= 0; i--) { if (KF.isKey(arr[i])) { last = i; break; } }
+    let filled = 0;
+    const put = (i, src) => {
+      const d = arr[i];
+      if (d != null && !KF.isDerived(d)) return; /* 有实体数据，别动 */
+      const c = cloneObjectKeepImg(src);
+      if (!c) return;
+      delete c[KF.KEY];                          /* 复制品是普通帧 */
+      delete c[KF.DERIVED];
+      if (src.img) c.img = src.img;
+      arr[i] = c;
+      filled++;
+    };
+    const headSrc = arr[first];
+    for (let i = 0; i < first; i++) put(i, headSrc);           /* 段前留白 → 首帧姿态 */
+    const tailSrc = arr[last];
+    for (let i = last + 1; i < arr.length; i++) put(i, tailSrc); /* 段后留白 → 末关键帧姿态 */
+    return filled;
+  }
+
+  /* 老名字保留（调试脚本还在用），只补尾巴 */
+  function repairTailAfterLastKey(trackId) {
+    const t = AppState.tracks[trackId];
+    if (!t || !t.frames || !t.frames.length) return 0;
+    const arr = t.frames;
+    let last = -1;
+    for (let i = arr.length - 1; i >= 0; i--) { if (KF.isKey(arr[i])) { last = i; break; } }
+    if (last < 0 || last >= arr.length - 1) return 0;
+    const src = arr[last];
+    if (!KF.isReal(src)) return 0;
+    let filled = 0;
+    for (let i = last + 1; i < arr.length; i++) {
+      const d = arr[i];
+      if (d != null && !KF.isDerived(d)) continue;
+      const c = cloneObjectKeepImg(src);
+      if (!c) continue;
+      delete c[KF.KEY];
+      delete c[KF.DERIVED];
+      if (src.img) c.img = src.img;
+      arr[i] = c;
+      filled++;
+    }
+    return filled;
+  }
+
+  function applyFrameMove(fromIndex, targetIndex, opts) {
+    const total = AppState.frames.length;
+    if (!total) return false;
+    const from = Math.max(0, Math.min(fromIndex, total - 1));
+    const to = Math.max(0, Math.min(targetIndex, total - 1));
+    if (from === to) return false;
+    const reorder = !!(opts && opts.reorder);     /* 按住 Alt 拖动 = 整帧挪位重排 */
+
+    if (isSubTrackMode()) {
+      /* 子轨道：只在当前 track 内动，绝不碰其他 track */
+      const t = AppState.tracks[AppState.activeTrackId];
+      if (!t || !t.frames) return false;
+      const arr = t.frames;
+      while (arr.length < total) arr.push(null);
+      const a = Math.min(from, arr.length - 1);
+      const b = Math.min(to, arr.length - 1);
+      if (reorder) {
+        const [mv] = arr.splice(a, 1);
+        arr.splice(b, 0, mv);
+      } else {
+        const mv = arr[a];
+        arr[a] = null;
+        arr[b] = mv;
+      }
+      fillLooseFrames(AppState.activeTrackId);
+      AppState.currentFrameIndex = b;
+    } else if (reorder) {
+      /* 全局重排：帧元信息与所有 track 同步位移一位 */
+      const [moved] = AppState.frames.splice(from, 1);
+      AppState.frames.splice(to, 0, moved);
+      for (const id in AppState.tracks) {
+        const t = AppState.tracks[id];
+        if (!t) continue;
+        if (!t.frames) t.frames = [];
+        const arr = t.frames;
+        while (arr.length < from) arr.push(null);
+        const removed = arr.splice(from, 1);
+        const movedData = removed.length ? removed[0] : null;
+        const insertAt = Math.max(0, Math.min(to, arr.length));
+        arr.splice(insertAt, 0, movedData);
+        fillLooseFrames(id);
+      }
+      AppState.currentFrameIndex = to;
+    } else {
+      /* 全局覆盖：默认行为 —— 落点那一格改用源帧的姿态，源位腾空后补空 */
+      for (const id in AppState.tracks) {
+        const t = AppState.tracks[id];
+        if (!t) continue;
+        if (!t.frames) t.frames = [];
+        const arr = t.frames;
+        while (arr.length < total) arr.push(null);
+        const mv = arr[from];
+        arr[from] = null;
+        arr[to] = mv;
+        fillLooseFrames(id);
+      }
+      const mFrom = AppState.frames[from], mTo = AppState.frames[to];
+      if (mFrom && mTo) { mTo.isTween = mFrom.isTween; mTo.duration = mFrom.duration; }
+      AppState.currentFrameIndex = to;
+    }
+
+    /* 重排后重新归一化槽位身份（段内 → 派生，段外悬空派生 → 空白），
+       顺序必须在补空之后：先补，reconcile 才不会把刚补的实体帧又抹掉。 */
+    reconcileAllTracks();
+    syncMainLengthFromTracks();
+    trimTrailingEmptyFrames();
+    invalidateAllFrameThumbs();
+    AppState.objects = getCombinedObjectsForRender();
+    AppState.selected = isSubTrackMode() ? getActiveTrackObject() : null;
+    if (isSubTrackMode()) { AppState.canvasSelected = false; cancelTransformBoxDrag(); anchorModeOn = false; }
+    seekVideoToFrame(AppState.currentFrameIndex);
+    updateFrameBar();
+    EventBus.emit('history:save', reorder ? '调整帧顺序' : '覆盖帧姿态');
+    EventBus.emit('need:render');
+    EventBus.emit('need:syncUI');
+    return true;
+  }
+
   function updateFrameBar() {
     syncMainLengthFromTracks();
     refreshSubTrackOptions();
@@ -7496,6 +7791,8 @@ function importActionPresets() {
     const scrubber = document.getElementById('timelineScrubber');
     if (!bar) return;
     bar.classList.toggle('thumb-mode', frameThumbMode);
+    /* v7.2.0：拖动语义写在容器标题上，Alt 重排不靠猜 */
+    bar.title = '拖动帧块：把这一帧的姿态覆盖到落点，后面跟着延展；按住 Alt 拖动：整帧挪位（重排顺序）';
 
     if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = Math.max(0, AppState.frames.length - 1);
     if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
@@ -7694,7 +7991,7 @@ function importActionPresets() {
           }
         };
 
-        const onPointerUp = () => {
+        const onPointerUp = (ev) => {
           clearTimeout(pressTimer);
           chip.classList.remove('dragging');
           /* v6.3.1：清掉跟手/让位的位移，重排后由 updateFrameBar 重建 */
@@ -7711,49 +8008,10 @@ function importActionPresets() {
             if (targetIndex > dragStartIndex) targetIndex--;
             
             if (targetIndex !== dragStartIndex) {
-              if (isSubTrackMode()) {
-                /* 子轨道：只在当前 track 内移动，覆盖目标帧，绝不碰其他 track */
-                const t = AppState.tracks[AppState.activeTrackId];
-                if (t && t.frames && t.frames.length) {
-                  const arr = t.frames;
-                  const from = Math.min(dragStartIndex, arr.length - 1);
-                  if (from >= 0) {
-                    const [moved] = arr.splice(from, 1);
-                    const to = Math.max(0, Math.min(targetIndex, arr.length));
-                    if (to >= arr.length) arr.push(moved);
-                    else arr[to] = moved;
-                    syncMainLengthFromTracks();
-                    trimTrailingEmptyFrames();
-                  }
-                  AppState.currentFrameIndex = Math.max(0, Math.min(targetIndex, AppState.frames.length - 1));
-                  invalidateAllFrameThumbs();
-                  AppState.objects = getCombinedObjectsForRender();
-                  AppState.selected = getActiveTrackObject();
-                  EventBus.emit('history:save', '调整帧顺序');
-                }
-              } else {
-                /* 全局模式：帧元信息与所有 track 同步重排 */
-                const [moved] = AppState.frames.splice(dragStartIndex, 1);
-                AppState.frames.splice(targetIndex, 0, moved);
-                for (const id in AppState.tracks) {
-                  const t = AppState.tracks[id];
-                  if (!t) continue;
-                  if (!t.frames) t.frames = [];
-                  const arr = t.frames;
-                  while (arr.length < dragStartIndex) arr.push(null);
-                  const removed = arr.splice(dragStartIndex, 1);
-                  const movedData = removed.length ? removed[0] : null;
-                  const insertAt = Math.max(0, Math.min(targetIndex, arr.length));
-                  arr.splice(insertAt, 0, movedData);
-                }
-                syncMainLengthFromTracks();
-                AppState.currentFrameIndex = targetIndex;
-                invalidateAllFrameThumbs();
-                AppState.objects = getCombinedObjectsForRender();
-                AppState.selected = null;
-                EventBus.emit('history:save', '调整帧顺序');
-              }
-              EventBus.emit('need:render'); EventBus.emit('need:syncUI');
+              /* v7.2.0：落点处理抽成 applyFrameMove()，方便调试入口直接调用。
+                 默认「覆盖」：落点这一格改用源帧的姿态，后面的帧跟着延展；
+                 按住 Alt 才是「重排」：整帧挪位、中间帧依次让位。 */
+              applyFrameMove(dragStartIndex, targetIndex, { reorder: !!(ev && ev.altKey) });
             } else {
               // 鼠标拖拽了但位置没有变化，当作点击处理
               if (isMouse && !hasMoved) { goToFrame(dragStartIndex); announcePartialKeys(dragStartIndex); }
@@ -7990,7 +8248,7 @@ function importActionPresets() {
     isPlaying = true;
     AppState.selected = null; drag = null; AppState.canvasSelected = false;
     cancelTransformBoxDrag(); anchorModeOn = false;
-    document.getElementById('btnPlay').textContent = '⏸ 暂停';
+    document.getElementById('btnPlay').innerHTML = ic('pause') + '暂停';
     document.getElementById('playBadge').style.display = 'block';
     let idx = AppState.currentFrameIndex;
     playState = { idx, acc: 0, last: performance.now() };
@@ -8014,7 +8272,7 @@ function importActionPresets() {
     isPlaying = false;
     if (playTimer) cancelAnimationFrame(playTimer);
     playTimer = null;
-    document.getElementById('btnPlay').textContent = '▶ 播放';
+    document.getElementById('btnPlay').innerHTML = ic('play') + '播放';
     document.getElementById('playBadge').style.display = 'none';
     if (refVideo && refVideoPlaying) {
       refVideo.pause();
@@ -8179,7 +8437,7 @@ function importActionPresets() {
         '<button type="button" class="ease-item' + (active ? ' active' : '') + '" data-ease="' + key + '" role="menuitemradio" aria-checked="' + active + '">' +
           '<svg class="ease-thumb" viewBox="0 0 40 28" aria-hidden="true"><path d="' + easeThumbPath(thumbInput) + '"/></svg>' +
           '<span class="ease-label">' + label + '</span>' +
-          '<span class="ease-check">' + (active ? '✓' : '') + '</span>' +
+          '<span class="ease-check">' + (active ? ic('check-correct') : '') + '</span>' +
         '</button>';
     });
     if (customEasePresets.length) {
@@ -8190,7 +8448,7 @@ function importActionPresets() {
         html += '<button type="button" class="ease-item' + (active ? ' active' : '') + '" data-ease="' + key + '" role="menuitemradio" aria-checked="' + active + '">' +
           '<svg class="ease-thumb" viewBox="0 0 40 28" aria-hidden="true"><path d="' + easeThumbPath(p.bezier) + '"/></svg>' +
           '<span class="ease-label">' + p.name + '</span>' +
-          '<span class="ease-check">' + (active ? '✓' : '') + '</span>' +
+          '<span class="ease-check">' + (active ? ic('check-correct') : '') + '</span>' +
         '</button>';
       });
     }
@@ -8224,8 +8482,17 @@ function importActionPresets() {
     let top = r.top - mh - 8;                       /* 默认开在按钮上方 */
     if (top < pad) top = r.bottom + 8;              /* 上方不够就开在下方 */
     if (top + mh > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - mh - pad);
+
+    /* v7.2.1：菜单是 position:fixed，但时间轴坞 #timeline 上挂着 transform（置顶/置底的位移），
+       fixed 元素在有 transform 的祖先里会退化成「相对那个祖先」定位 —— 
+       时间轴置底时按钮在 y≈690，菜单按视口算的 top 再加一次 682 的位移，就整个跑到屏幕外面，
+       表现就是「曲线菜单点不开」。这里量一次实际位置，把差值补回去（位移是常量，补一次就准）。 */
     tweenMoreMenu.style.left = Math.round(left) + 'px';
     tweenMoreMenu.style.top = Math.round(top) + 'px';
+    const real = tweenMoreMenu.getBoundingClientRect();
+    const dx = real.left - left, dy = real.top - top;
+    if (Math.abs(dx) > 0.5) tweenMoreMenu.style.left = Math.round(left - dx) + 'px';
+    if (Math.abs(dy) > 0.5) tweenMoreMenu.style.top = Math.round(top - dy) + 'px';
   }
   function setEaseMenuOpen(open) {
     if (open) { renderTweenEaseMenu(); setAdvPanelOpen(false); }
@@ -8365,7 +8632,7 @@ function importActionPresets() {
       return `<div class="ease-preset-item" data-id="${p.id}" style="${bgStyle}">
         <span class="name">${typeName} ${p.name}</span>
         <span class="preset-bezier">${metaText}</span>
-        <span class="del" title="删除">✕</span>
+        <span class="del" title="删除">${ic('close')}</span>
       </div>`;
     }).join('');
     easePresetListInline.querySelectorAll('.ease-preset-item').forEach(row => {
@@ -8973,7 +9240,7 @@ function importActionPresets() {
     // 1. 动画面板的删除帧
     const delBtn = document.getElementById('btnDelFrame');
     if (delBtn) {
-      delBtn.textContent = isMulti ? '🗑 删除多选帧' : '🗑 删除帧';
+      delBtn.innerHTML = ic('delete') + (isMulti ? '删除多选帧' : '删除帧');
       delBtn.title = isMulti ? '删除所有勾选的帧' : '删除当前帧';
     }
 
@@ -9062,6 +9329,16 @@ function importActionPresets() {
           if (o1.color && o2.color) obj.color = lerpColor(o1.color, o2.color, tt);
           if (o1.light && o1.light.color && o2.light && o2.light.color) obj.light.color = lerpColor(o1.light.color, o2.light.color, tt);
           if (o1.glow && o1.glow.color && o2.glow && o2.glow.color) obj.glow.color = lerpColor(o1.glow.color, o2.glow.color, tt);
+          if (o1.glow && o2.glow) {
+            const g = obj.glow = obj.glow || {};
+            g.blur = (o1.glow.blur || 0) + ((o2.glow.blur || 0) - (o1.glow.blur || 0)) * tt;
+            g.spread = (o1.glow.spread || 0) + ((o2.glow.spread || 0) - (o1.glow.spread || 0)) * tt;
+            g.offsetX = (o1.glow.offsetX || 0) + ((o2.glow.offsetX || 0) - (o1.glow.offsetX || 0)) * tt;
+            g.offsetY = (o1.glow.offsetY || 0) + ((o2.glow.offsetY || 0) - (o1.glow.offsetY || 0)) * tt;
+            g.alpha = (o1.glow.alpha == null ? 1 : o1.glow.alpha) + ((o2.glow.alpha == null ? 1 : o2.glow.alpha) - (o1.glow.alpha == null ? 1 : o1.glow.alpha)) * tt;
+            g.enabled = !!o1.glow.enabled;
+            g.color = obj.glow.color || o1.glow.color || '#000000';
+          }
           if (o1.joint && o1.joint.color && o2.joint && o2.joint.color) obj.joint.color = lerpColor(o1.joint.color, o2.joint.color, tt);
           if (o1.depth && o2.depth) {
             if (!obj.depth) obj.depth = {};
@@ -9701,14 +9978,14 @@ function importActionPresets() {
     if (isPlaying) pause();
     syncFrameRef();
     const ids = Object.keys(AppState.tracks);
-    const usable = ids.filter(id => {
+    /* v7.2.0：补间回归 —— 段外也允许插帧，不再弹提示拦下来。
+       段内（当前帧后面还有一个关键帧）→ 插派生帧，中间画面由两端关键帧自动补出来；
+       段外（后面没有关键帧，或当前帧本身不在任何段里）→ 克隆当前帧当普通帧，
+       于是可以一帧一帧地往下一帧之前续，先摆位、再补间。 */
+    const anySeg = ids.some(id => {
       const t = AppState.tracks[id];
       return t && t.frames && segmentAhead(t.frames, idx);
     });
-    if (!usable.length) {
-      alert('当前帧不在关键帧段内。\n两侧都打好关键帧后再插帧，插出来的帧才会是自动补出来的画面。');
-      return;
-    }
     const metas = [];
     const dur = Math.round(1000 / defaultFPS);
     for (let k = 0; k < count; k++) metas.push({ id: ++uid, duration: dur, isTween: false });
@@ -9741,7 +10018,7 @@ function importActionPresets() {
     updateFrameBar();
     seekVideoToFrame(AppState.currentFrameIndex);
     EventBus.emit('need:render'); EventBus.emit('need:syncUI');
-    EventBus.emit('history:save', '段内插入帧');
+    EventBus.emit('history:save', anySeg ? '段内插入帧' : '续帧');
   }
 
   const btnKeyframe = document.getElementById('btnKeyframe');
@@ -10715,7 +10992,7 @@ function importActionPresets() {
   function syncPinViewBtn() {
     if (!btnPinView) return;
     btnPinView.classList.toggle('on', viewPinned);
-    btnPinView.textContent = viewPinned ? '📌 已固定' : '📌 固定';
+    btnPinView.innerHTML = ic('pushpin') + (viewPinned ? '已固定' : '固定');
   }
   if (btnPinView) {
     btnPinView.addEventListener('click', () => {
@@ -10807,6 +11084,28 @@ function importActionPresets() {
   const glowAlphaVal = document.getElementById('glowAlphaVal');
   const glowBlur = document.getElementById('glowBlur');
   const glowBlurVal = document.getElementById('glowBlurVal');
+  /* v7.2.0：描边阴影 —— 偏移 / 扩展 */
+  const glowOffsetX = document.getElementById('glowOffsetX');
+  const glowOffsetXVal = document.getElementById('glowOffsetXVal');
+  const glowOffsetY = document.getElementById('glowOffsetY');
+  const glowOffsetYVal = document.getElementById('glowOffsetYVal');
+  const glowSpread = document.getElementById('glowSpread');
+  const glowSpreadVal = document.getElementById('glowSpreadVal');
+  const glowIncludeAcc = document.getElementById('glowIncludeAcc');
+
+  /* 老工程里没有 offsetX / offsetY / spread 三个字段，统一在这里补 0，
+     免得每个读的地方都写 || 0。 */
+  function glowFill(g) {
+    if (!g) return g;
+    if (g.color == null) g.color = '#000000';
+    if (g.alpha == null) g.alpha = 0.45;
+    if (g.blur == null) g.blur = 14;
+    if (g.offsetX == null) g.offsetX = 0;
+    if (g.offsetY == null) g.offsetY = 0;
+    if (g.spread == null) g.spread = 0;
+    if (g.includeAcc == null) g.includeAcc = false;
+    return g;
+  }
   const btnJoint = document.getElementById('btnJoint');
   const jointColor = document.getElementById('jointColor');
   const jointLen = document.getElementById('jointLen');
@@ -11096,6 +11395,10 @@ function togglePin(part) {
     glowColor.disabled = !isFig;
     glowAlpha.disabled = !isFig;
     glowBlur.disabled = !isFig;
+    if (glowOffsetX) glowOffsetX.disabled = !isFig;
+    if (glowOffsetY) glowOffsetY.disabled = !isFig;
+    if (glowSpread) glowSpread.disabled = !isFig;
+    if (glowIncludeAcc) glowIncludeAcc.disabled = !isFig;
     btnJoint.disabled = !isFig;
     jointColor.disabled = !isFig;
     jointLen.disabled = !isFig;
@@ -11290,11 +11593,16 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       const headIndepCb = document.getElementById('headIndep');
       if (headIndepCb) headIndepCb.checked = headHandleOn;
       updateHeadMoveHandle();
-      glowColor.value = AppState.selected.glow.color;
-      glowAlpha.value = AppState.selected.glow.alpha; glowAlphaVal.textContent = AppState.selected.glow.alpha.toFixed(2);
-      glowBlur.value = AppState.selected.glow.blur; glowBlurVal.textContent = AppState.selected.glow.blur;
-      btnGlow.textContent = AppState.selected.glow.enabled ? '关闭发光' : '开启发光';
-      btnGlow.classList.toggle('on', AppState.selected.glow.enabled);
+      const GV = glowFill(AppState.selected.glow) || {};
+      glowColor.value = GV.color;
+      glowAlpha.value = GV.alpha; glowAlphaVal.textContent = (+GV.alpha).toFixed(2);
+      glowBlur.value = GV.blur; glowBlurVal.textContent = Math.round(GV.blur);
+      if (glowOffsetX) { glowOffsetX.value = GV.offsetX; glowOffsetXVal.textContent = Math.round(GV.offsetX); }
+      if (glowOffsetY) { glowOffsetY.value = GV.offsetY; glowOffsetYVal.textContent = Math.round(GV.offsetY); }
+      if (glowSpread) { glowSpread.value = GV.spread; glowSpreadVal.textContent = Math.round(GV.spread); }
+      if (glowIncludeAcc) glowIncludeAcc.checked = !!GV.includeAcc;
+      btnGlow.textContent = GV.enabled ? '关闭描边阴影' : '开启描边阴影';
+      btnGlow.classList.toggle('on', GV.enabled);
       jointColor.value = AppState.selected.joint.color;
       jointLen.value = AppState.selected.joint.len; jointLenVal.textContent = AppState.selected.joint.len.toFixed(2);
       btnJoint.textContent = AppState.selected.joint.enabled ? '关闭渐变' : '开启渐变';
@@ -13047,7 +13355,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       AppState.selected.shadowOffX = 0; AppState.selected.shadowOffY = 0;
       AppState.selected.shadowScaleX = 1; AppState.selected.shadowScaleY = 1;
       AppState.selected.light = { enabled: false, color: '#ffbb66', size: 1.0, angle: 315 };
-      AppState.selected.glow = { enabled: false, color: '#ff9d3d', alpha: 0.8, blur: 18 };
+      AppState.selected.glow = { enabled: false, color: '#000000', alpha: 0.45, blur: 14, offsetX: 3, offsetY: -4, spread: 0, includeAcc: false };
       AppState.selected.joint = { enabled: false, color: '#ff0000', len: 0.5 };
       AppState.selected.extremity = {
         enabled: false,
@@ -13243,7 +13551,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
   document.getElementById('btnShapeRect').onclick = () => addShape('rect');
   document.getElementById('btnShapeTri').onclick = () => addShape('tri');
   document.getElementById('btnClone').onclick = cloneSelected;
-  document.getElementById('btnDelete').onclick = deleteSelected;
+  /* v7.1.0：顶部那排的「删除」已拿掉 —— 删除改到元件列表每行一个（见 renderLayerPop） */
   document.getElementById('btnReset').onclick = resetPose;
 
   document.getElementById('btnSaveAction').onclick = saveActionPreset;
@@ -13592,15 +13900,45 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
   /* 发光 */
   btnGlow.onclick = () => {
     if (!AppState.selected || AppState.selected.type !== 'figure') return;
+    glowFill(AppState.selected.glow);
     AppState.selected.glow.enabled = !AppState.selected.glow.enabled;
     setGlobalProp(AppState.selected, 'glow.enabled', AppState.selected.glow.enabled);
     EventBus.emit('need:syncUI'); EventBus.emit('need:render'); markCurrentFrameModified();
-    EventBus.emit('history:save', '切换发光');
+    EventBus.emit('history:save', '切换描边阴影');
   };
+  /* v7.2.0：X 偏移 / Y 偏移 / 扩展 —— 改一项就同步到全帧（走 setGlobalProp） */
+  const bindGlowNum = (el, valEl, key, label) => {
+    if (!el) return;
+    el.addEventListener('input', e => {
+      if (!AppState.selected || AppState.selected.type !== 'figure') return;
+      glowFill(AppState.selected.glow);
+      const v = +e.target.value;
+      AppState.selected.glow[key] = v;
+      if (valEl) valEl.textContent = Math.round(v);
+      setGlobalProp(AppState.selected, 'glow.' + key, v);
+      EventBus.emit('need:render');
+      markCurrentFrameModified();
+    });
+    el.addEventListener('change', () => EventBus.emit('history:save', label));
+  };
+  bindGlowNum(glowOffsetX, glowOffsetXVal, 'offsetX', '修改描边阴影');
+  bindGlowNum(glowOffsetY, glowOffsetYVal, 'offsetY', '修改描边阴影');
+  bindGlowNum(glowSpread, glowSpreadVal, 'spread', '修改描边阴影');
+  if (glowIncludeAcc) glowIncludeAcc.addEventListener('change', e => {
+    if (!AppState.selected || AppState.selected.type !== 'figure') return;
+    glowFill(AppState.selected.glow);
+    const on = !!e.target.checked;
+    AppState.selected.glow.includeAcc = on;
+    setGlobalProp(AppState.selected, 'glow.includeAcc', on);
+    EventBus.emit('need:render');
+    markCurrentFrameModified();
+    EventBus.emit('history:save', on ? '阴影包含配饰' : '阴影不含配饰');
+  });
+
   glowColor.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'figure') { AppState.selected.glow.color = e.target.value; setGlobalProp(AppState.selected, 'glow.color', AppState.selected.glow.color); EventBus.emit('need:render'); markCurrentFrameModified(); } });
   glowAlpha.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'figure') { AppState.selected.glow.alpha = +e.target.value; glowAlphaVal.textContent = AppState.selected.glow.alpha.toFixed(2); setGlobalProp(AppState.selected, 'glow.alpha', AppState.selected.glow.alpha); EventBus.emit('need:render'); markCurrentFrameModified(); } });
   glowBlur.addEventListener('input', e => { if (AppState.selected && AppState.selected.type === 'figure') { AppState.selected.glow.blur = +e.target.value; glowBlurVal.textContent = AppState.selected.glow.blur; setGlobalProp(AppState.selected, 'glow.blur', AppState.selected.glow.blur); EventBus.emit('need:render'); markCurrentFrameModified(); } });
-  [glowColor, glowAlpha, glowBlur].forEach(el => el.addEventListener('change', () => EventBus.emit('history:save', '修改发光')));
+  [glowColor, glowAlpha, glowBlur].forEach(el => el.addEventListener('change', () => EventBus.emit('history:save', '修改描边阴影')));
 
   /* 手部渐变 */
   btnJoint.onclick = () => {
@@ -14139,7 +14477,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       const rows = Array.prototype.slice.call(adv.querySelectorAll(':scope > .adv-row'));
       move(rows[0], uiSheetEls.advanced);                       /* 其他画面可见性 */
       move(rows[1], uiSheetEls.advanced);                       /* 各种开关 + 清空帧 + 置顶 */
-      move(document.getElementById('globalEditHelpBox'), uiSheetEls.advanced);
+      /* v7.1.0：全局属性修改 + 它的说明面板搬到控制面板顶部（全屏旁边），不再进「高级」分区 */
 
       /* v7.0.6：把「透明底 / 3x高清 / 1080p」这三个**导出参数**从这排通用开关里挑出来，
          单独成行放进「导出」分区（它们只影响导出结果，留在高级里容易找不到） */
@@ -14198,6 +14536,17 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     }
     const fsBtn = document.getElementById('btnFullscreen');
     if (fsBtn) fsBtn.style.flex = '0 0 auto';                 /* 只剩全屏时别再拉满整行 */
+
+    /* v7.1.0：「导出时画布优先」从「画布」分区搬到「导出」—— 它只影响导出结果，
+       和透明底/3x高清那排是同一类设置，放在导出里才找得到。 */
+    const expFirstBtn = document.getElementById('btnExportCanvasFirst');
+    if (expFirstBtn) {
+      const canvasFirstRow = document.createElement('div');
+      canvasFirstRow.className = 'row';
+      canvasFirstRow.style.marginTop = '8px';
+      canvasFirstRow.appendChild(expFirstBtn);
+      uiSheetEls.export.appendChild(canvasFirstRow);
+    }
     if (pngRow) pngRow.style.justifyContent = 'flex-start';    /* 靠左 */
 
     /* ---- 项目：本地预设 + 清空画布 ---- */
@@ -14206,7 +14555,6 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     move(rowOf(document.getElementById('presetNameInput')), uiSheetEls.project);
     move(document.getElementById('presetList'), uiSheetEls.project);
     move(rowOf(document.getElementById('btnClearCanvas')), uiSheetEls.project);
-    move(document.querySelector('#uiMain .hint[data-i18n-html="preset.tips"]'), uiSheetEls.project);
     /* 原「本地预设」标题已被上面的 sub() 取代，把空壳去掉 */
     if (presetTitle && presetTitle.parentElement) presetTitle.remove();
 
@@ -14220,11 +14568,23 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       setLayerPopOpen(true);
     }
 
+    /* ---- v7.2.0：配饰的「绑定设置」放在**元件列表上方**（选中配饰时自动出现）。
+       元件列表就是吸顶的横向缩略图条 #objStrip，所以这里插到它前面，
+       而不是塞进「元件」分区 —— 分区是另一层，看不到「上/下」的关系。 ---- */
+    const bindBox = document.getElementById('bindPanel');
+    const stripEl = document.getElementById('objStrip');
+    if (bindBox) {
+      bindBox.style.marginTop = '0';
+      bindBox.style.marginBottom = '8px';
+      if (stripEl && stripEl.parentElement) stripEl.parentElement.insertBefore(bindBox, stripEl);
+      else move(bindBox, uiSheetEls.objects);
+    }
+
     /* ---- chips 里画笔/画布/主题已经有独立入口，删掉重复的三个 ---- */
     document.querySelectorAll('#toolChips .tool-chip[data-tool="canvas"], #toolChips .tool-chip[data-tool="theme"], #toolChips .tool-chip[data-tool="eraser"]')
       .forEach(el => el.remove());
 
-    /* 元件列表搬走后，属性区顶部没有吸顶层了，chips 的吸顶偏移归零 */
+    /* 属性区顶部恢复了横向元件条（吸顶），把它的高度告诉 chips，避免两层吸顶叠在一起 */
     updateStickyHeaderHeight();
 
     /* ---- 底部栏绑定 ---- */
@@ -14370,9 +14730,9 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     tl.style.left = '0';
     tl.style.right = '0';
     const hideBtn = document.getElementById('btnHideTimeline');
-    if (hideBtn) hideBtn.textContent = (timelineDock === 'top') ? '收起 ▲' : '收起 ▼';
+    if (hideBtn) hideBtn.innerHTML = ic(timelineDock === 'top' ? 'up' : 'down') + '收起';
     const dockBtn = document.getElementById('btnTimelineDock');
-    if (dockBtn) dockBtn.textContent = (timelineDock === 'top') ? '⇩ 置底' : '⇧ 置顶';
+    if (dockBtn) dockBtn.innerHTML = ic(timelineDock === 'top' ? 'align-bottom' : 'to-top') + (timelineDock === 'top' ? '置底' : '置顶');
     refreshTimelineDockOffsets();
     if (!opts.skipResize) resize();
 }
@@ -14681,6 +15041,8 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     updateFrameBar(); updatePresetListUI(); updateActionListUI();
     SKFE.features.theme.updateThemePresetUI(); EventBus.emit('need:syncUI'); syncAdvToggles();
     updateVideoUI(); updateMultiActions();
+    /* v7.1.0：元件列表每行的眼睛/锁/删除按钮 title 是渲染时用 t() 取词的，换语言要重画一次 */
+    scheduleRenderLayerPop();
   };
 
   /* ==================== 初始化 ==================== */
@@ -14779,6 +15141,9 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
         return t && t.frames ? segmentAhead(t.frames, typeof idx === 'number' ? idx : AppState.currentFrameIndex) : null;
       },
       goto: (i) => { goToFrame(i); EventBus.emit('need:render'); },
+      /* v7.2.0：拖动落点与尾部复制，供无头回归直接构造场景 */
+      applyFrameMove: (from, to, opts) => applyFrameMove(from, to, opts),
+      repairTailAfterLastKey: (id) => repairTailAfterLastKey(id),
       markKey: (trackId, idx, origin) => {
         const t = AppState.tracks[String(trackId)];
         if (!t) return false;

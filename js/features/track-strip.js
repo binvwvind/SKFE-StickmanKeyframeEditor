@@ -46,6 +46,12 @@
   let lastSig = '';        /* 上次渲染时的数据指纹，用来跳过无变化的重画 */
   let refreshQueued = false;
 
+  /* ---- v7.4.3：关键帧多选 / 剪切板 ----
+     token 就是 '轨道id|帧号'，跨轨道共用一套 —— 和 AM 的 layerId|channel|frame 同一个思路，
+     这样「框选一片、整体平移、复制到另一条轨」都不需要额外的数据结构。 */
+  let selKeys = new Set();   /* 选中的关键帧 token 集合 */
+  let keyClip = null;        /* 剪切板：{ base: 最小帧号, items: [{ id, off, obj }] } */
+
   const $ = (id) => document.getElementById(id);
 
   function T(key, fallback) {
@@ -57,6 +63,37 @@
   function tracksMap() { return api ? api.tracks() : {}; }
   function totalFrames() { return Math.max(1, api ? api.totalFrames() : 1); }
   function fps() { const f = api && api.fps ? api.fps() : 12; return (f > 0 ? f : 12); }
+
+  /* ---------------- 关键帧 token ----------------
+     '轨道id|帧号'。轨道 id 里不会有 '|'（都是数字或 UUID），所以从后往前找分隔符最稳。 */
+  function ktok(id, i) { return String(id) + '|' + i; }
+  function untok(tok) {
+    const s = String(tok);
+    const p = s.lastIndexOf('|');
+    if (p < 0) return null;
+    const i = parseInt(s.slice(p + 1), 10);
+    if (!isFinite(i) || i < 0) return null;
+    return { id: s.slice(0, p), i };
+  }
+  /* 只留「这一帧真的是关键帧」的 token —— 撤销 / 切帧之后集合里会留垃圾 */
+  function liveSelKeys() {
+    const map = tracksMap();
+    const out = [];
+    selKeys.forEach((tok) => {
+      const p = untok(tok);
+      if (!p) { selKeys.delete(tok); return; }
+      const t = map[p.id];
+      if (!t || !t.frames || !KF().isKey(t.frames[p.i])) { selKeys.delete(tok); return; }
+      out.push(p);
+    });
+    return out;
+  }
+  function clearKeySel() {
+    if (!selKeys.size) return;
+    selKeys.clear();
+    const cv = $('tsCanvas');
+    if (cv) cv.querySelectorAll('.ts-key.sel').forEach(el => el.classList.remove('sel'));
+  }
 
   /* ---------------- 出场判定 ---------------- */
   /* 某一帧这个元件在不在：键帧/普通帧看自身，派生帧和段内空槽都看「段起点那一帧」的 hidden。
@@ -239,11 +276,12 @@
           ' style="' + style + '">' +
           '<i class="ts-h ts-h-l"></i><span class="ts-lab">' + label + '</span><i class="ts-h ts-h-r"></i></div>';
       });
-      /* 关键帧菱形：压在长条正中间，可以单拖（改这一帧的时间） */
+      /* 关键帧菱形：压在长条正中间，可以单拖（改这一帧的时间）／Ctrl 点选多颗 */
       for (let i = 0; i < arr.length; i++) {
         const slot = arr[i];
         if (!KF().isKey(slot)) continue;
         html += '<i class="ts-key' + (slot.hidden ? ' off' : '') + (isCut(slot) ? ' cut' : '') +
+          (selKeys.has(ktok(id, i)) ? ' sel' : '') +
           '" data-id="' + esc(id) + '" data-i="' + i + '" style="left:' + (i * colW + colW / 2) + 'px"></i>';
       }
       html += '</div></div>';
@@ -369,7 +407,9 @@
 
   /* 每一步操作的最后一步：段内空槽归位 + 记一步历史。
      ⚠️ 历史里存的是**操作之后**的状态 —— app.js 的 undo() 是「弹掉栈顶、恢复到新栈顶」，
-        所以每条记录都必须等于它那一刻的当前状态，否则一次撤销会退两步。 */
+        所以每条记录都必须等于它那一刻的当前状态，否则一次撤销会退两步。
+     v7.4.3：外层若已经开了事务（一次拖拽 / 一次粘贴 / 一次批量删），这一步只改数据不记历史，
+        由 txEnd 统一压一条 —— 一个手势 = 一步撤销。 */
   function commit(ids, label) {
     (Array.isArray(ids) ? ids : [ids]).forEach((id) => {
       const t = trackOf(id);
@@ -382,8 +422,24 @@
        表现就是「点一下别处，段落就散架」。 */
     if (api.refreshObjects) api.refreshObjects();
     api.afterChange();
+    if (api.isTxOpen && api.isTxOpen()) return;
     api.pushPre(api.snapshot(), label);
   }
+
+  /* 把一整段操作包进一个事务。没有 isTxOpen 的旧内核也不会炸：begin/end 缺席时退化成原来的 commit 记法。
+     ⚠️ 必须在**改数据之前** begin，否则 begin 取到的那份「操作前快照」已经包含改动，
+        txEnd 会认为「啥都没变」而不记历史 —— 表现就是「改了、撤销却没反应」。
+        单步操作（分割 / 删除 / 开关键帧）不需要事务：commit 里已经按操作后状态记了一步。 */
+  function withTx(label, fn) {
+    const can = !!(api && api.txBegin && api.txEnd);
+    if (can) api.txBegin(label);
+    try {
+      return fn();
+    } finally {
+      if (can) api.txEnd();
+    }
+  }
+
 
   /* ---------------- 伸缩 / 平移 ---------------- */
   /* 拖拽的横向边界：平移和两端伸缩共用一套 —— 左端最多贴到前一条长条的右边，
@@ -492,7 +548,9 @@
     commit(ids, T('track.dragLabel', '调整轨道'));
   }
 
-  /* 单拖关键帧：默认「覆盖落点」（原帧保留），按住 Alt 是「整帧挪位」 */
+  /* ---------------- 关键帧平移 / 复制 / 粘贴 ----------------
+     v7.4.3 语义调整：拖关键帧 = 改它落在第几帧（用户最初要的就是这个），
+     想保留原来那颗就按住 Alt（= 复制到落点）。单颗和整组用同一套键位。 */
   function applyKeyDrag(st, to) {
     const t = trackOf(st.id);
     if (!t) return;
@@ -505,8 +563,164 @@
     setCut(src, isCut(raw));
     ensureLen(arr, to + 1);
     arr[to] = src;
-    if (st.alt) arr[st.i] = null;      /* Alt = 挪位，原位交还给 reconcile */
-    commit(st.id, st.alt ? T('track.keyMoveLabel', '移动关键帧') : T('track.keyCopyLabel', '关键帧覆盖到落点'));
+    if (!st.alt) arr[st.i] = null;     /* 默认挪位；Alt = 复制（原帧留着） */
+    commit(st.id, st.alt ? T('track.keyCopyLabel', '复制关键帧到落点') : T('track.keyMoveLabel', '移动关键帧'));
+  }
+
+  /* 整组平移的横向夹紧：任一颗都不能跑到第 0 帧之前 / 600 帧之后 */
+  function clampKeyDelta(items, raw) {
+    let lo = -MAX_FRAMES, hi = MAX_FRAMES;
+    items.forEach((it) => {
+      lo = Math.max(lo, -it.i);
+      hi = Math.min(hi, MAX_FRAMES - 1 - it.i);
+    });
+    return Math.max(lo, Math.min(hi, raw));
+  }
+
+  /* 整组平移：先抓出所有源（带曲线 / 分割 / 隐藏态），把原位置统一腾空，再统一写到落点。
+     先腾后写是关键 —— 否则往右挪时前一颗会把自己后一颗的源覆盖掉。 */
+  function applyKeysDrag(st) {
+    const d = st.d;
+    if (!d) return;
+    const plan = [];
+    const ids = [];
+    st.items.forEach((it) => {
+      const t = trackOf(it.id);
+      if (!t || !t.frames) return;
+      const raw = t.frames[it.i];
+      if (!KF().isKey(raw)) return;
+      const o = cloneAt(it.id, it.i);
+      if (!o) return;
+      markKeyKeep(o, 'sub', KF().curveOf(raw));
+      o.hidden = !!raw.hidden;
+      setCut(o, isCut(raw));
+      plan.push({ id: it.id, from: it.i, to: it.i + d, obj: o });
+      if (ids.indexOf(it.id) < 0) ids.push(it.id);
+    });
+    if (!plan.length) return;
+    plan.forEach((p) => {                       /* 1. 先腾空 */
+      const t = trackOf(p.id);
+      if (t) { ensureLen(t.frames, p.from + 1); t.frames[p.from] = null; }
+    });
+    plan.forEach((p) => {                       /* 2. 再落到新位置 */
+      const t = trackOf(p.id);
+      if (!t) return;
+      ensureLen(t.frames, p.to + 1);
+      t.frames[p.to] = api.clone(p.obj);
+    });
+    commit(ids, st.alt ? T('track.keyCopyLabel', '复制关键帧到落点') : T('track.keyMoveLabel', '移动关键帧'));
+  }
+
+  /* 复制选中的关键帧：以最小帧号归一成 off，粘贴时落在播放头 */
+  function copyKeys() {
+    const items = liveSelKeys();
+    if (!items.length) { api.toast(T('track.copyNone', '先点选关键帧（Ctrl / ⌘ 点可以多选），再复制')); return false; }
+    let base = Infinity;
+    items.forEach((it) => { base = Math.min(base, it.i); });
+    const list = [];
+    items.forEach((it) => {
+      const t = tracksMap()[it.id];
+      const raw = t && t.frames ? t.frames[it.i] : null;
+      if (!raw) return;
+      const o = cloneAt(it.id, it.i);
+      if (!o) return;
+      markKeyKeep(o, 'sub', KF().curveOf(raw));
+      o.hidden = !!raw.hidden;
+      setCut(o, isCut(raw));
+      list.push({ id: it.id, off: it.i - base, obj: o });
+    });
+    if (!list.length) return false;
+    keyClip = { items: list };
+    api.toast(T('track.copyDone', '已复制 %n 颗关键帧，到目标帧按粘贴').replace('%n', list.length));
+    return true;
+  }
+
+  function pasteKeys() {
+    if (!keyClip || !keyClip.items.length) { api.toast(T('track.pasteEmpty', '剪切板里还没有关键帧')); return false; }
+    const at = api.currentFrame();
+    const ids = [];
+    const picked = [];
+    withTx(T('track.pasteLabel', '粘贴关键帧'), () => {
+      keyClip.items.forEach((it) => {
+        const to = at + it.off;
+        if (to < 0 || to >= MAX_FRAMES) return;
+        const t = trackOf(it.id);
+        if (!t) return;
+        ensureLen(t.frames, to + 1);
+        t.frames[to] = api.clone(it.obj);
+        picked.push(ktok(it.id, to));
+        if (ids.indexOf(it.id) < 0) ids.push(it.id);
+      });
+      if (ids.length) commit(ids, T('track.pasteLabel', '粘贴关键帧'));
+    });
+    if (!ids.length) { api.toast(T('track.pasteEmpty', '剪切板里还没有关键帧')); return false; }
+    selKeys = new Set(picked);        /* 粘完直接选中，方便接着整组拖 */
+    lastPickedId = ids[0];
+    render();
+    api.toast(T('track.pasteDone', '已粘贴 %n 颗关键帧').replace('%n', picked.length));
+    return true;
+  }
+
+  /* 删掉一颗关键帧：先把这一段前后「靠补间撑着的派生帧」定格成普通帧，再摘掉关键帧身份。
+     不这么做的话，段一消失，那些派生帧会被 reconcileTrack 清成空槽 ——
+     画面会在段中间突然断掉几帧（用户看到的就是「删个关键帧怎么没了半段」）。 */
+  function dropKey(id, i) {
+    const t = trackOf(id);
+    if (!t || !t.frames) return false;
+    const arr = t.frames;
+    const cur = arr[i];
+    if (!cur || !KF().isKey(cur)) return false;
+    const hidden = !!cur.hidden;
+    let prevKey = -1, nextKey = -1;
+    for (let k = i - 1; k >= 0; k--) { if (KF().isKey(arr[k])) { prevKey = k; break; } }
+    for (let k = i + 1; k < arr.length; k++) { if (KF().isKey(arr[k])) { nextKey = k; break; } }
+    const bake = (from, to) => {
+      for (let k = from; k <= to; k++) {
+        const slot = arr[k];
+        if (slot && !KF().isDerived(slot)) continue;   /* 本身就有画面：不动它 */
+        const c = plainFrom(cloneAt(id, k));
+        if (c) { c.hidden = false; arr[k] = c; }
+      }
+    };
+    /* 顺序要紧：先按「关键帧还在」时的求值结果烘焙，再来动这一帧本身 */
+    if (prevKey >= 0) bake(prevKey + 1, i - 1);
+    if (nextKey >= 0) bake(i + 1, nextKey - 1);
+    const keep = plainFrom(cloneAt(id, i));
+    if (keep) { keep.hidden = hidden; arr[i] = keep; } else arr[i] = null;
+    return true;
+  }
+
+  /* 删掉选中的关键帧：画面留着，只摘掉「关键帧」这个身份（和「取消关键帧」同一套语义） */
+  function deleteSelKeys() {
+    const items = liveSelKeys();
+    if (!items.length) return false;
+    const ids = [];
+    withTx(T('track.keyDelLabel', '删除关键帧'), () => {
+      /* 同一轨道从右往左删，避免「先删右边把左边的段撑长」影响后面的烘焙 */
+      items.slice().sort((a, b) => (a.id === b.id ? b.i - a.i : (a.id < b.id ? -1 : 1)))
+        .forEach((it) => {
+          const t = trackOf(it.id);
+          if (!t || !t.frames) return;
+          dropKey(it.id, it.i);
+          if (ids.indexOf(it.id) < 0) ids.push(it.id);
+        });
+      if (ids.length) commit(ids, T('track.keyDelLabel', '删除关键帧'));
+    });
+    selKeys.clear();
+    render();
+    api.toast(T('track.keyDelDone', '已删除 %n 颗关键帧').replace('%n', items.length));
+    return true;
+  }
+
+  /* 双击某颗关键帧 = 选中这一整条轨上的全部关键帧（整轨平移/复制用） */
+  function selectTrackKeys(id) {
+    const t = tracksMap()[id];
+    if (!t || !t.frames) return;
+    selKeys.clear();
+    for (let i = 0; i < t.frames.length; i++) {
+      if (KF().isKey(t.frames[i])) selKeys.add(ktok(id, i));
+    }
+    render();
   }
 
   /* ---------------- 分割 / 删除 / 关键帧 ---------------- */
@@ -563,10 +777,14 @@
     const i = api.currentFrame();
     ensureLen(arr, i + 1);
     if (KF().isKey(arr[i])) {
-      KF().clearKey(arr[i]);
+      /* 取消关键帧：画面留着，周围靠补间撑着的帧先定格，免得段一没就断档 */
+      dropKey(id, i);
     } else {
-      const src = keyFrom(cloneAt(id, i), false);
-      if (!src) return;
+      /* v7.4.3：这一帧本来是空白（段外没画面）时，借最近的姿势补一张 —— 否则「打了关键帧却没有画面」。
+         先取本帧的求值结果，取不到再找最近的一帧（nearestPose 已剥掉帧身份）。 */
+      const pose = cloneAt(id, i) || (api.nearestPose ? api.nearestPose(id, i) : null);
+      const src = keyFrom(pose, false);
+      if (!src) { api.toast(T('track.keyNoPose', '这一帧和前后都没有画面，先画点东西再打关键帧')); return; }
       arr[i] = src;
     }
     commit(id, T('track.keyLabel', '关键帧'));
@@ -596,23 +814,58 @@
       /* 放大 / 缩小、眼睛都是「按一下」的动作，交给 click 处理（键盘也能用），这里只让路 */
       if (e.target.closest('[data-zoom]') || e.target.closest('[data-eye]')) return;
 
-      /* 关键帧菱形：单拖改这一帧的时间 */
+      /* 关键帧菱形：单拖改这一帧的时间；Ctrl / ⌘ / Shift 点 = 加选或减选 */
       const kEl = e.target.closest('.ts-key');
       if (kEl) {
-        const kr = kEl.getBoundingClientRect();
+        const kid = kEl.dataset.id;
+        const ki = +kEl.dataset.i;
+        const tok = ktok(kid, ki);
+        const additive = !!(e.ctrlKey || e.metaKey || e.shiftKey);
+
+        if (additive) {
+          /* 只调选择，不起拖拽 —— 否则 Ctrl 点一下总会跟上一次 pointermove 的手势 */
+          if (selKeys.has(tok)) selKeys.delete(tok); else selKeys.add(tok);
+          kEl.classList.toggle('sel', selKeys.has(tok));
+          selClip = null;
+          lastPickedId = kid;
+          markRow(kid);
+          e.preventDefault();
+          return;
+        }
+
+        /* 点在没被选中的那颗上 = 改单选这一颗；点在已选中的里面 = 保留整组，一起拖 */
+        if (!selKeys.has(tok)) {
+          selKeys.clear();
+          selKeys.add(tok);
+        } else {
+          liveSelKeys();   /* 顺手把撤销之后残留的脏 token 清掉 */
+        }
+        cv.querySelectorAll('.ts-key').forEach((el) => {
+          el.classList.toggle('sel', selKeys.has(ktok(el.dataset.id, el.dataset.i)));
+        });
+
+        const items = liveSelKeys();
+        const byTok = Object.create(null);
+        cv.querySelectorAll('.ts-key').forEach((el) => { byTok[ktok(el.dataset.id, el.dataset.i)] = el; });
+        const els = [];
+        items.forEach((it) => {
+          const el = byTok[ktok(it.id, it.i)];
+          if (el) els.push({ i: it.i, el });
+        });
+
         drag = {
-          kind: 'key',
-          id: kEl.dataset.id,
-          i: +kEl.dataset.i,
-          to: +kEl.dataset.i,
+          kind: 'keys',
+          items,
+          els,
           startX: e.clientX,
+          d: 0,
           alt: !!e.altKey,
-          el: kEl,
           moved: false
         };
-        lastPickedId = kEl.dataset.id;
-        markRow(kEl.dataset.id);
-        kEl.classList.add('dragging');
+        selClip = null;
+        lastPickedId = kid;
+        markRow(kid);
+        els.forEach(x => x.el.classList.add('dragging'));
         try { cv.setPointerCapture(e.pointerId); } catch (_) {}
         e.preventDefault();
         return;
@@ -625,6 +878,7 @@
         const mode = dx <= HANDLE_W ? 'l' : (rect.width - dx <= HANDLE_W ? 'r' : 'm');
         lastPickedId = clip.dataset.id;
         selClip = { id: clip.dataset.id, a: +clip.dataset.a, b: +clip.dataset.b };
+        clearKeySel();              /* 选中长条就不再认关键帧多选，两套选择互斥 */
         markRow(clip.dataset.id);
         cv.querySelectorAll('.ts-clip.sel').forEach(c => c.classList.remove('sel'));
         clip.classList.add('sel');
@@ -651,6 +905,7 @@
       if (lane) {
         const lr = lane.getBoundingClientRect();
         const i = Math.floor((e.clientX - lr.left) / colW);
+        if (selKeys.size) { clearKeySel(); render(); }
         if (i >= 0 && i < totalFrames()) api.goToFrame(i);
         return;
       }
@@ -668,6 +923,14 @@
       }
     });
 
+    /* 双击某颗关键帧 = 选中这一整条轨上的所有关键帧（整轨平移 / 复制的最短路径） */
+    cv.addEventListener('dblclick', (e) => {
+      const kEl = e.target.closest('.ts-key');
+      if (!kEl) return;
+      selectTrackKeys(kEl.dataset.id);
+      e.preventDefault();
+    });
+
     cv.addEventListener('pointermove', (e) => {
       if (!drag) {
         /* 光标提示：手柄处左右箭头，关键帧上抓手 */
@@ -680,13 +943,14 @@
         return;
       }
 
-      if (drag.kind === 'key') {
-        const to = Math.max(0, Math.min(MAX_FRAMES - 1,
-          drag.i + Math.round((e.clientX - drag.startX) / colW)));
-        if (to === drag.to) return;
-        drag.to = to;
-        drag.moved = to !== drag.i;
-        drag.el.style.left = (to * colW + colW / 2) + 'px';
+      if (drag.kind === 'keys') {
+        const raw = Math.round((e.clientX - drag.startX) / colW);
+        const d = clampKeyDelta(drag.items, raw);
+        if (d === drag.d) return;
+        drag.d = d;
+        drag.moved = d !== 0;
+        /* 只挪 DOM，不碰数据 —— 整组一起走同一格数 */
+        drag.els.forEach((x) => { x.el.style.left = ((x.i + d) * colW + colW / 2) + 'px'; });
         return;
       }
 
@@ -726,11 +990,19 @@
       const st = drag;
       drag = null;
       try { cv.releasePointerCapture(e.pointerId); } catch (_) {}
-      st.el.classList.remove('dragging', 'drag-l', 'drag-r', 'drag-m');
+      if (st.els) st.els.forEach(x => x.el.classList.remove('dragging'));
+      else if (st.el) st.el.classList.remove('dragging', 'drag-l', 'drag-r', 'drag-m');
 
-      if (st.kind === 'key') {
-        if (!st.moved) return;                       /* 没拖动 = 啥都不做 */
-        applyKeyDrag(st, st.to);
+      if (st.kind === 'keys') {
+        if (!st.moved) return;                       /* 没拖动 = 只是改了下选择 */
+        if (st.items.length === 1) {
+          const one = st.items[0];
+          withTx(st.alt ? T('track.keyCopyLabel', '复制关键帧到落点') : T('track.keyMoveLabel', '移动关键帧'),
+            () => applyKeyDrag({ id: one.id, i: one.i, alt: st.alt }, one.i + st.d));
+        } else {
+          withTx(st.alt ? T('track.keyCopyLabel', '复制关键帧到落点') : T('track.keyMoveLabel', '移动关键帧'),
+            () => applyKeysDrag(st));
+        }
         render();
         return;
       }
@@ -740,11 +1012,51 @@
         api.selectTrack(st.id);
         return;
       }
-      applyDrag(st, st.d);
+      withTx(T('track.dragLabel', '调整轨道'), () => applyDrag(st, st.d));
       render();
     };
     cv.addEventListener('pointerup', finish);
     cv.addEventListener('pointercancel', finish);
+  }
+
+  /* 键盘：Ctrl/⌘+C 复制、Ctrl/⌘+V 粘贴、Delete 删除选中的关键帧、Esc 取消选择。
+     用捕获阶段 + stopPropagation：只有在「真的选了关键帧」时才拦，
+     其余情况一律放行给 app.js 原来的快捷键（删元件、复制元件…）。 */
+  function bindKeys() {
+    if (document.body.dataset.tsKeys === '1') return;
+    document.body.dataset.tsKeys = '1';
+    document.addEventListener('keydown', (e) => {
+      if (!enabled) return;
+      const el = e.target;
+      const tag = (el && el.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (el && el.isContentEditable)) return;
+      const mod = !!(e.ctrlKey || e.metaKey);
+      const has = selKeys.size > 0;
+
+      if (mod && (e.key === 'c' || e.key === 'C')) {
+        if (!has) return;
+        e.preventDefault(); e.stopPropagation();
+        copyKeys();
+        return;
+      }
+      if (mod && (e.key === 'v' || e.key === 'V')) {
+        if (!keyClip) return;
+        e.preventDefault(); e.stopPropagation();
+        pasteKeys();
+        return;
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (!has) return;
+        e.preventDefault(); e.stopPropagation();
+        deleteSelKeys();
+        return;
+      }
+      if (e.key === 'Escape' && has) {
+        clearKeySel();
+        render();
+        return;
+      }
+    }, true);
   }
 
   /* 面板高度拖拽 */
@@ -779,7 +1091,7 @@
     grip.addEventListener('pointercancel', up);
   }
 
-  /* 轨道模式下，「关键帧」按钮要认选中的那条轨，而不是子轨选择器。
+  /* 轨道模式下，「关键帧 / 复制 / 粘贴」按钮要认轨道里的选中状态，而不是子轨选择器。
      用捕获阶段先拦下来，再 stopPropagation —— 这样不必改动 app.js 里原来的监听。 */
   function bindToolbar() {
     const tl = $('timeline');
@@ -787,10 +1099,23 @@
     tl.dataset.tsTools = '1';
     tl.addEventListener('click', (e) => {
       if (!enabled) return;
-      if (!e.target.closest('#btnKeyframe')) return;
-      e.stopPropagation();
-      e.preventDefault();
-      toggleKey();
+      if (e.target.closest('#btnKeyframe')) {
+        e.stopPropagation();
+        e.preventDefault();
+        toggleKey();
+        return;
+      }
+      if (e.target.closest('#btnTrackKeyCopy')) {
+        e.stopPropagation();
+        e.preventDefault();
+        copyKeys();
+        return;
+      }
+      if (e.target.closest('#btnTrackKeyPaste')) {
+        e.stopPropagation();
+        e.preventDefault();
+        pasteKeys();
+      }
     }, true);
   }
 
@@ -818,7 +1143,7 @@
     }
     /* 控制面板与底部栏要压在轨道面板之上 */
     document.body.classList.toggle('track-mode-on', enabled);
-    if (!enabled) { selClip = null; }
+    if (!enabled) { selClip = null; selKeys.clear(); }
 
     /* 「轨道面板要在控制面板下方」—— 开着的时候就先临时落到屏幕底部 */
     if (enabled) {
@@ -851,6 +1176,7 @@
       bindGrip();
       bindDrag();
       bindToolbar();
+      bindKeys();
 
       /* 完全被动地跟随现有事件总线：不改 app.js 里任何一个函数，
          现有功能该发什么事件照发，这边只是「听到就顺手更新一下自己」。 */
@@ -896,7 +1222,16 @@
     refresh() { if (enabled) render(); },
     isEnabled() { return enabled; },
     setEnabled,
-    getColW() { return colW; }
+    getColW() { return colW; },
+
+    /* 调试 / 测试入口（也方便以后接右键菜单） */
+    copyKeys,
+    pasteKeys,
+    deleteSelKeys,
+    selectAllKeys(id) { selectTrackKeys(id); },
+    selectedKeys() { return liveSelKeys(); },
+    hasClip() { return !!(keyClip && keyClip.items.length); },
+    clearKeySel() { clearKeySel(); if (enabled) render(); }
   };
 
   root.SKFE.features.trackStrip = TrackStrip;

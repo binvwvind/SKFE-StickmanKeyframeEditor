@@ -1,7 +1,7 @@
 /* SKFE locale: Simplified Chinese (default) */
 window.SKFE_LOCALES = window.SKFE_LOCALES || {};
 window.SKFE_LOCALES['zh-CN'] = {
-  "app.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.4.2",
+  "app.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.4.3",
   "tbox.move": "拖动整体移动",
   "tbox.scale": "拖动等比缩放（开启自由拉伸后按 X/Y 分别拉伸）",
   "tbox.rotate": "拖动旋转",
@@ -23,7 +23,7 @@ window.SKFE_LOCALES['zh-CN'] = {
   "cameraPreview.closeTitle": "关闭预览",
   "cameraPreview.hint": "始终显示当前帧的摄像机导出画面",
   "timeline.show": "帧动画面板",
-  "watermark.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.4.2",
+  "watermark.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.4.3",
   "watermark.author": "作者 binvwvnid · QQ 交流群 1121039855",
   "panel.title": "控制面板",
   "lang.toggle": "中/EN",
@@ -592,7 +592,19 @@ window.SKFE_LOCALES['zh-CN'] = {
 "track.dragLabel": "调整轨道",
 "track.keyLabel": "关键帧",
 "track.keyMoveLabel": "移动关键帧",
-"track.keyCopyLabel": "关键帧覆盖到落点",
+"track.keyCopyLabel": "复制关键帧到落点",
+"track.keyNoPose": "这一帧和前后都没有画面，先画点东西再打关键帧",
+"track.keyDelLabel": "删除关键帧",
+"track.keyDelDone": "已删除 %n 颗关键帧",
+"track.keyCopy": "复制帧",
+"track.keyCopyTitle": "复制选中的关键帧（Ctrl/⌘ 点关键帧可多选，双击可选整条轨）",
+"track.keyPaste": "粘贴帧",
+"track.keyPasteTitle": "把复制的关键帧粘贴到播放头（按复制时的相对位置铺开）",
+"track.copyNone": "先点选关键帧（Ctrl / ⌘ 点可以多选），再复制",
+"track.copyDone": "已复制 %n 颗关键帧，到目标帧按粘贴",
+"track.pasteEmpty": "剪切板里还没有关键帧",
+"track.pasteLabel": "粘贴关键帧",
+"track.pasteDone": "已粘贴 %n 颗关键帧",
 "track.zoomIn": "放大（每帧更宽）",
 "track.zoomOut": "缩小（缩得很小就改显示分:秒）",
 };

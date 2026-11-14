@@ -520,6 +520,47 @@ function syncDistortToAllFrames(obj) {
     SKFE.systems.autosave.scheduleAutoArchiveSave();
   }
 
+  /* ==================== v7.4.3：事务式历史 ====================
+     一次拖拽 = 一次 begin/end：begin 时记一份「操作前」快照，end 时再取一份当前快照，
+     两份一模一样就当没改过、不记历史；否则按现有语义压一条「操作后」状态。
+     好处：① 拖了半天其实没动 → 不会留下一条空历史（否则撤销会「按了没反应」）
+           ② 一次手势里改了多少条轨道/多少帧，都只算一步撤销。 */
+  let txPreSnap = null;
+  let txLabel = null;
+  let txDepth = 0;
+
+  function txBegin(label) {
+    txDepth++;
+    if (txDepth > 1) return false;
+    txPreSnap = getSnapshot();
+    txLabel = label || '编辑';
+    return true;
+  }
+
+  function txEnd() {
+    if (txDepth === 0) return false;
+    if (txDepth > 1) { txDepth--; return false; }
+    txDepth = 0;
+    const pre = txPreSnap;
+    const label = txLabel;
+    txPreSnap = null;
+    txLabel = null;
+    if (!pre) return false;
+    let same = false;
+    try { same = JSON.stringify(pre) === JSON.stringify(getSnapshot()); } catch (_) { same = false; }
+    if (same) return false;
+    pushPreSnapshot(getSnapshot(), label);
+    return true;
+  }
+
+  /* begin → 改 → end 一把梭，给一次性操作（按钮/快捷键）用 */
+  function txRun(label, fn) {
+    txBegin(label);
+    try { return fn(); } finally { txEnd(); }
+  }
+
+  function isTxOpen() { return txDepth > 0; }
+
   function undo() {
     if (undoStack.length <= 1) return;
     isUndoRedoAction = true;
@@ -552,28 +593,107 @@ function syncDistortToAllFrames(obj) {
   document.getElementById('btnRedo').onclick = redo;
 
   /* ==================== 补间帧恢复 ==================== */
-  /* v7.0.0（D3）：编辑派生帧 = 自动把它升格成关键帧，原段一分为二。
-     升格在这里做而不是在 syncFrameRef 里做，因为这里才是「用户真的改了东西」
-     的唯一信号；切帧/渲染都会走 syncFrameRef，在那里升格等于把所有帧都烘焙。 */
-  function promoteDerivedToKey(objId) {
-    const idx = AppState.currentFrameIndex;
-    const tid = (objId != null) ? String(objId) : (isSubTrackMode() ? AppState.activeTrackId : null);
-    if (!tid) return false;
+  /* v7.4.3：落帧策略（对齐 Alight Motion 的「自动关键帧」三分支）。
+     这一帧被改动之后，关键帧该落在哪儿就按这三条来：
+       ① 已经是关键帧      → 就地改，绝不再多落一帧（不然每拖一下都长出一颗菱形）
+       ② 段内的派生帧      → 升起成关键帧。派生帧不存画面，不升格的话切一帧就被补间
+                            重新求值覆盖，用户看到的就是「改了动作却没生成画面」
+       ③ 段外的普通帧/空白 → 自动帧常开：只要这条轨**已经**有关键帧，就在这一帧落关键帧；
+                            一帧关键帧都没有时按「烘焙帧」处理（写进这一帧本身，不制造关键帧），
+                            否则给烘焙工程加一帧关键帧会把前后整片普通帧都吞成派生帧。
+     返回 true = 落了新关键帧（调用方要刷新缩略图 / 帧条）。
+     allowPlain=false 时只认派生帧（②）—— 给「不是用户正在改的那只元件」用，
+     免得拖 A 的动作时顺手把 B 的普通帧也点成关键帧。 */
+  function landAutoKey(tid, idx, allowPlain) {
     const t = AppState.tracks[tid];
     if (!t || !t.frames) return false;
-    /* v7.4.2：除了段内的派生帧，段外的普通帧（拉长出来的尾巴 / 第一个关键帧之前）
-       也要能升成关键帧 —— 只要这条轨已经有关键帧，在这一帧改动作就该落成关键帧，
-       否则改了动作不出菱形、新的一段补间也不认它。整轨一个关键帧都没有时不动，
-       保持「烘焙帧」的老语义。 */
     const slot = t.frames[idx];
-    const canPromote = KF.isDerived(slot) || (KF.isPlain(slot) && t.frames.some(k => KF.isKey(k)));
-    if (!canPromote) return false;
+    if (KF.isKey(slot)) return false;                      /* ① */
     const live = AppState.objects.find(o => o && o.type !== 'video' && String(o.id) === tid) || null;
-    if (!live) return false;
-    t.frames[idx] = live;
-    KF.markKey(live, 'sub');
+    if (KF.isDerived(slot)) {                              /* ② */
+      if (!live) return false;
+      if (!poseChanged(tid, idx, live)) return false;      /* 没被改过：别平白加一颗菱形 */
+      t.frames[idx] = live;
+      KF.markKey(live, 'sub');
+      bumpKfEval();
+      return true;
+    }
+    /* ③ 普通帧 / 空白帧 */
+    if (allowPlain === false) return false;
+    if (!t.frames.some(k => KF.isKey(k))) return false;    /* 整轨没关键帧：保持烘焙语义 */
+    let base = live;
+    if (!base && KF.isReal(slot)) base = slot;             /* 这一帧本来有画面，用它自己 */
+    if (!base) base = nearestPose(tid, idx);               /* 空白帧：借最近的姿势补一张 */
+    if (!base) return false;
+    while (t.frames.length <= idx) t.frames.push(null);
+    t.frames[idx] = base;
+    KF.markKey(base, 'sub');
+    base.hidden = false;
     bumpKfEval();
+    /* 空白帧补出来的对象不在 AppState.objects 里，重取一遍，否则下一次
+       goToFrame→syncFrameRef 会把这一帧当成「本帧不该有它」又抹成空白。 */
+    if (base !== live) refreshObjectsNow();
     return true;
+  }
+
+  /* 「这一帧的在场对象」和「按轨道重新求值的结果」一样吗？
+     派生帧每次求值都是现算的：没被拖动过就一定相等，被改过就一定有差异 ——
+     靠它判断用户到底动的是哪只元件。比较前剥掉 img（拖动不会改它，还是几 MB 的 base64）。
+     ⚠️ 不能直接 getTrackFrame：它返回的就是缓存里那个对象，也正是被拖动的那个，
+        比出来永远相等。所以这里临时把该帧的缓存摘掉重算一次（拿到真正由关键帧
+        算出来的克隆），算完再把原对象放回去 —— AppState.objects 的身份不能变。 */
+  function evalDerivedFresh(tid, idx) {
+    const key = tid + '|' + idx + '|' + kfEvalEpoch;
+    const had = kfEvalCache.has(key);
+    const bak = kfEvalCache.get(key);
+    kfEvalCache.delete(key);
+    let fresh = null;
+    try { fresh = evaluateDerived(tid, idx); } catch (_) { fresh = null; }
+    kfEvalCache.delete(key);
+    if (had && bak) kfEvalCache.set(key, bak);
+    return fresh;
+  }
+
+  function poseSignature(o) {
+    if (!o) return '';
+    try {
+      return JSON.stringify(o, (k, v) => {
+        if (k === 'img') return undefined;
+        if (typeof v === 'number') return Math.round(v * 100) / 100;
+        return v;
+      });
+    } catch (_) { return ''; }
+  }
+  function poseChanged(tid, idx, live) {
+    if (!live) return false;
+    const fresh = evalDerivedFresh(tid, idx);
+    if (!fresh) return true;
+    return poseSignature(fresh) !== poseSignature(live);
+  }
+
+  /* 最近的可用姿势（先往前找，找不到再往后），已经剥掉帧身份 */
+  function nearestPose(tid, idx) {
+    const t = AppState.tracks[tid];
+    if (!t || !t.frames) return null;
+    const grab = (i) => {
+      const o = getTrackFrame(tid, i);
+      if (!o) return null;
+      const c = cloneObjectKeepImg(o);
+      KF.clearKey(c);
+      c.hidden = false;
+      return c;
+    };
+    for (let i = idx - 1; i >= 0; i--) { const o = grab(i); if (o) return o; }
+    for (let i = idx + 1; i < t.frames.length; i++) { const o = grab(i); if (o) return o; }
+    return null;
+  }
+
+  /* 按轨道重取当前帧的渲染对象，并按 id 重指选中项（轨道模块也调这个） */
+  function refreshObjectsNow() {
+    const keepId = AppState.selected ? String(AppState.selected.id) : null;
+    AppState.objects.length = 0;
+    for (const o of getCombinedObjectsForRender()) AppState.objects.push(o);
+    if (keepId) AppState.selected = AppState.objects.find(o => o && String(o.id) === keepId) || null;
   }
 
   function markCurrentFrameModified() {
@@ -581,11 +701,28 @@ function syncDistortToAllFrames(obj) {
       AppState.frames[AppState.currentFrameIndex].isTween = false;
       updateFrameBar();
     }
-    const promoted = promoteDerivedToKey(AppState.selected ? AppState.selected.id : null);
+    /* v7.4.3：自动关键帧常开 —— 当前帧「在场」的元件全部过一遍，不只是被选中的那只。
+       拖关节时未必先选中对象，只认 selected 会漏掉真正被改的那只，
+       结果就是「动作改了，关键帧没生成」。
+       但「不是选中的那只」只允许升派生帧（②）：普通帧那一条要写新数据，
+       对没被改过的元件做就等于平白撒一把关键帧。 */
+    const idxNow = AppState.currentFrameIndex;
+    const seen = Object.create(null);
+    let promoted = 0;
+    const consider = (oid, isPrimary) => {
+      if (oid == null) return;
+      const k = String(oid);
+      if (seen[k] && !isPrimary) return;
+      seen[k] = 1;
+      if (landAutoKey(k, idxNow, !!isPrimary)) promoted++;
+    };
+    for (const o of AppState.objects) { if (o && o.type !== 'video') consider(o.id, false); }
+    if (AppState.selected) consider(AppState.selected.id, true);
+    if (isSubTrackMode()) consider(AppState.activeTrackId, true);
     if (promoted) {
       invalidateAllFrameThumbs();
       updateFrameBar();
-      showHistoryToast('已升起为关键帧（⌘Z 可撤销）', 'ink', 1800);
+      showHistoryToast('已自动生成关键帧（⌘Z 可撤销）', 'ink', 1800);
     }
     if (AppState.frames[AppState.currentFrameIndex]) delete AppState.frames[AppState.currentFrameIndex]._thumb;
     if (isSubTrackMode()) trackThumbCache.delete(AppState.activeTrackId + '|' + AppState.currentFrameIndex);
@@ -15392,12 +15529,12 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
          「不是同一个对象」把关键帧槽位覆写成普通帧，关键帧和分割标记一起丢，
          表现就是「点一下别处，段落就散架」。 */
       refreshObjects() {
-        const keepId = AppState.selected ? String(AppState.selected.id) : null;
-        AppState.objects.length = 0;
-        for (const o of getCombinedObjectsForRender()) AppState.objects.push(o);
-        if (keepId) AppState.selected = AppState.objects.find(o => o && String(o.id) === keepId) || null;
-        else AppState.selected = isSubTrackMode() ? getActiveTrackObject() : null;
+        refreshObjectsNow();
+        if (!AppState.selected) AppState.selected = isSubTrackMode() ? getActiveTrackObject() : null;
       },
+
+      /* v7.4.3：空白帧打关键帧要有个姿势可用 —— 借最近的可用帧（已剥掉帧身份） */
+      nearestPose: (id, i) => nearestPose(String(id), i),
 
       /* 挂在某个元件上的配饰（画笔 / 贴件…）的轨道 id —— 主体长条伸缩时它们要跟着伸缩。
          逐个轨道取当前帧的求值对象，不依赖 AppState.objects，配饰不在本帧也不会漏。 */
@@ -15440,6 +15577,9 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       clone: (o) => cloneObjectKeepImg(o),
       snapshot: () => getSnapshot(),
       pushPre: (snap, label) => pushPreSnapshot(snap, label),
+      txBegin: (label) => txBegin(label),
+      txEnd: () => txEnd(),
+      isTxOpen: () => isTxOpen(),
 
       /* 点长条 = 只选中这个元件（不动帧号）。子轨模式下不擅自改隔离轨。 */
       selectTrack(id) {
@@ -15506,6 +15646,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       exportProjectJSON, importProjectJSON, deserializeProject, applyLoadedProject,
       projectVersion: PROJECT_VERSION,
       historySize: () => undoStack.length,
+      txBegin: (l) => txBegin(l), txEnd: () => txEnd(), txRun: (l, f) => txRun(l, f), isTxOpen: () => isTxOpen(),
       historyTop: () => (undoStack[undoStack.length - 1] || {}).label || null,
       /* v7.4.2：排查「撤销一次退两步」这类问题时，把历史栈摊开看 */
       historyDump: () => undoStack.map((x, i) => i + ":" + (x.label || "?") + ":" +

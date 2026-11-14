@@ -1927,9 +1927,11 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
   #trackStrip[hidden] { display: none !important; }
 
   /* 轨道模式下控制栏只留「播放组 + 分割 / 删除 / 关键帧 / 插 N 帧 / 曲线」 */
-  #btnSplit, #btnTrackDel { display: none; }
+  #btnSplit, #btnTrackDel, #btnTrackKeyCopy, #btnTrackKeyPaste { display: none; }
   #timeline.track-mode #btnSplit,
-  #timeline.track-mode #btnTrackDel { display: inline-flex; }
+  #timeline.track-mode #btnTrackDel,
+  #timeline.track-mode #btnTrackKeyCopy,
+  #timeline.track-mode #btnTrackKeyPaste { display: inline-flex; }
   #timeline.track-mode .timeline-controls > #btnAddFrame,
   #timeline.track-mode .timeline-controls > #btnDupFrame,
   #timeline.track-mode .timeline-controls > #btnDelFrame,
@@ -2056,6 +2058,17 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
   .ts-key.dragging { cursor: grabbing; background: var(--color-primary); border-color: #fff; z-index: 4; }
   .ts-key.off { background: rgba(255, 255, 255, .5); }        /* 隐藏态的关键帧 */
   .ts-key.cut { background: #e24b4a; border-color: #fff; }     /* 分割点 */
+  /* v7.4.3：多选中的关键帧（Ctrl/⌘ 点、或双击整轨选中）。
+     6px 的菱形加白色描边在浅色轨道上几乎看不见，所以改成「放大 + 绿描边」，
+     尺寸差异比颜色差异更快被眼睛抓到。 */
+  .ts-key.sel {
+    background: #fff;
+    border: 1.5px solid var(--color-primary);
+    transform: rotate(45deg) scale(1.4);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, .28);
+    z-index: 3;
+  }
+  .ts-key.sel.cut { border-color: #e24b4a; }
 
   /* 播放头 */
   .ts-playhead {
@@ -2068,4 +2081,7 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
   @media (max-width: 768px) { /* 手机上轨道区更紧凑 */
     .ts-gutter { width: 84px; min-width: 84px; padding: 0 6px; }
     #btnTrackMode { padding: 4px 10px; font-size: 11px; }
+    /* 手机上控制栏本来就横向滚动，复制/粘贴只留图标，把位置让给播放组 */
+    #btnTrackKeyCopy span, #btnTrackKeyPaste span { display: none; }
+    #btnTrackKeyCopy, #btnTrackKeyPaste { padding: 4px 8px; }
   }

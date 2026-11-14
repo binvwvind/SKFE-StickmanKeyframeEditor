@@ -1,7 +1,7 @@
 /* SKFE locale: English */
 window.SKFE_LOCALES = window.SKFE_LOCALES || {};
 window.SKFE_LOCALES['en'] = {
-  "app.title": "SKFE | Stickman Keyframe Editor v7.4.2",
+  "app.title": "SKFE | Stickman Keyframe Editor v7.4.3",
   "tbox.move": "Drag to move the whole object",
   "tbox.scale": "Drag to scale proportionally (enable Free Stretch to scale X/Y separately)",
   "tbox.rotate": "Drag to rotate",
@@ -23,7 +23,7 @@ window.SKFE_LOCALES['en'] = {
   "cameraPreview.closeTitle": "Close preview",
   "cameraPreview.hint": "Always shows the camera export view for the current frame",
   "timeline.show": "Frame panel",
-  "watermark.title": "SKFE | Stickman Keyframe Editor v7.4.2",
+  "watermark.title": "SKFE | Stickman Keyframe Editor v7.4.3",
   "watermark.author": "by binvwvnid · QQ group: 1121039855",
   "panel.title": "Control panel",
   "lang.toggle": "EN/中",
@@ -593,7 +593,19 @@ window.SKFE_LOCALES['en'] = {
 "track.dragLabel": "Adjust track",
 "track.keyLabel": "Keyframe",
 "track.keyMoveLabel": "Move keyframe",
-"track.keyCopyLabel": "Keyframe copied to drop point",
+"track.keyCopyLabel": "Copy keyframe to drop point",
+"track.keyNoPose": "No drawing at or near this frame — draw something first",
+"track.keyDelLabel": "Delete keyframes",
+"track.keyDelDone": "%n keyframe(s) deleted",
+"track.keyCopy": "Copy keys",
+"track.keyCopyTitle": "Copy the selected keyframes (Ctrl/⌘-click to multi-select, double-click to select a whole track)",
+"track.keyPaste": "Paste keys",
+"track.keyPasteTitle": "Paste the copied keyframes at the playhead (relative spacing preserved)",
+"track.copyNone": "Select keyframes first (Ctrl / ⌘-click for multiple), then copy",
+"track.copyDone": "Copied %n keyframe(s) — go to the target frame and paste",
+"track.pasteEmpty": "Nothing copied yet",
+"track.pasteLabel": "Paste keyframes",
+"track.pasteDone": "%n keyframe(s) pasted",
 "track.zoomIn": "Zoom in (wider frames)",
 "track.zoomOut": "Zoom out (very small shows minutes:seconds)",
 };

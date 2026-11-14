@@ -560,7 +560,14 @@ function syncDistortToAllFrames(obj) {
     const tid = (objId != null) ? String(objId) : (isSubTrackMode() ? AppState.activeTrackId : null);
     if (!tid) return false;
     const t = AppState.tracks[tid];
-    if (!t || !t.frames || !KF.isDerived(t.frames[idx])) return false;
+    if (!t || !t.frames) return false;
+    /* v7.4.2：除了段内的派生帧，段外的普通帧（拉长出来的尾巴 / 第一个关键帧之前）
+       也要能升成关键帧 —— 只要这条轨已经有关键帧，在这一帧改动作就该落成关键帧，
+       否则改了动作不出菱形、新的一段补间也不认它。整轨一个关键帧都没有时不动，
+       保持「烘焙帧」的老语义。 */
+    const slot = t.frames[idx];
+    const canPromote = KF.isDerived(slot) || (KF.isPlain(slot) && t.frames.some(k => KF.isKey(k)));
+    if (!canPromote) return false;
     const live = AppState.objects.find(o => o && o.type !== 'video' && String(o.id) === tid) || null;
     if (!live) return false;
     t.frames[idx] = live;
@@ -15378,6 +15385,56 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       fps: () => defaultFPS,     /* v7.4.1：刻度缩到很小时要按帧率换算分:秒 */
       getDock: () => timelineDock,
       setDock: (mode) => applyTimelineDock(mode),   /* 不改用户存的停靠偏好，只临时挪一下 */
+
+      /* v7.4.2：轨道数据被改过之后，把「当前帧的渲染对象」按轨道重新取一遍。
+         必须做：getTrackFrame 对关键帧 / 普通帧返回的就是槽位对象本身，而 AppState.objects
+         里还是改动之前那一份 —— 少了这一步，下一次 goToFrame 的 syncFrameRef 会因为
+         「不是同一个对象」把关键帧槽位覆写成普通帧，关键帧和分割标记一起丢，
+         表现就是「点一下别处，段落就散架」。 */
+      refreshObjects() {
+        const keepId = AppState.selected ? String(AppState.selected.id) : null;
+        AppState.objects.length = 0;
+        for (const o of getCombinedObjectsForRender()) AppState.objects.push(o);
+        if (keepId) AppState.selected = AppState.objects.find(o => o && String(o.id) === keepId) || null;
+        else AppState.selected = isSubTrackMode() ? getActiveTrackObject() : null;
+      },
+
+      /* 挂在某个元件上的配饰（画笔 / 贴件…）的轨道 id —— 主体长条伸缩时它们要跟着伸缩。
+         逐个轨道取当前帧的求值对象，不依赖 AppState.objects，配饰不在本帧也不会漏。 */
+      boundIds(id) {
+        const out = [];
+        const n = AppState.currentFrameIndex;
+        for (const tid in AppState.tracks) {
+          if (String(tid) === String(id)) continue;
+          const o = getTrackFrame(tid, n);
+          if (!o) continue;
+          if (o.type === "camera" || o.type === "figure" || o.type === "video") continue;
+          if (!o.bindTo || o.bindTo === "none" || o.targetId == null) continue;
+          if (String(o.targetId) !== String(id)) continue;
+          out.push(String(tid));
+        }
+        return out;
+      },
+
+      /* 高级设置里的「帧缩略图」开关：开着时轨道长条也铺小图（像 AM 那样） */
+      thumbMode: () => !!frameThumbMode,
+      thumbRev: () => thumbVersion,
+      renderThumb(id, i) {
+        const n = String(id);
+        const key = n + "|" + i;
+        const hit = trackThumbCache.get(key);
+        if (hit && hit.v === thumbVersion) return hit.url;
+        const fr = AppState.frames[i];
+        if (!fr) return null;
+        let url = null;
+        try {
+          const off = renderFrameToDataURL(fr, 96, 96, { transparent: true, ignoreCamera: !isCameraTrackId(n) }, n);
+          url = off ? off.toDataURL("image/png") : null;
+        } catch (_) { url = null; }
+        if (url) trackThumbCache.set(key, { v: thumbVersion, url });
+        else trackThumbCache.delete(key);
+        return url;
+      },
       goToFrame: (i) => goToFrame(i),
       getTrackFrame: (id, i) => getTrackFrame(String(id), i),
       clone: (o) => cloneObjectKeepImg(o),
@@ -15450,6 +15507,9 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       projectVersion: PROJECT_VERSION,
       historySize: () => undoStack.length,
       historyTop: () => (undoStack[undoStack.length - 1] || {}).label || null,
+      /* v7.4.2：排查「撤销一次退两步」这类问题时，把历史栈摊开看 */
+      historyDump: () => undoStack.map((x, i) => i + ":" + (x.label || "?") + ":" +
+        Object.keys((x.snap && x.snap.tracks) || {}).map(k => k + "(" + ((x.snap.tracks[k] || {}).frames || []).length + ")").join("/")),
       addObjectToFrames, makeFigure, mainKeyStateAt, kfPartialNames,
       /* v7.2.1：无头回归要能直接选中某个元件（不用模拟画布点击） */
       select: (o) => select(o),

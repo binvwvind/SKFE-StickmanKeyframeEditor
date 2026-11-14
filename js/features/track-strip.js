@@ -80,10 +80,17 @@
     return null;
   }
 
-  /* 分割标记：落在某一帧上的 __cut 表示「这一帧起算新的一段长条」。
-     只挂在真实帧（关键帧）上 —— 派生帧是共享的冻结哨兵，绝不能往上写东西。 */
+  /* 分割标记：关键帧的 __k.cut = 1 表示「这一帧起算新的一段长条」。
+     ⚠️ 必须挂在 __k 里面，不能直接写成 slot.__cut ——
+        keyframes.js 的 cloneForEval 只剥 __k/__d，其余属性会原样带进派生帧，
+        段内每一帧都会跟着带上这个标记，于是满屏都是假的分割点。 */
   function isCut(slot) {
-    return !!(slot && !KF().isDerived(slot) && slot.__cut);
+    return !!(slot && !KF().isDerived(slot) && slot.__k && slot.__k.cut);
+  }
+  function setCut(o, on) {
+    if (!o || !o.__k) return o;
+    if (on) o.__k.cut = 1; else delete o.__k.cut;
+    return o;
   }
 
   /* 连续的「在场」帧合并成一条长条；__cut 处也要断开（分割出来的左右两段） */
@@ -109,7 +116,10 @@
      比整块重画便宜得多，用来避免「滑条一动就重建上千个 DOM」。 */
   function signature() {
     const map = tracksMap();
-    let s = totalFrames() + '#' + colW + '#';
+    /* 缩略图开关 / 图案版本也算进指纹：不然改了动作、切了缩略图，长条上的小图不跟着换 */
+    const thumbOn = (api && api.thumbMode && api.thumbMode()) ? 'T' : 't';
+    const thumbRev = (api && api.thumbRev) ? api.thumbRev() : 0;
+    let s = totalFrames() + '#' + colW + '#' + thumbOn + thumbRev + '#';
     for (const id in map) {
       const arr = (map[id] && map[id].frames) || [];
       s += id + ':' + arr.length + ':' + (map[id].name || '') + ':';
@@ -117,7 +127,7 @@
         const slot = arr[i];
         if (slot == null) s += '.';
         else if (KF().isDerived(slot)) s += 'd';
-        else s += (KF().isKey(slot) ? 'k' : 'p') + (slot.hidden ? 'h' : '') + (slot.__cut ? 'c' : '');
+        else s += (KF().isKey(slot) ? 'k' : 'p') + (slot.hidden ? 'h' : '') + ((slot.__k && slot.__k.cut) ? 'c' : '');
       }
       s += ';';
     }
@@ -178,6 +188,8 @@
 
     const cur = api.currentFrame();
     const rs = rulerStep();
+    /* 高级设置里「帧缩略图」开着时，长条也铺一层小图（像 AM 那样） */
+    const thumbOn = !!(api.thumbMode && api.thumbMode());
     let html = '';
 
     /* 刻度尺（左列顺带放放大/缩小） */
@@ -216,8 +228,15 @@
         const w = Math.max(colW, (s.b - s.a + 1) * colW);
         const label = (s.a + 1) + (s.b > s.a ? '–' + (s.b + 1) : '');
         const sel = selClip && String(selClip.id) === String(id) && selClip.a === s.a && selClip.b === s.b;
-        html += '<div class="ts-clip' + (sel ? ' sel' : '') + '" data-id="' + esc(id) + '" data-si="' + si + '" data-a="' + s.a + '" data-b="' + s.b + '"' +
-          ' style="left:' + left + 'px;width:' + w + 'px">' +
+        /* 缩略图：只取这一段的头一帧，横向平铺成胶片条 —— 每段只渲染一次，不拖慢大工程 */
+        let cls = '', style = 'left:' + left + 'px;width:' + w + 'px';
+        if (thumbOn && api.renderThumb) {
+          let url = null;
+          try { url = api.renderThumb(id, s.a); } catch (_) { url = null; }
+          if (url) { cls = ' has-thumb'; style += ';background-image:url(' + url + ')'; }
+        }
+        html += '<div class="ts-clip' + cls + (sel ? ' sel' : '') + '" data-id="' + esc(id) + '" data-si="' + si + '" data-a="' + s.a + '" data-b="' + s.b + '"' +
+          ' style="' + style + '">' +
           '<i class="ts-h ts-h-l"></i><span class="ts-lab">' + label + '</span><i class="ts-h ts-h-r"></i></div>';
       });
       /* 关键帧菱形：压在长条正中间，可以单拖（改这一帧的时间） */
@@ -274,18 +293,27 @@
   function plainFrom(o) {
     if (!o) return null;
     const c = api.clone(o);
-    KF().clearKey(c);
-    delete c.__cut;
+    KF().clearKey(c);   /* 顺带把 __k（含分割标记）一起摘掉 */
     return c;
   }
 
-  /* 关键帧：带上原来那段曲线的配置 */
-  function keyFrom(o, hidden) {
+  /* markKey 会把 __k 整个换掉（曲线和分割标记都住在里面），所以先记住分割标记再按回去 */
+  function markKeyKeep(o, origin, curve) {
+    if (!o) return o;
+    const cut = isCut(o);
+    KF().markKey(o, origin || 'sub', curve);
+    if (cut) setCut(o, true);
+    return o;
+  }
+
+  /* 关键帧：带上原来那段曲线的配置。keepCut=false 用于「腾空」时新造的隐藏段头 ——
+     那是全新的一帧「此处不出场」，不该继承分割标记，否则会平白多切一刀。 */
+  function keyFrom(o, hidden, keepCut) {
     if (!o) return null;
     const c = api.clone(o);
-    KF().markKey(c, 'sub', KF().curveOf(o));
+    if (keepCut === false) KF().markKey(c, 'sub', KF().curveOf(o));
+    else markKeyKeep(c, 'sub', KF().curveOf(o));
     c.hidden = !!hidden;
-    delete c.__cut;
     return c;
   }
 
@@ -298,10 +326,10 @@
       const o = cloneAt(id, i);
       if (!o) { out.push(null); continue; }
       const raw = arr[i];
-      if (KF().isKey(raw)) KF().markKey(o, 'sub', KF().curveOf(raw));
+      if (KF().isKey(raw)) markKeyKeep(o, 'sub', KF().curveOf(raw));
       else KF().clearKey(o);
       o.hidden = !!raw.hidden;
-      if (isCut(raw)) o.__cut = 1; else delete o.__cut;
+      setCut(o, isCut(raw));
       out.push(o);
     }
     return out;
@@ -314,35 +342,52 @@
       const o = srcs[k];
       if (!o) { arr[na + k] = null; continue; }
       const c = api.clone(o);
-      if (k === 0) { KF().markKey(c, 'sub'); c.hidden = false; }
+      if (k === 0) { markKeyKeep(c, 'sub'); c.hidden = false; }
       else if (!KF().isKey(o)) KF().clearKey(c);
       arr[na + k] = c;
     }
   }
 
-  /* 让 [from..to] 不再出场：from 落一个 hidden 关键帧当初不见段的头，其余清空。
-     这是这个数据模型里唯一能让「中间一段消失」的写法。 */
+  /* 让 [from..to] 不再出场。
+     段内（前面已经有关键帧）必须落一个 hidden 关键帧当初不见段的头，
+     否则前一个关键帧的段会一路盖过来，把这里又填成可见。
+     前面一个关键帧都没有时（第一段之前 / 只有一段的尾巴）直接清空就够，
+     免得平白多出一个用户没点过的隐藏关键帧菱形。 */
   function vacate(id, arr, from, to) {
     if (to < from || from < 0) return;
     ensureLen(arr, to + 1);
-    const head = keyFrom(cloneAt(id, from), true);
-    if (!head) return;
-    arr[from] = head;
+    let keyBefore = false;
+    for (let i = 0; i < from; i++) { if (KF().isKey(arr[i])) { keyBefore = true; break; } }
+    if (keyBefore) {
+      const head = keyFrom(cloneAt(id, from), true, false);
+      arr[from] = head || null;
+    } else {
+      arr[from] = null;
+    }
     for (let i = from + 1; i <= to; i++) arr[i] = null;
   }
 
   /* 每一步操作的最后一步：段内空槽归位 + 记一步历史。
      ⚠️ 历史里存的是**操作之后**的状态 —— app.js 的 undo() 是「弹掉栈顶、恢复到新栈顶」，
         所以每条记录都必须等于它那一刻的当前状态，否则一次撤销会退两步。 */
-  function commit(id, label) {
-    const t = trackOf(id);
-    if (t) KF().reconcileTrack(t);
+  function commit(ids, label) {
+    (Array.isArray(ids) ? ids : [ids]).forEach((id) => {
+      const t = trackOf(id);
+      if (t) KF().reconcileTrack(t);
+    });
+    /* ⚠️ 必须重取当前帧的渲染对象（api.refreshObjects）：
+       getTrackFrame 对关键帧 / 普通帧返回的就是槽位对象本身，而 AppState.objects
+       里留着的还是改动之前那一份。少了这一步，下一次 goToFrame 的 syncFrameRef
+       会因为「不是同一个对象」把关键帧槽位覆写成普通帧 —— 关键帧、分割标记全丢，
+       表现就是「点一下别处，段落就散架」。 */
+    if (api.refreshObjects) api.refreshObjects();
     api.afterChange();
     api.pushPre(api.snapshot(), label);
   }
 
   /* ---------------- 伸缩 / 平移 ---------------- */
-  /* 可移动的横向范围：别撞到同一轨上相邻的长条 */
+  /* 拖拽的横向边界：平移和两端伸缩共用一套 —— 左端最多贴到前一条长条的右边，
+     右端最多贴到后一条的左边，否则往外一拽就把隔壁那段吃掉（看着像段落散架）。 */
   function moveBounds(id, a, b) {
     const t = tracksMap()[id];
     const spans = t ? computeSpans(t.frames) : [];
@@ -355,12 +400,67 @@
     return { lo: lo, hi: hi };
   }
 
+  /* 右端拉到 nb：拉长只补普通帧（不产生关键帧），缩短把腾空的帧真正清掉 */
+  function stretchRight(id, b, nb) {
+    const t = trackOf(id);
+    if (!t) return;
+    const arr = t.frames;
+    ensureLen(arr, Math.max(totalFrames(), arr.length));
+    if (nb > b) {
+      const base = plainFrom(cloneAt(id, b));
+      if (!base) return;
+      ensureLen(arr, nb + 1);
+      for (let i = b + 1; i <= nb; i++) arr[i] = api.clone(base);
+    } else if (nb < b) {
+      vacate(id, arr, nb + 1, b);
+    }
+  }
+
+  /* 左端拉到 na
+     - 往左拉长：这一段的头如果是关键帧（段的头 / 分割点），就把它一起往左挪。
+       否则左边那段「不出场段」或前一段会把这几个新长出来的帧吃回去，
+       表现就是「怎么拖都拖不动」。
+     - 新长出来的帧一律是普通帧（不在末尾加关键帧）。 */
+  function stretchLeft(id, a, na) {
+    const t = trackOf(id);
+    if (!t) return;
+    const arr = t.frames;
+    ensureLen(arr, Math.max(totalFrames(), arr.length));
+    if (na < a) {
+      const base = plainFrom(cloneAt(id, a));
+      if (!base) return;
+      const head = arr[a];
+      const headIsKey = !!(head && !KF().isDerived(head) && KF().isKey(head));
+      if (headIsKey) {
+        /* 关键帧当头的段：头跟着挪到新的左端，原位置退回普通帧（不然会多出一个菱形） */
+        arr[na] = api.clone(head);
+        arr[a] = api.clone(base);
+        for (let i = na + 1; i < a; i++) arr[i] = api.clone(base);
+      } else {
+        for (let i = na; i < a; i++) {
+          const s = arr[i];
+          /* 让位给新长出来的帧：这里原有的隐藏关键帧（腾空留下的）先摘掉 */
+          if (s && !KF().isDerived(s) && KF().isKey(s) && s.hidden) KF().clearKey(s);
+          arr[i] = api.clone(base);
+        }
+      }
+    } else if (na > a) {
+      vacate(id, arr, a, na - 1);
+    }
+  }
+
+  /* 挂在某个元件上的配饰（画笔 / 贴件…）的轨道 id —— 主体变了它们要跟着变 */
+  function boundIdsOf(id) {
+    if (!api || !api.boundIds) return [];
+    try { return api.boundIds(id) || []; } catch (_) { return []; }
+  }
+
   function applyDrag(st, d) {
     const t = trackOf(st.id);
     if (!t) return;
     const arr = t.frames;
     ensureLen(arr, Math.max(totalFrames(), arr.length));
-    const pre = st.pre;
+    const ids = [st.id];
 
     if (st.mode === 'm') {
       /* 平移：抓出整段 → 原位腾空 → 写到新位置 */
@@ -369,31 +469,27 @@
       vacate(st.id, arr, st.a, st.b);
       putRange(arr, na, srcs);
       if (nb < st.b) vacate(st.id, arr, nb + 1, st.b);   /* 往左挪时右端要腾干净 */
-      commit(st.id, T('track.dragLabel', '调整轨道'));
     } else if (st.mode === 'r') {
       const b = st.b, nb = b + d;
-      if (nb > b) {
-        /* 拉长：补普通帧（不产生关键帧），姿态静止保持 */
-        const base = plainFrom(cloneAt(st.id, b));
-        if (!base) return;
-        ensureLen(arr, nb + 1);
-        for (let i = b + 1; i <= nb; i++) arr[i] = api.clone(base);
-      } else if (nb < b) {
-        vacate(st.id, arr, nb + 1, b);
-      }
-      commit(st.id, T('track.dragLabel', '调整轨道'));
+      stretchRight(st.id, b, nb);
+      /* 配饰跟着一起伸缩：只有「原来和主体同一端」的那些才跟，免得把别人拉长 */
+      boundIdsOf(st.id).forEach((bid) => {
+        const sp = computeSpans((tracksMap()[bid] || {}).frames || []).filter(x => x.b === b && x.a <= st.a);
+        if (!sp.length) return;
+        stretchRight(bid, b, nb);
+        ids.push(bid);
+      });
     } else {
       const a = st.a, na = a + d;
-      if (na < a) {
-        /* 往左拉长：补普通帧 */
-        const base = plainFrom(cloneAt(st.id, a));
-        if (!base) return;
-        for (let i = na; i < a; i++) arr[i] = api.clone(base);
-      } else if (na > a) {
-        vacate(st.id, arr, a, na - 1);
-      }
-      commit(st.id, T('track.dragLabel', '调整轨道'));
+      stretchLeft(st.id, a, na);
+      boundIdsOf(st.id).forEach((bid) => {
+        const sp = computeSpans((tracksMap()[bid] || {}).frames || []).filter(x => x.a === a && x.b >= st.b);
+        if (!sp.length) return;
+        stretchLeft(bid, a, na);
+        ids.push(bid);
+      });
     }
+    commit(ids, T('track.dragLabel', '调整轨道'));
   }
 
   /* 单拖关键帧：默认「覆盖落点」（原帧保留），按住 Alt 是「整帧挪位」 */
@@ -406,7 +502,7 @@
     const raw = arr[st.i];
     KF().markKey(src, 'sub', raw ? KF().curveOf(raw) : null);
     src.hidden = !!(raw && raw.hidden);
-    if (isCut(raw)) src.__cut = 1; else delete src.__cut;
+    setCut(src, isCut(raw));
     ensureLen(arr, to + 1);
     arr[to] = src;
     if (st.alt) arr[st.i] = null;      /* Alt = 挪位，原位交还给 reconcile */
@@ -433,7 +529,7 @@
     }
     const src = keyFrom(cloneAt(clip.id, i), false);
     if (!src) return;
-    src.__cut = 1;
+    setCut(src, true);
     ensureLen(arr, Math.max(clip.b, i) + 1);
     arr[i] = src;
     commit(clip.id, T('track.splitLabel', '分割'));
@@ -600,9 +696,11 @@
         const bd = moveBounds(drag.id, drag.a, drag.b);
         d = Math.max(bd.lo, Math.min(bd.hi, d));
       } else if (drag.mode === 'r') {
-        d = Math.max(-(drag.b - drag.a), Math.min(MAX_FRAMES - drag.b - 1, d));
+        const bd = moveBounds(drag.id, drag.a, drag.b);
+        d = Math.max(-(drag.b - drag.a), Math.min(bd.hi, d));
       } else {
-        d = Math.max(-drag.a, Math.min(drag.b - drag.a, d));
+        const bd = moveBounds(drag.id, drag.a, drag.b);
+        d = Math.max(bd.lo, Math.min(drag.b - drag.a, d));
       }
       if (d === drag.d) return;
       drag.d = d;
@@ -760,6 +858,8 @@
       if (bus) {
         bus.on('need:syncUI', () => TrackStrip.scheduleRefresh());
         bus.on('app:update', () => TrackStrip.scheduleRefresh());
+        /* v7.4.2：高级设置里切「帧缩略图」只发 need:render，不跟一下长条上的小图不会变 */
+        bus.on('need:render', () => TrackStrip.scheduleRefresh());
       }
 
       const btn = $('btnTrackMode');

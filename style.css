@@ -2018,6 +2018,18 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
   .ts-clip.dragging { cursor: grabbing; filter: brightness(1.12); z-index: 3; }
   .ts-clip.drag-l, .ts-clip.drag-r { cursor: ew-resize; }
   .ts-clip.sel { box-shadow: 0 0 0 2px var(--text-main) inset; }
+  /* 高级设置打开「帧缩略图」时，长条铺成一格一格的小图（像 AM 的胶片条） */
+  .ts-clip.has-thumb {
+    background-repeat: repeat-x;
+    background-position: 0 0;
+    background-size: auto 100%;
+    color: #fff;
+  }
+  .ts-clip.has-thumb .ts-lab {
+    background: rgba(0, 0, 0, .45); border-radius: 4px;
+    padding: 0 5px; margin-left: 13px; line-height: 14px;
+    text-shadow: none;
+  }
   .ts-lab {
     font-size: 10px; padding: 0 12px 0 20px; white-space: nowrap;   /* 左边留出关键帧菱形的位置 */
     pointer-events: none; overflow: hidden; text-overflow: ellipsis;

@@ -3,7 +3,7 @@
 <head> <!-- 网页头部，包含元数据和外部引用 -->
 <meta charset="UTF-8"> <!-- 设置字符编码为 UTF-8，防止中文乱码 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover"> <!-- 移动端视口设置：宽度同设备，允许缩放，适配刘海屏 -->
-<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.2.2</title> <!-- 网页标题，带有多语言属性 -->
+<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.3.0</title> <!-- 网页标题，带有多语言属性 -->
 <link rel="stylesheet" href="./style.css"> <!-- 引入外部样式表 -->
 </head> <!-- 头部结束 -->
 <body> <!-- 网页主体开始 -->
@@ -89,15 +89,16 @@
 
 <div id="ui"> <!-- ==================== 核心控制面板主容器 ==================== -->
   <!-- v7.0.5：把原来"一路滚到底"的内容拆成「属性区 + 6 个分区」。滚动只发生在 #uiScroll 里，
-       底部 #uiBottomBar 是固定栏（不参与滚动），点击入口切换分区。 -->
+       底部 #uiBottomBar 是固定栏（不参与滚动），点击入口切换分区。
+       v7.3.0：属性区也成为分区之一，底部栏共 8 个入口；点当前入口 = 全关，此时 #ui 只剩这条底部栏。 -->
   <div id="uiScroll">
   <!-- v7.2.2：拖动条挪进滚动区内部 —— 原来它是 #ui 的直属子元素，面板怎么滚都钉在最上面，
        永久吃掉 24px 高度。现在跟着内容一起滚走，想看它滚回顶部就行。 -->
   <div id="uiDragHandle"><div class="bar"></div></div> <!-- 面板顶部的拖拽把手（随内容滚动） -->
-  <div id="uiMain">
+  <div id="uiMain"> <!-- v7.3.0：「属性」分区（data-sheet="props"），标题头由 JS 动态插入，见 mountUiSheets -->
 
   <div id="watermark"> <!-- 控制面板顶部的作者/版本水印 -->
-    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.2.2</div> <!-- 软件名称及版本 -->
+    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.3.0</div> <!-- 软件名称及版本 -->
     <div class="author" data-i18n="watermark.author">作者 binvwvnid · QQ 交流群 1121039855</div> <!-- 作者信息及群号 -->
   </div> <!-- 水印结束 -->
 
@@ -876,10 +877,13 @@
 
   <!-- 底部固定栏：不参与上面的滚动，一行排列、超出可左右滑动 -->
   <div id="uiBottomBar" role="tablist" aria-label="面板分区" data-i18n-aria-label="tab.listAria">
+    <!-- v7.3.0：底部栏最左边新增「属性」入口 —— 原来常显的属性区（#uiMain）正式变成第 8 个分区，
+         和其它 7 个走同一套开合逻辑：点它展开、再点一次全关（只剩这条底部栏）。 -->
+    <button class="ui-tab" type="button" data-sheet="props" role="tab" aria-label="属性" data-i18n-aria-label="tab.props" data-i18n-title="tab.props" title="属性"><i data-icon="setting"></i></button>
     <button class="ui-tab" type="button" data-sheet="objects" role="tab" aria-label="元件" data-i18n-aria-label="tab.objects" data-i18n-title="tab.objects" title="元件"><i data-icon="layers"></i></button>
     <button class="ui-tab" type="button" data-sheet="brush" role="tab" aria-label="画笔" data-i18n-aria-label="tab.brush" data-i18n-title="tab.brush" title="画笔"><i data-icon="high-light"></i></button>
     <button class="ui-tab" type="button" data-sheet="canvas" role="tab" aria-label="画布" data-i18n-aria-label="tab.canvas" data-i18n-title="tab.canvas" title="画布"><i data-icon="selected"></i></button>
-    <button class="ui-tab" type="button" data-sheet="advanced" role="tab" aria-label="高级" data-i18n-aria-label="tab.advanced" data-i18n-title="tab.advanced" title="高级"><i data-icon="setting"></i></button>
+    <button class="ui-tab" type="button" data-sheet="advanced" role="tab" aria-label="高级" data-i18n-aria-label="tab.advanced" data-i18n-title="tab.advanced" title="高级"><i data-icon="brain"></i></button>
     <button class="ui-tab" type="button" data-sheet="project" role="tab" aria-label="项目" data-i18n-aria-label="tab.project" data-i18n-title="tab.project" title="项目"><i data-icon="folder-open"></i></button>
     <button class="ui-tab" type="button" data-sheet="export" role="tab" aria-label="导出" data-i18n-aria-label="tab.export" data-i18n-title="tab.export" title="导出"><i data-icon="download"></i></button>
     <button class="ui-tab" type="button" data-sheet="theme" role="tab" aria-label="主题" data-i18n-aria-label="tab.theme" data-i18n-title="tab.theme" title="主题"><i data-icon="clear"></i></button>
@@ -887,7 +891,8 @@
 </div> <!-- ==================== 核心控制面板主容器结束 ==================== -->
 
 <div id="uiResizeHandle" style="display:none;" title="按住拖拽调整大小，双击恢复默认" data-i18n-title="uiResize.title">◢</div> <!-- 控制面板右下角的自由缩放手柄（默认隐藏） -->
-<button id="btnPanelToggle"><i data-icon="triangle"></i><span data-i18n="panel.collapse">收起</span></button> <!-- v7.2.2：常驻左上角的面板收起/展开浮钮（面板外部，桌面与移动端通用） -->
+<!-- v7.3.0：左上角那颗「收起 / 展开」浮钮已删除 —— 现在收起靠底部栏（再点一次当前入口即全关），
+     面板自己就是入口，不再需要外面再挂一颗。 -->
 
 <div id="layerPop"> <!-- ==================== v6.3.0 元件列表（v7.0.6 起改成内联，住在「元件」分区里） ==================== -->
   <div class="lp-head">

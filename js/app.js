@@ -61,7 +61,6 @@
   const layerListEl = document.getElementById('layerList');
   const targetFigureSelect = document.getElementById('targetFigure');
   const uiPanel = document.getElementById('ui');
-  const btnPanelToggle = document.getElementById('btnPanelToggle'); /* v7.2.2：左上角常驻的收起/展开浮钮 */
   const exportHDCheckbox = document.getElementById('exportHD');
   const btnToggleLock = document.getElementById('btnToggleLock');
   const timelineEl = document.getElementById('timeline');
@@ -2165,8 +2164,11 @@ function importActionPresets() {
   // 实时更新右下角手柄的位置（让手柄紧贴面板右下角）
   function updateResizeHandlePos() {
     /* v7.2.1：面板被 display:none 收起时（移动端），getBoundingClientRect 全是 0，
-       手柄会被塞到屏幕左上角外，先算出来再说就晚了 —— 直接藏掉。 */
-    if (!uiResizable || isPanelLocked || !uiResizeHandle || !uiPanel.getClientRects().length) {
+       手柄会被塞到屏幕左上角外，先算出来再说就晚了 —— 直接藏掉。
+       v7.3.0：全关（只剩底部栏）时也藏起来 —— 那条胶囊没什么可缩的，
+       留一颗 ◢ 挂在它右下角只会被误点。 */
+    if (!uiResizable || isPanelLocked || !uiResizeHandle || !uiPanel.getClientRects().length
+        || uiPanel.classList.contains('collapsed')) {
       if (uiResizeHandle) uiResizeHandle.style.display = 'none';
       return;
     }
@@ -2298,44 +2300,13 @@ function importActionPresets() {
 
   /* ==================== 移动端 UI ==================== */
 
-  /* v7.2.2：控制面板的展开/收起统一入口，行为**完全对齐「🎬 帧动画面板」**：
-       收起 → #ui 直接 display:none，左上角浮钮改成「展开」；
-       展开 → 面板回来，浮钮改回「收起」。
-     浮钮本身**常驻**（面板开着也在，就在面板左边的左上角），
-     再也不会出现「点一下收起，入口跟着面板一起消失」的死角。
-     桌面端与移动端共用同一套逻辑，只是面板停靠位置不同。 */
-  function syncPanelToggleUI(open) {
-    if (!btnPanelToggle) return;
-    const key = open ? 'panel.collapse' : 'panel.expand';
-    const span = btnPanelToggle.querySelector('[data-i18n]');
-    if (span) {
-      if (span.getAttribute('data-i18n') !== key) span.setAttribute('data-i18n', key);
-      span.textContent = tr2(key, open ? '收起' : '展开');
-    }
-    btnPanelToggle.classList.toggle('collapsed', !open);
-    btnPanelToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-    const titleKey = open ? 'panel.collapseTitle' : 'panel.expandTitle';
-    btnPanelToggle.setAttribute('data-i18n-title', titleKey);
-    btnPanelToggle.title = tr2(titleKey, '');
-  }
-
-  function toggleUiPanel(show) {
-    const open = !!show;
-    uiPanel.classList.toggle('hidden', !open);
-    syncPanelToggleUI(open);
-    document.body.classList.toggle('ui-open', open);
-    /* 收起时把「元件」浮窗一起关掉，别让它孤零零浮在画布上 */
-    if (!open) setLayerPopOpen(false);
-    /* 面板隐藏/显示之后，画布可用区、浮钮位置、缩放手柄全部要重算 */
-    refreshTimelineDockOffsets();
-    resize();
-    if (open) updateResizeHandlePos();
-  }
-
+  /* v7.3.0：面板的「收起 / 展开」不再是一颗外部浮钮，而是**底部入口栏自己**：
+       点某个入口 → 展开那个分区；再点同一个入口 → 全关，只剩底部栏（#ui.collapsed）。
+     具体的开合逻辑在 switchUiSheet()（文件后半段的「控制面板分区」一节），
+     这里只负责首屏默认值：手机全关、桌面展开「属性」。 */
   if (isMobile) {
-    /* 默认收起 —— 手机上屏幕就这么高，一上来就盖掉半屏画布不合适 */
-    uiPanel.classList.add('hidden');
-    syncPanelToggleUI(false);
+    /* 默认全关 —— 手机上屏幕就这么高，一上来就盖掉半屏画布不合适，只留一条底部入口栏 */
+    uiPanel.classList.add('collapsed');
     setTimeout(resize, 100);
     const tip = document.createElement('div');
     tip.innerHTML = ic('tips') + tr2('mobile.gestureTip', '双指拖动平移，捏合缩放');
@@ -2343,15 +2314,6 @@ function importActionPresets() {
     document.body.appendChild(tip);
     setTimeout(() => { tip.style.opacity = '0'; }, 2500);
     setTimeout(() => { tip.remove(); }, 3500);
-  } else {
-    /* 桌面端默认展开，浮钮显示「收起」 */
-    syncPanelToggleUI(true);
-  }
-  if (btnPanelToggle) {
-    btnPanelToggle.addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggleUiPanel(uiPanel.classList.contains('hidden'));
-    });
   }
 
   /* ==================== 时间轴开关 ==================== */
@@ -2368,7 +2330,7 @@ function importActionPresets() {
       TIMELINE_H = 0;
     }
     
-    /* v7.2.2：#btnPanelToggle 常驻显示，不再随时间轴/面板状态切换显隐 */
+    /* v7.3.0：面板开合由底部入口栏自己管（switchUiSheet），这里不用再同步任何浮钮显隐 */
 
     // 所有的面板位置计算统一交给 refreshTimelineDockOffsets 处理
     refreshTimelineDockOffsets();
@@ -11154,9 +11116,9 @@ function importActionPresets() {
 
       // ② 左侧 / 底部 UI 面板占位
       if (isMobile) {
-        if (!uiPanel.classList.contains('hidden')) {
-          availBottom = Math.min(availBottom, uiRect.top);
-        }
+        /* v7.3.0：面板不会再整块隐藏（全关也留着底部栏），uiRect.top 就是它真正的上沿 ——
+           全关时是那条栏的顶，展开时是半屏线，两种都对，直接取最小值即可。 */
+        availBottom = Math.min(availBottom, uiRect.top);
       } else {
         availLeft = Math.max(availLeft, uiRect.right);
       }
@@ -12268,7 +12230,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     if (pointers.size > 2) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (e.target.closest('#transformBoxUI') || e.target.closest('#ui') || e.target.closest('#timeline') ||
-        e.target.closest('#btnShowTimeline') || e.target.closest('#btnPanelToggle') ||
+        e.target.closest('#btnShowTimeline') ||
         e.target.closest('#uiResizeHandle') || e.target.closest('#historyControls') ||
         e.target.closest('#layerPop')) return;
 
@@ -14640,13 +14602,14 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
 
   /* ==================== v7.0.5：控制面板分区（底部固定入口栏） ====================
      设计：面板 = 拖动条 + 可滚动区(#uiScroll) + 固定底部栏(#uiBottomBar)。
-     默认显示 #uiMain（属性区）；点底部入口把 #uiMain 换成对应分区，再点一次回来。
+     v7.3.0：8 个入口一视同仁 —— 属性(#uiMain) / 元件 / 画笔 / 画布 / 高级 / 项目 / 导出 / 主题。
+     点某个入口展开它；再点同一个入口 → 全关，此时 #ui 只剩底部那条入口栏（.collapsed）。
      搬迁用 appendChild 把原 DOM 节点移进分区容器 —— 事件监听绑在元素自身上，搬家不会丢。 */
   const uiSheetEls = {};        /* key -> 容器 */
-  let activeUiSheet = null;     /* 当前分区 key；null = 属性区 */
+  let activeUiSheet = null;     /* 当前分区 key；null = 全关（只剩底部栏） */
 
   function uiSheetTitle(key) {
-    return ({ objects: '元件', brush: '画笔', canvas: '画布', advanced: '高级', project: '项目', export: '导出', theme: '主题' })[key] || '';
+    return ({ props: '属性', objects: '元件', brush: '画笔', canvas: '画布', advanced: '高级', project: '项目', export: '导出', theme: '主题' })[key] || '';
   }
 
   function mountUiSheets() {
@@ -14655,6 +14618,10 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       uiSheetEls[k] = document.getElementById('sheet' + k.charAt(0).toUpperCase() + k.slice(1));
     });
     if (!uiSheetEls.objects) return;   /* 旧 HTML 没更新时安全退出 */
+
+    /* v7.3.0：属性区（#uiMain）也是分区之一，key 直接叫 props，跟底部栏 data-sheet="props" 对上 */
+    const propsBox = document.getElementById('uiMain');
+    if (propsBox) uiSheetEls.props = propsBox;
 
     const move = (el, box) => { if (el && box) box.appendChild(el); };
     const rowOf = (el) => (el ? el.closest('.row') : null);
@@ -14668,24 +14635,23 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       return d;
     };
 
-    /* 每个分区顶部的标题 + 返回按钮 */
-    keys.forEach(k => {
-      const box = uiSheetEls[k];
+    /* 每个分区顶部的标题条。
+       v7.3.0：右上角那颗「返回属性」删掉了 —— 属性自己也有底部入口，想回去点它就行，
+       留着两个入口反而多一个要维护的状态。 */
+    const addHead = (box, k, placeAtTop) => {
       if (!box) return;
       const head = document.createElement('div');
       head.className = 'ui-sheet-head';
       const tEl = document.createElement('span');
       tEl.dataset.i18n = 'tab.' + k;        /* 标题跟着语言切换 */
       tEl.textContent = uiSheetTitle(k);
-      const back = document.createElement('button');
-      back.type = 'button';
-      back.className = 'ui-sheet-back';
-      back.dataset.i18n = 'tab.back';       /* 返回按钮也跟着切 */
-      back.textContent = tr2('panel.backToProps', '返回属性');
-      back.addEventListener('click', () => switchUiSheet(null));
-      head.appendChild(tEl); head.appendChild(back);
-      box.appendChild(head);
-    });
+      head.appendChild(tEl);
+      if (placeAtTop) box.insertBefore(head, box.firstChild);
+      else box.appendChild(head);
+    };
+    keys.forEach(k => addHead(uiSheetEls[k], k, false));
+    /* 属性区的标题必须插到最前面（水印、面板标题行都在它后面），否则会跑到属性列表末尾 */
+    addHead(propsBox, 'props', true);
 
     /* ---- 元件：添加物体 / 编辑操作 / 元件列表（纵向，v7.0.6 起不再是浮窗） ---- */
     const addSummary = document.querySelector('[data-i18n="add.summary"]');
@@ -14835,22 +14801,33 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
         btn.addEventListener('click', () => switchUiSheet(btn.dataset.sheet));
       });
     }
+
+    /* ---- 首屏默认值 ----
+       桌面：展开「属性」（打开就能改参数，和以前常显属性区的手感一致）；
+       手机：全关，只留底部栏（面板在底部占半屏，一上来就盖住画布不合适，用户点了才展开）。 */
+    switchUiSheet(isMobile ? null : 'props');
   }
 
   function switchUiSheet(key) {
-    const main = document.getElementById('uiMain');
     const scroll = document.getElementById('uiScroll');
     const bar = document.getElementById('uiBottomBar');
-    if (!main) return;
+    const panel = document.getElementById('ui');
+    if (!panel) return;
 
-    if (key && key === activeUiSheet) key = null;   /* 再点同一个入口 → 回到属性区 */
+    /* v7.3.0：点当前打开的入口 = 全关 —— 面板只剩底部那排入口栏。
+       原来「再点一次回属性区」的语义已经不需要了：属性自己就是最左边那个入口。 */
+    if (key && key === activeUiSheet) key = null;
+    if (key && !uiSheetEls[key]) key = null;
+
+    const wasCollapsed = panel.classList.contains('collapsed');
     activeUiSheet = key;
 
     Object.keys(uiSheetEls).forEach(k => {
       const box = uiSheetEls[k];
       if (box) box.hidden = (k !== key);
     });
-    main.hidden = !!key;
+
+    panel.classList.toggle('collapsed', !key);
 
     if (bar) {
       bar.querySelectorAll('.ui-tab').forEach(b => {
@@ -14865,6 +14842,15 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
        离开画布分区时把编辑态关掉，避免误拖。 */
     if (key === 'canvas') setActiveTool('canvas');
     else if (activeTool === 'canvas') setActiveTool(null);
+
+    /* 展开 ↔ 全关会改变面板占位，画布可用区、右下浮钮、缩放手柄都要重算；
+       分区与分区之间面板尺寸不变，不用白跑一遍 resize。 */
+    if (wasCollapsed !== !key) {
+      refreshTimelineDockOffsets();
+      resize();
+      updateResizeHandlePos();   /* 全关时藏起右下角 ◢ 手柄，展开时贴回面板角上 */
+      if (!wasCollapsed && key === 'objects') scheduleRenderLayerPop();  /* 元件列表平时不渲染，展开时补一次 */
+    }
 
     EventBus.emit('need:render');
   }
@@ -14889,36 +14875,36 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
 
     /* v7.0.4/7.0.5：「🎬 帧动画面板」浮钮固定在屏幕右下角，不被抽屉顶上去。
        v7.0.5 面板底部多了固定入口栏，所以移动端要把它抬到**底部栏上方**（barH + 8），
-       免得压住「元件/画布/高级…」那排入口。桌面端面板在左上，浮钮照旧贴屏幕右下。 */
+       免得压住「属性/元件/画布/高级…」那排入口。
+       v7.3.0：面板不会再整块隐藏了（全关也留着底部栏），所以 barH 直接取，不用再判 hidden。 */
     const btnShowTl = document.getElementById('btnShowTimeline');
     if (btnShowTl) {
       if (isMobile) {
         const bar = document.getElementById('uiBottomBar');
-        const barH = (bar && ui && !ui.classList.contains('hidden')) ? bar.offsetHeight : 0;
+        const barH = bar ? bar.offsetHeight : 0;
         btnShowTl.style.bottom = barH ? (barH + 8) + 'px' : '';
       } else {
         btnShowTl.style.bottom = '';
       }
     }
 
-    /* v7.2.2：左上角「收起 / 展开」浮钮。它是 fixed 的常驻入口，只有一种情况要让位 ——
-       时间轴改成停靠在顶部时会把屏幕上方整条盖住，这时把它顺下来（h + 12），否则回到 CSS 的 top:12px。
-       放在 uiResizable 的提前 return 之前，自由缩放态也要跟着让位。 */
-    const panelToggleBtn = document.getElementById('btnPanelToggle');
-    if (panelToggleBtn) {
-      panelToggleBtn.style.top = (timelineDock === 'top' && visible) ? (h + 12) + 'px' : '';
-    }
-
     // 【修复】不论是否开启了自由缩放，桌面端顶部停靠时先把 UI 面板往下推，否则会被时间轴压住
     if (!isMobile && ui) {
-      const baseTop = 52; /* v7.2.2：原来是 14，左上角 12–44px 这段让给了常驻的 #btnPanelToggle */
-      const reserved = baseTop + (timelineDock === 'top' ? h : 0) + 100;   /* 顶部偏移 + 时间轴 + 底部留白 */
-      ui.style.top = (baseTop + (timelineDock === 'top' ? h : 0)) + 'px';
+      const baseTop = 14;
+      const dockTop = timelineDock === 'top' ? h : 0;
+      /* v7.3.0：用户手动拖动过面板位置就别再把它拽回左上角 —— 现在展开/全关都要走这一趟，
+         每点一次底部入口面板就跳回原点会很难受。被时间轴压住这条仍然优先。
+         高度也跟着「实际 top」算，拖下去多少就少多少，面板不会撑出屏幕底。 */
+      const draggedTop = uiPanelDragged ? parseFloat(ui.style.top) : NaN;
+      const top = Number.isFinite(draggedTop) ? Math.max(draggedTop, baseTop + dockTop) : (baseTop + dockTop);
+      const reserved = top + 100;   /* 顶部偏移（含时间轴）+ 底部留白 */
+      ui.style.top = top + 'px';
       ui.style.maxHeight = 'calc(100vh - ' + reserved + 'px)';
       /* v7.0.5：桌面端也把高度**写死**成可用高度。原来只有 max-height、高度随内容自适应，
          切分区时内容一短面板就缩，底部入口栏跟着上下乱跳（每次点入口都要重新找位置）。
          写死之后滚动交给 #uiScroll，栏稳稳待在面板底部。
-         例外：开了自由缩放且用户拖过尺寸时，高度归 applyCustomSize()，这里别抢。 */
+         例外：开了自由缩放且用户拖过尺寸时，高度归 applyCustomSize()，这里别抢。
+         另：全关时 CSS 的 #ui.collapsed 会用 !important 把高度压回内容高，这里照写无妨。 */
       if (!(uiResizable && uiCustomSize)) ui.style.height = 'calc(100vh - ' + reserved + 'px)';
     }
 
@@ -14926,15 +14912,16 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
 
     // 移动端底部抽屉
     if (isMobile && ui) {
-      const isUiHidden = ui.classList.contains('hidden');
+      /* v7.3.0：面板只有「全关（只剩底部栏）」和「打开某个分区」两种形态，不再整块隐藏 */
+      const isCollapsed = ui.classList.contains('collapsed');
 
       let bottomOffset = 0;
       if (timelineDock === 'bottom' && visible) {
         bottomOffset = h;
       }
 
-      ui.style.bottom = (isUiHidden ? 0 : bottomOffset) + 'px';
-      if (!isUiHidden) {
+      ui.style.bottom = (isCollapsed ? 0 : bottomOffset) + 'px';
+      if (!isCollapsed) {
         if (!uiPanelDragged) {
           ui.style.top = 'auto';
           /* v7.0.5：高度交给 CSS 的 height:50vh（写死高度，切分区不塌缩），这里只保证清掉拖拽残留 */
@@ -14947,7 +14934,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
           ui.style.maxHeight = hh + 'px';
         }
       } else {
-        ui.style.height = '';              /* 收起状态清掉内联高度，回到 CSS 的 50vh */
+        ui.style.height = '';              /* 全关状态清掉内联高度，回到 CSS 的「内容高」 */
         ui.style.maxHeight = '';
       }
     }
@@ -15291,7 +15278,6 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     renderTweenEaseMenu();
     syncPinViewBtn();
     SKFE.features.colorTools.updateColorToolLabels();
-    syncPanelToggleUI(!uiPanel.classList.contains('hidden'));
     if (typeof syncSnapBtn === 'function') syncSnapBtn();
     /* v7.1.0：元件列表每行的眼睛/锁/删除按钮 title 是渲染时用 t() 取词的，换语言要重画一次 */
     scheduleRenderLayerPop();

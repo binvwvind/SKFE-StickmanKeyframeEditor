@@ -92,20 +92,26 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
   } /* 公共面板背景设置结束 */
 
   #ui { /* 主控制面板 */
-    position: fixed; top: 52px; left: 14px; /* v7.2.2：下移 38px，把左上角让给常驻的 #btnPanelToggle（收起/展开浮钮） */
+    position: fixed; top: 14px; left: 14px; /* v7.3.0：左上角浮钮已删除，top 回到 14px */
     border-radius: var(--radius-panel); /* 使用全局大面板圆角 */
     padding: 0; /* v7.0.5：内边距移到 #uiScroll / 拖动条 / 底部栏，底部栏才能通栏 */
     box-shadow: var(--shadow-panel); /* 使用大面板阴影 */
     user-select: none; /* 禁止选中内部文字 */
     color: var(--text-main); /* 应用主文字颜色 */
-    width: 350px; max-height: calc(100vh - 138px); /* 固定宽度 350px，最大高度为屏幕高度减去 138px（顶部 52px 让位 + 底部 86px 留白） */
+    width: 350px; max-height: calc(100vh - 100px); /* 固定宽度 350px，最大高度为屏幕高度减去 100px（顶部 14px + 底部 86px 留白） */
     display: flex; flex-direction: column; /* v7.0.5：纵向三段 —— 拖动条 / 滚动区 / 固定底部栏 */
     overflow: hidden; /* 滚动交给 #uiScroll，否则底部栏会被一起滚走 */
     transition: transform .3s ease, bottom .3s ease; /* 平滑过渡动画：用于移动端展开/收起 */
     z-index: 10; /* 层级较高，保证在画布上方 */
   } /* 主控制面板基础样式结束 */
 
-  #ui.hidden { display: none; } /* v7.2.2：收起 = 彻底隐藏（桌面端与移动端同一套规则，对齐「🎬 帧动画面板」的 toggleTimeline） */
+  /* v7.3.0：全关形态 —— 8 个入口都点掉了，只剩底部那排入口栏。
+     滚动区整个撤掉，宽高都必须压成「内容高/内容宽」：桌面端 JS 会写死内联 height（自由缩放还会写 width），
+     移动端 CSS 是 50vh/100%，几条都得用 !important 压过去，否则会留下一大块看不见却挡画布的空壳。
+     宽度收成 auto 后，这颗胶囊就是图标排本身的宽度，不会再拖着一段空壳。 */
+  #ui.collapsed { width: auto !important; height: auto !important; max-height: none !important; }
+  #ui.collapsed #uiScroll { display: none; }
+  #ui.collapsed #uiBottomBar { border-top: none; } /* 只剩一根栏时不需要分隔线 */
 
   #uiScroll { /* v7.0.5：面板里唯一可滚动的区域 */
     flex: 1 1 auto; min-height: 0; /* 占满剩余高度，内容多时自己滚 */
@@ -120,18 +126,14 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
   } /* 区域基础样式结束 */
   .ui-sheet[hidden], #uiMain[hidden] { display: none !important; } /* 隐藏时必须真的隐藏（覆盖 display） */
 
-  .ui-sheet-head { /* 分区顶部的返回标题 */
+  .ui-sheet-head { /* 分区顶部的标题条 */
     display: flex; align-items: center; gap: 8px; /* 水平排列 */
     padding: 4px 0 8px; /* 上下留白 */
     font-size: 13px; font-weight: 600; color: var(--text-main); /* 标题字重字号 */
     position: sticky; top: 0; z-index: 3; /* 分区内滚动时标题吸顶 */
     background: var(--bg-panel); /* 吸顶需要不透明底 */
   } /* 分区标题结束 */
-  .ui-sheet-head .ui-sheet-back { /* 返回按钮 */
-    margin-left: auto; padding: 3px 10px; min-height: 26px; font-size: 11.5px; /* 尺寸 */
-    border-radius: 999px; border: 1px solid transparent; /* 胶囊圆角 */
-    background: var(--btn-bg); color: var(--text-sub); cursor: pointer; /* 配色 */
-  } /* 返回按钮结束 */
+  /* v7.3.0：右上角那颗「返回属性」已删除 —— 属性自己也成了底部栏入口，不再需要往回跳。 */
 
   #uiBottomBar { /* v7.0.5：底部固定栏（不参与滚动） */
     flex: 0 0 auto; /* 高度固定，不被压缩 */
@@ -151,7 +153,7 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
   .ui-tab { /* 底部栏的入口按钮（v7.1.0：文字换成矢量图标，只留图标） */
     flex: 0 0 auto; /* 不压缩，溢出就滑动 */
     display: inline-flex; align-items: center; justify-content: center; /* 图标居中 */
-    padding: 5px 10px; min-height: 30px; min-width: 36px; /* 图标按钮的方形热区 */
+    padding: 5px 9px; min-height: 30px; min-width: 36px; /* 图标按钮的方形热区（v7.3.0：左右 10 → 9，8 个入口 350px 里排得下、不出横向滚动） */
     font-size: 12px; font-weight: 500; /* 字号字重 */
     color: var(--text-sub); background: transparent; /* 未选中：次要色 */
     border: 1px solid transparent; border-radius: 999px; /* 胶囊 */
@@ -1679,7 +1681,7 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
       /* v7.0.5：padding 归零，safe-area 交给底部栏自己处理 */
       overscroll-behavior-y: contain; /* 防止长按拖动触发系统手势 */
     } /* 移动端面板样式结束 */
-    /* v7.2.2：收起态全局规则见 #ui.hidden（已提到通用区），这里不再重复 */
+    /* v7.3.0：全关（只剩底部栏）的规则见通用区的 #ui.collapsed，两个端共用一套 */
 
     /* v7.0.5：底部栏固定后，抽屉不再需要给右下角浮钮额外留白 —— 浮钮改由 JS 抬到底部栏上方 */
     #uiBottomBar { padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px)); }
@@ -1707,29 +1709,8 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
 
   } /* 移动端媒体查询结束 */
 
-  /* v7.2.2：面板「收起 / 展开」浮钮 —— 常驻屏幕左上角，也就是**控制面板外部**。
-     和右下角的「🎬 帧动画面板」浮钮一个交互：入口永远在，面板开着显示「收起」，
-     收起了显示「展开」，再也不会出现「点一下收起就再也找不回来」的死角。
-     桌面端 #ui 的默认 top 因此下移到 52px，正好让这颗按钮独占左上角。 */
-  #btnPanelToggle { /* 面板收起/展开按钮 */
-    position: fixed; /* 固定定位，不随画布与面板滚动 */
-    top: 12px; left: 14px; /* 屏幕左上角 */
-    z-index: 101; /* 层级 101，压住面板与时间轴 */
-    display: flex; /* 常驻显示 */
-    align-items: center; gap: 6px; justify-content: center; /* 内容居中，图标与文字间距 */
-    border-radius: var(--radius-chip); /* 胶囊圆角 */
-    padding: 7px 14px; min-height: 32px; /* 内边距，高度 */
-    font-size: 13px; font-weight: 600; /* 字号，加粗 */
-    background: var(--bg-panel); /* 面板色背景 */
-    border: none; /* 无边框 */
-    color: var(--color-primary); /* 主题色文字 */
-    box-shadow: var(--shadow-float); /* 悬浮阴影 */
-    white-space: nowrap; cursor: pointer; /* 不换行，指针 */
-  } /* 收起/展开按钮基础样式结束 */
-  #btnPanelToggle:hover { background: var(--btn-hover); color: var(--color-primary); } /* 悬浮背景色 */
-  #btnPanelToggle:active { transform: translateY(1px); } /* 点击时轻微下沉，和帧动画面板浮钮同款 */
-  #btnPanelToggle [data-icon] { font-size: 14px; transition: transform .2s ease; } /* 三角图标 */
-  #btnPanelToggle.collapsed [data-icon] { transform: rotate(180deg); } /* 收起态：三角翻过来朝下，表示「点它把面板拉出来」 */
+  /* v7.3.0：左上角「收起 / 展开」浮钮整段已删除（连样式一起）——
+     现在面板自己的底部入口栏就是开合开关：点某个入口展开它，再点同一个入口就全关。 */
 
   @media (max-width: 768px) { /* 移动端局部样式适配 */
     #coordDisplay { top: 54px; right: 8px; padding: 6px 10px; text-align: right; } /* 坐标浮窗位置和样式 */

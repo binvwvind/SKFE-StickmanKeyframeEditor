@@ -1,7 +1,7 @@
 /* SKFE locale: English */
 window.SKFE_LOCALES = window.SKFE_LOCALES || {};
 window.SKFE_LOCALES['en'] = {
-  "app.title": "SKFE | Stickman Keyframe Editor v7.2.2",
+  "app.title": "SKFE | Stickman Keyframe Editor v7.3.0",
   "tbox.move": "Drag to move the whole object",
   "tbox.scale": "Drag to scale proportionally (enable Free Stretch to scale X/Y separately)",
   "tbox.rotate": "Drag to rotate",
@@ -23,13 +23,9 @@ window.SKFE_LOCALES['en'] = {
   "cameraPreview.closeTitle": "Close preview",
   "cameraPreview.hint": "Always shows the camera export view for the current frame",
   "timeline.show": "Frame panel",
-  "watermark.title": "SKFE | Stickman Keyframe Editor v7.2.2",
+  "watermark.title": "SKFE | Stickman Keyframe Editor v7.3.0",
   "watermark.author": "by binvwvnid · QQ group: 1121039855",
   "panel.title": "Control panel",
-  "panel.collapse": "Collapse",
-  "panel.collapseTitle": "Collapse the control panel to free up the canvas",
-  "panel.expand": "Expand",
-  "panel.expandTitle": "Expand the control panel",
   "lang.toggle": "EN/中",
   "export.hd": "HD export (4× resolution)",
   "add.summary": "Add object",
@@ -392,6 +388,7 @@ window.SKFE_LOCALES['en'] = {
 "spatial.footR": "Right foot",
   "help.content": "<b>1. Control panel, top to bottom:</b><br>• At the top are <b>Export PNG / Export JPG / Fullscreen</b>, with an HD option (4× resolution).<br>• <b>“＋ Add object”</b> expands to reveal stickman, insert image, upload accessory, speech bubble and built-in shapes.<br>• Below are duplicate, delete and reset, followed by <b>More settings</b> and <b>Local presets</b>.<br><br><b>2. Basic operations:</b><br>• Select: click an object on the canvas or an item in the layer list.<br>• Move: <b>drag the <i data-icon='direction-adjustment-three'></i> handle above the canvas</b>, or type X / Y coordinates directly; drag a stickman's pelvis/torso to move the whole figure.<br>• Rotate: <b>type any angle into the rotation field (not limited to ±180°)</b>, or click <i data-icon='rotate'></i> to open the rotation handle and drag on the canvas. Images/accessories/shapes can use <i data-icon='anchor'></i> to set a custom anchor; rotation pivots around it.<br>• Joints: drag the blue joint dots to pose; red dots are pinned joints.<br>• View: on desktop, drag empty space to pan and scroll to zoom; on mobile, drag with two fingers to pan and pinch to zoom.<br><br><b>3. More settings (small buttons):</b><br>• Layers, proportions, joints, glow, canvas and theme are listed in order. <b>Click a button to open its panel; click again to close it.</b> Joint pinning (IK) is at the bottom of the Joints panel.<br>• The <b>Proportions</b> panel also contains hands & feet settings.<br>• The <b>Glow</b> panel also contains highlight, gradient, ground shadow and rear-limb darkening.<br>• The <b>Canvas</b> panel sets canvas bounds and the ground guide. When enabled, exports keep only canvas content; click inside the canvas to select it, scale it with “Scale”, and drag its border to move it. A vignette mask with adjustable opacity is also available.<br><br><b>4. Frame animation & advanced settings:</b><br>• Click “<i data-icon='film'></i> Frame panel” at the bottom right, then use “＋ Frame” or “Duplicate frame” to animate. The “▾” next to Tween switches easing curves; <b>“<i data-icon='aiming'></i> Parts” sets curves separately for position, scale, rotation and each joint</b>.<br>• Tweens support <b>scale and rotation</b>; rotation can cross 360° for multiple turns (e.g., 0°→360° = one clockwise turn, 0°→-720° = two counter-clockwise turns).<br>• The timeline supports <b>multi-select copy</b> (enable multi-select, then hold Shift or click consecutively).<br>• Advanced settings let you adjust FPS, onion skin, frame thumbnails, export GIF / PNG sequence / <b>WebM video (alpha supported)</b> / <b>MP4 video (no alpha, custom background color)</b>, import a reference video, and toggle <b>global property editing</b>.<br>• Shortcuts: <code>C</code> duplicate, <code>Delete</code> delete, <code>Space</code> play/pause, <code>arrow keys</code> switch frames.<br><br><b>5. Saving & exporting:</b><br>• Local presets save the current stickman's appearance and colors; the preset list supports renaming and deletion.<br>• GIF / video support transparent backgrounds (video requires browser WebM Alpha support). On iOS, long-press an image to save it.",
 
+"tab.props": "Properties",
 "tab.objects": "Objects",
 "tab.canvas": "Canvas",
 "tab.advanced": "Advanced",
@@ -399,7 +396,6 @@ window.SKFE_LOCALES['en'] = {
 "tab.export": "Export",
 "tab.theme": "Theme",
 "tab.brush": "Brush",
-"tab.back": "Back",
 "layerPop.lockTip": "Lock (can't be dragged or selected on canvas)",
   "layerPop.delTip": "Delete this element",
 "layerPop.unlockTip": "Unlock",
@@ -450,7 +446,6 @@ window.SKFE_LOCALES['en'] = {
   "panel.lockTitle": "When locked the drag handle is disabled to prevent accidental moves",
   "panel.resizeOn": "Enable free resize",
   "panel.resizeOff": "Disable free resize",
-  "panel.backToProps": "Back to properties",
   "mobile.gestureTip": "Two-finger drag to pan, pinch to zoom",
   "glow.on": "Enable outline shadow",
   "glow.off": "Disable outline shadow",

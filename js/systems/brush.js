@@ -1852,6 +1852,7 @@ SKFE.systems.brush = (function () {
       const o = document.createElement('option');
       o.value = '';
       o.textContent = tr('brushPreset.empty', '还没有预设');
+      o.setAttribute('data-i18n', 'brushPreset.empty'); /* v7.2.2：挂上 data-i18n，切语言时能跟着刷新 */
       sel.appendChild(o);
       sel.disabled = true;
       return;

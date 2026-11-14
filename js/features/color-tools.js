@@ -8,6 +8,13 @@ SKFE.features.colorTools = (function () {
   let D = null;
   function init(deps) { D = deps; }
 
+  /* v7.2.2：取词助手 —— 语言包里没有这个键就退回中文原文（和 app.js 的 tr2 同款） */
+  function T(key, fallback) {
+    if (typeof window.t !== 'function') return fallback;
+    const v = window.t(key);
+    return (v == null || v === key) ? fallback : v;
+  }
+
   const SWATCH_KEY = 'skfe_color_swatches_v1';
   const DEFAULT_SWATCHES = ['#111111', '#ffffff', '#ef4444', '#f97316', '#f59e0b', '#10b981', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899', '#64748b', '#f4f6f9'];
   const swatchPopover = document.getElementById('swatchPopover');
@@ -222,16 +229,16 @@ SKFE.features.colorTools = (function () {
       eye.type = 'button';
       eye.className = 'color-tool-btn eyedropper';
       eye.innerHTML = (typeof SKFEIcon === 'function') ? SKFEIcon('water') : '💧';
-      eye.title = '画面吸色';
-      eye.setAttribute('aria-label', '画面吸色');
+      eye.title = T('color.eyedropper', '画面吸色');
+      eye.setAttribute('aria-label', T('color.eyedropper', '画面吸色'));
       eye.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); startColorPick(inp, eye); });
 
       const pal = document.createElement('button');
       pal.type = 'button';
       pal.className = 'color-tool-btn palette';
       pal.innerHTML = '<span class="dot"></span>';
-      pal.title = '预设颜色';
-      pal.setAttribute('aria-label', '预设颜色');
+      pal.title = T('color.palette', '预设颜色');
+      pal.setAttribute('aria-label', T('color.palette', '预设颜色'));
       pal.addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();
         if (swatchPopoverOpen && swatchTargetInput === inp) closeSwatches();
@@ -244,8 +251,8 @@ SKFE.features.colorTools = (function () {
   }
 
   function updateColorToolLabels() {
-    document.querySelectorAll('.color-tool-btn.eyedropper').forEach(b => { b.title = '画面吸色'; });
-    document.querySelectorAll('.color-tool-btn.palette').forEach(b => { b.title = '预设颜色'; });
+    document.querySelectorAll('.color-tool-btn.eyedropper').forEach(b => { b.title = T('color.eyedropper', '画面吸色'); b.setAttribute('aria-label', b.title); });
+    document.querySelectorAll('.color-tool-btn.palette').forEach(b => { b.title = T('color.palette', '预设颜色'); b.setAttribute('aria-label', b.title); });
     if (swatchPopoverOpen) renderSwatches();
   }
 

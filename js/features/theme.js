@@ -8,6 +8,20 @@ SKFE.features.theme = (function () {
   let D = null;
   function init(deps) { D = deps; }
 
+  /* v7.2.2：取词助手 —— 语言包里没有这个键就退回中文原文 */
+  function TT(key, fallback) {
+    if (typeof window.t !== 'function') return fallback;
+    const v = window.t(key);
+    return (v == null || v === key) ? fallback : v;
+  }
+
+  /* v7.2.2：取词助手 —— 语言包里没有这个键就退回中文原文 */
+  function TT(key, fallback) {
+    if (typeof window.t !== 'function') return fallback;
+    const v = window.t(key);
+    return (v == null || v === key) ? fallback : v;
+  }
+
   const THEME_STORAGE_KEY = 'skfe_theme_v2';
   const DEFAULT_THEME = {
     canvasBg: '#faf7eb', canvasAlpha: 1,
@@ -181,7 +195,7 @@ SKFE.features.theme = (function () {
     if (!listEl) return;
     listEl.innerHTML = '';
     if (themePresets.length === 0) {
-      listEl.innerHTML = '<div class="theme-preset-empty">暂无保存的主题</div>';
+      listEl.innerHTML = '<div class="theme-preset-empty">' + TT('theme.presetEmpty', '暂无保存的主题') + '</div>';
       return;
     }
     themePresets.forEach((p, index) => {
@@ -202,10 +216,10 @@ SKFE.features.theme = (function () {
       const delBtn = document.createElement('div');
       delBtn.className = 'theme-preset-del';
       delBtn.textContent = '×';
-      delBtn.title = '删除该预设';
+      delBtn.title = TT('theme.presetDelTitle', '删除该预设');
       delBtn.onclick = (e) => {
         e.stopPropagation();
-        if (confirm('确定删除该主题预设吗？')) {
+        if (confirm(TT('theme.presetDelConfirm', '确定删除该主题预设吗？'))) {
           themePresets.splice(index, 1);
           saveThemePresetsToStorage();
           updateThemePresetUI();
@@ -231,7 +245,7 @@ SKFE.features.theme = (function () {
     const themePresetNameInput = document.getElementById('themePresetName');
     if (btnSaveThemePreset && themePresetNameInput) {
       btnSaveThemePreset.onclick = () => {
-        const name = themePresetNameInput.value.trim() || ('主题 ' + (themePresets.length + 1));
+        const name = themePresetNameInput.value.trim() || (TT('theme.presetDefaultName', '主题') + ' ' + (themePresets.length + 1));
         themePresets.push({ name, config: { ...themeConfig } });
         saveThemePresetsToStorage();
         updateThemePresetUI();

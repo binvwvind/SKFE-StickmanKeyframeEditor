@@ -2,7 +2,7 @@
 
 火柴人关键帧动画编辑器 —— For the Alan Becker stick figure fandom.
 
-**作者**：binvwvnid　│　**QQ 交流群**：1121039855　│　**版本**：v7.2.1
+**作者**：binvwvnid　│　**QQ 交流群**：1121039855　│　**版本**：v7.2.2
 
 - 网页版：https://binvwvnid.github.io/SKFE-StickmanKeyframeEditor/
 - 安装包（Windows / 安卓）：https://github.com/binvwvnid/SKFE-StickmanKeyframeEditor/releases
@@ -10,7 +10,7 @@
 > 开发者请看 **`项目结构.md`**：哪个文件该改、一键出包在哪、哪些目录别碰，都写在那里。
 > 下面这份是给最终用户看的操作教程。
 
-# SKFE 火柴人帧动画编辑器 v7.2.1 完全使用教程
+# SKFE 火柴人帧动画编辑器 v7.2.2 完全使用教程
 
 欢迎使用 SKFE！这是一款轻量且支持多轨道的火柴人帧动画编辑器。
 

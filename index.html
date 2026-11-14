@@ -3,7 +3,7 @@
 <head> <!-- 网页头部，包含元数据和外部引用 -->
 <meta charset="UTF-8"> <!-- 设置字符编码为 UTF-8，防止中文乱码 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover"> <!-- 移动端视口设置：宽度同设备，允许缩放，适配刘海屏 -->
-<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.2.1</title> <!-- 网页标题，带有多语言属性 -->
+<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.2.2</title> <!-- 网页标题，带有多语言属性 -->
 <link rel="stylesheet" href="./style.css"> <!-- 引入外部样式表 -->
 </head> <!-- 头部结束 -->
 <body> <!-- 网页主体开始 -->
@@ -88,14 +88,16 @@
 <button id="btnShowTimeline"><i data-icon="film"></i><span data-i18n="timeline.show">帧动画面板</span></button> <!-- 右下角呼出时间轴的悬浮按钮 -->
 
 <div id="ui"> <!-- ==================== 核心控制面板主容器 ==================== -->
-  <div id="uiDragHandle"><div class="bar"></div></div> <!-- 面板顶部的拖拽把手（固定在面板顶部，不参与滚动） -->
   <!-- v7.0.5：把原来"一路滚到底"的内容拆成「属性区 + 6 个分区」。滚动只发生在 #uiScroll 里，
        底部 #uiBottomBar 是固定栏（不参与滚动），点击入口切换分区。 -->
   <div id="uiScroll">
+  <!-- v7.2.2：拖动条挪进滚动区内部 —— 原来它是 #ui 的直属子元素，面板怎么滚都钉在最上面，
+       永久吃掉 24px 高度。现在跟着内容一起滚走，想看它滚回顶部就行。 -->
+  <div id="uiDragHandle"><div class="bar"></div></div> <!-- 面板顶部的拖拽把手（随内容滚动） -->
   <div id="uiMain">
 
   <div id="watermark"> <!-- 控制面板顶部的作者/版本水印 -->
-    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.2.1</div> <!-- 软件名称及版本 -->
+    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.2.2</div> <!-- 软件名称及版本 -->
     <div class="author" data-i18n="watermark.author">作者 binvwvnid · QQ 交流群 1121039855</div> <!-- 作者信息及群号 -->
   </div> <!-- 水印结束 -->
 
@@ -103,16 +105,15 @@
     <div class="panel-title" data-i18n="panel.title">控制面板</div> <!-- 面板主标题文字 -->
     <div style="display:flex; gap:6px;"> <!-- 右侧按钮组 -->
       <button id="btnLang" class="btn-xs"><i data-icon="translate"></i><span data-i18n="lang.toggle">中/EN</span></button> <!-- 中英双语切换按钮 -->
-      <button id="btnToggleUI" class="btn-xs" style="display:none;">收起</button> <!-- 移动端面板收起按钮（PC端隐藏） -->
     </div> <!-- 右侧按钮组结束 -->
   </div> <!-- 标题行结束 -->
 
   <div class="row"> <!-- 导出按钮行 -->
-    <button id="btnExportPNG" class="primary" style="flex:1;">导出PNG</button> <!-- 导出 PNG 按钮（主色，平分宽度） -->
-    <button id="btnExportJPG" style="flex:1;">导出JPG</button> <!-- 导出 JPG 按钮 -->
-    <button id="btnFullscreen" class="btn-soft" style="flex:1;">全屏</button> <!-- 全屏显示按钮 -->
+    <button id="btnExportPNG" class="primary" style="flex:1;" data-i18n="export.png">导出PNG</button> <!-- 导出 PNG 按钮（主色，平分宽度） -->
+    <button id="btnExportJPG" style="flex:1;" data-i18n="export.jpg">导出JPG</button> <!-- 导出 JPG 按钮 -->
+    <button id="btnFullscreen" class="btn-soft" style="flex:1;" data-i18n="fullscreen.enter">全屏</button> <!-- 全屏显示按钮 -->
     <!-- v7.1.0：全局属性修改从「高级」搬到全屏旁边，说明面板紧跟在下面 -->
-    <button class="adv-toggle" data-toggle="globalEdit" title="开启后，颜色/比例/高光/阴影等改动会同步到该元件的所有帧">全局属性修改</button>
+    <button class="adv-toggle" data-toggle="globalEdit" title="开启后，颜色/比例/高光/阴影等改动会同步到该元件的所有帧" data-i18n-title="prop.globalEditTitle" data-i18n="prop.globalEdit">全局属性修改</button>
     <span id="globalEditHelpBtn" style="font-size:11px;color:var(--color-primary);text-decoration:underline;cursor:pointer;user-select:none;padding:0 2px;" data-i18n="adv.help">说明</span>
   </div> <!-- 导出按钮行结束 -->
   <div class="row" style="margin-top:4px;"> <!-- 导出选项行 -->
@@ -265,15 +266,15 @@
 
   <div class="row" id="headShapeRow" style="display:none; margin-top:6px; gap:4px; flex-wrap:wrap; align-items:center;"> <!-- v6.4.0 头型切换（仅火柴人） -->
     <span style="font-size:12px; color:var(--text-sub); margin-right:2px;" data-i18n="prop.headShape">头型</span> <!-- 标签 -->
-    <button class="btn-xs head-shape-btn on" data-shape="circle" title="正圆头" data-i18n-title="prop.headShapeCircle">圆</button> <!-- 正圆 -->
-    <button class="btn-xs head-shape-btn" data-shape="Vic" title="手绘头型 Vic">Vic</button> <!-- 手绘头型 -->
-    <button class="btn-xs head-shape-btn" data-shape="TCO" title="手绘头型 TCO">TCO</button> <!-- 手绘头型 -->
-    <button class="btn-xs head-shape-btn" data-shape="TDL" title="手绘头型 TDL">TDL</button> <!-- 手绘头型 -->
-    <button class="btn-xs head-shape-btn" data-shape="TSC" title="手绘头型 TSC">TSC</button> <!-- 手绘头型 -->
+    <button class="btn-xs head-shape-btn on" data-shape="circle" title="正圆头" data-i18n-title="prop.headShapeCircle" data-i18n="prop.headShapeShort">圆</button> <!-- 正圆 -->
+    <button class="btn-xs head-shape-btn" data-shape="Vic" title="手绘头型 Vic" data-i18n-title="headStyle.vic">Vic</button> <!-- 手绘头型 -->
+    <button class="btn-xs head-shape-btn" data-shape="TCO" title="手绘头型 TCO" data-i18n-title="headStyle.tco">TCO</button> <!-- 手绘头型 -->
+    <button class="btn-xs head-shape-btn" data-shape="TDL" title="手绘头型 TDL" data-i18n-title="headStyle.tdl">TDL</button> <!-- 手绘头型 -->
+    <button class="btn-xs head-shape-btn" data-shape="TSC" title="手绘头型 TSC" data-i18n-title="headStyle.tsc">TSC</button> <!-- 手绘头型 -->
   </div> <!-- 头型行结束 -->
 
   <div class="row" style="margin-top:6px; justify-content:space-between;"> <!-- 吸附与锚点开关行 -->
-    <button id="btnSnapToggle" class="btn-xs" style="padding:4px 12px; font-size:12px;" title="开启/关闭移动吸附"><i data-icon="magnet"></i><span data-i18n="snap.label">吸附</span></button> <!-- 对齐吸附开关按钮 -->
+    <button id="btnSnapToggle" class="btn-xs" style="padding:4px 12px; font-size:12px;" title="开启/关闭移动吸附" data-i18n-title="snap.toggleTip"><i data-icon="magnet"></i><span data-i18n="snap.label">吸附</span></button> <!-- 对齐吸附开关按钮 -->
     <button id="btnAnchorToggle" class="btn-xs" title="自定义锚点" style="display:none;" data-i18n-title="anchor.customTitle"><i data-icon="anchor"></i><span data-i18n="anchor.custom">自定义锚点</span></button> <!-- 自定义锚点模式开关（默认隐藏） -->
   </div> <!-- 行结束 -->
 
@@ -403,7 +404,7 @@
 
       <div class="row slider"><label data-i18n="common.head">头部</label><input type="range" id="headSize" min="0.5" max="2" step="0.01" value="1.83"><span class="val" id="headVal">1.83</span></div> <!-- 头部大小 -->
       <div class="row" style="margin-top:4px;"> <!-- 头部填充选项 -->
-        <button id="btnHeadFill" class="btn-xs">头部空心</button> <!-- 切换头部实心/空心 -->
+        <button id="btnHeadFill" class="btn-xs" data-i18n="head.hollow">头部空心</button> <!-- 切换头部实心/空心 -->
         <label style="margin-left:auto; font-size:12px;"><input type="checkbox" id="headFillCustom"> <span data-i18n="prop.innerFill">头部内部填充色</span></label> <!-- 开启内部填充 -->
         <input type="color" id="headFillColor" value="#111111"> <!-- 内部填充颜色 -->
       </div> <!-- 行结束 -->
@@ -433,7 +434,7 @@
 
       <div class="divider" style="margin: 8px 0;"></div> <!-- 分割线 -->
       <div class="section-title" data-i18n="prop.extTitle">小手小脚</div> <!-- 小手小脚标题 -->
-      <div class="row"><button id="btnExtremity">开启小手小脚</button></div> <!-- 开关按钮 -->
+      <div class="row"><button id="btnExtremity" data-i18n="ext.on">开启小手小脚</button></div> <!-- 开关按钮 -->
       <div class="row slider"><label data-i18n="prop.handRatio">手长占比</label><input type="range" id="armExtRatio" min="0" max="1.2" step="0.01" value="0.23"><span class="val" id="armExtRatioVal">0.23</span></div> <!-- 手部占比 -->
       <div class="row slider"><label data-i18n="prop.footRatio">脚长占比</label><input type="range" id="legExtRatio" min="0" max="1.2" step="0.01" value="0.23"><span class="val" id="legExtRatioVal">0.23</span></div> <!-- 脚部占比 -->
   </div> <!-- 身体比例面板结束 -->
@@ -555,12 +556,12 @@
   <div class="tool-panel" data-tool="glow"> <!-- ==================== 描边阴影面板（v7.2.0：原「轮廓外发光」） ==================== -->
     <div class="section-title" data-i18n="glow.title">描边阴影</div> <!-- 阴影标题 -->
       <div class="row"> <!-- 阴影颜色行 -->
-        <button id="btnGlow">开启描边阴影</button> <!-- 开关按钮 -->
+        <button id="btnGlow" data-i18n="glow.on">开启描边阴影</button> <!-- 开关按钮 -->
         <label><span data-i18n="common.color">颜色</span> <input type="color" id="glowColor" value="#000000"></label> <!-- 颜色选择器 -->
       </div> <!-- 行结束 -->
       <div class="row slider"><label data-i18n="glow.offX">X 偏移</label><input type="range" id="glowOffsetX" min="-80" max="80" step="1" value="0"><span class="val" id="glowOffsetXVal">0</span></div> <!-- 阴影横向偏移 -->
       <div class="row slider"><label data-i18n="glow.offY">Y 偏移</label><input type="range" id="glowOffsetY" min="-80" max="80" step="1" value="0"><span class="val" id="glowOffsetYVal">0</span></div> <!-- 阴影纵向偏移 -->
-      <div class="row slider"><label data-i18n="glow.blur" title="羽化（模糊）半径">羽化</label><input type="range" id="glowBlur" min="0" max="80" step="1" value="14"><span class="val" id="glowBlurVal">14</span></div> <!-- 羽化半径 -->
+      <div class="row slider"><label data-i18n="glow.blur" title="羽化（模糊）半径" data-i18n-title="glow.blurTip">羽化</label><input type="range" id="glowBlur" min="0" max="80" step="1" value="14"><span class="val" id="glowBlurVal">14</span></div> <!-- 羽化半径 -->
       <div class="row slider"><label data-i18n="glow.spread">扩展</label><input type="range" id="glowSpread" min="0" max="40" step="1" value="0"><span class="val" id="glowSpreadVal">0</span></div> <!-- 扩散（描边外扩） -->
       <div class="row slider"><label data-i18n="common.opacity">不透明度</label><input type="range" id="glowAlpha" min="0" max="1" step="0.01" value="0.45"><span class="val" id="glowAlphaVal">0.45</span></div> <!-- 阴影不透明度 -->
       <div class="row"><label class="checkbox-label" style="font-size:12px;"><input type="checkbox" id="glowIncludeAcc"> <span data-i18n="glow.includeAcc">连同绑定配饰</span></label></div> <!-- 把挂在这个火柴人身上的配饰一起并进剪影 -->
@@ -568,7 +569,7 @@
       <div class="divider" style="margin: 8px 0;"></div> <!-- 分割线 -->
       <div class="section-title" data-i18n="light.title">侧面高光</div> <!-- 侧面高光标题 -->
       <div class="row"> <!-- 高光颜色行 -->
-        <button id="btnLight">开启侧面高光</button> <!-- 开关按钮 -->
+        <button id="btnLight" data-i18n="light.on">开启侧面高光</button> <!-- 开关按钮 -->
         <label><span data-i18n="light.color">高光色</span> <input type="color" id="lightColor" value="#ffbb66"></label> <!-- 颜色选择器 -->
       </div> <!-- 行结束 -->
       <div class="row slider"><label data-i18n="light.size">高光粗细</label><input type="range" id="lightSize" min="0.1" max="3" step="0.1" value="1"><span class="val" id="lightSizeVal">1.0</span></div> <!-- 高光粗细 -->
@@ -577,7 +578,7 @@
       <div class="divider" style="margin: 8px 0;"></div> <!-- 分割线 -->
       <div class="section-title" data-i18n="jointGrad.title">手部渐变</div> <!-- 手部渐变标题 -->
       <div class="row"> <!-- 渐变颜色行 -->
-        <button id="btnJoint">开启渐变</button> <!-- 开关按钮 -->
+        <button id="btnJoint" data-i18n="joint.on">开启渐变</button> <!-- 开关按钮 -->
         <div class="swatch-row"><label><span data-i18n="common.gradientColor">渐变色</span> <input type="color" id="jointColor" value="#ff0000"></label></div> <!-- 渐变色选择器 -->
       </div> <!-- 行结束 -->
       <div class="row slider"><label data-i18n="jointGrad.start">起始位置</label><input type="range" id="jointLen" min="0" max="1" step="0.01" value="0.5"><span class="val" id="jointLenVal">0.50</span></div> <!-- 渐变起始点 -->
@@ -585,12 +586,12 @@
       <div class="divider" style="margin: 8px 0;"></div> <!-- 分割线 -->
       <div id="shadowDetails"> <!-- 地面阴影设置容器 -->
         <div class="section-title" data-i18n="shadow.title">地面阴影</div> <!-- 阴影标题 -->
-        <div class="row"><button id="btnGroundShadow" style="flex:1;">开启地面阴影</button></div> <!-- 开关按钮 -->
+        <div class="row"><button id="btnGroundShadow" style="flex:1;" data-i18n="shadow.on">开启地面阴影</button></div> <!-- 开关按钮 -->
         <div id="shadowOpts" class="subpanel"> <!-- 阴影详细参数子面板 -->
           <div class="row slider"><label data-i18n="common.color">颜色</label><input type="color" id="shadowColor" value="#000000"></div> <!-- 阴影颜色 -->
           <div class="row slider"><label data-i18n="common.opacity">透明度</label><input type="range" id="shadowAlpha" min="0" max="1" step="0.01" value="0.3"><span class="val" id="shadowAlphaVal">0.30</span></div> <!-- 阴影透明度 -->
-          <div class="row slider"><label data-i18n="shadow.scaleX" title="阴影宽度拉伸">宽度拉伸</label><input type="range" id="shadowScaleX" min="0.1" max="5" step="0.01" value="1"><span class="val" id="shadowScaleXVal">1.00</span></div> <!-- 阴影宽度 -->
-          <div class="row slider"><label data-i18n="shadow.scaleY" title="阴影高度拉伸">高度拉伸</label><input type="range" id="shadowScaleY" min="0.1" max="5" step="0.01" value="1"><span class="val" id="shadowScaleYVal">1.00</span></div> <!-- 阴影高度 -->
+          <div class="row slider"><label data-i18n="shadow.scaleX" title="阴影宽度拉伸" data-i18n-title="shadow.scaleXTip">宽度拉伸</label><input type="range" id="shadowScaleX" min="0.1" max="5" step="0.01" value="1"><span class="val" id="shadowScaleXVal">1.00</span></div> <!-- 阴影宽度 -->
+          <div class="row slider"><label data-i18n="shadow.scaleY" title="阴影高度拉伸" data-i18n-title="shadow.scaleYTip">高度拉伸</label><input type="range" id="shadowScaleY" min="0.1" max="5" step="0.01" value="1"><span class="val" id="shadowScaleYVal">1.00</span></div> <!-- 阴影高度 -->
           <div class="hint" style="margin-top:4px; font-size:11px;" data-i18n="shadow.hint">提示：展开设置后，可直接在画布上拖动阴影；收起后设置保留且防误触。</div> <!-- 阴影提示 -->
         </div> <!-- 阴影参数子面板结束 -->
       </div> <!-- 阴影设置结束 -->
@@ -626,7 +627,7 @@
         <input type="checkbox" id="brushBorderEnabled" checked> <!-- 是否描边 -->
         <span data-i18n="brush.border">包边</span>
       </label>
-      <label style="margin-left:8px;" class="checkbox-label" title="勾选后，这些笔的描边统一铺在所有笔芯下面，后画的边不会压住先画的芯"> <!-- v6.2.0：描边铺底 -->
+      <label style="margin-left:8px;" class="checkbox-label" title="勾选后，这些笔的描边统一铺在所有笔芯下面，后画的边不会压住先画的芯" data-i18n-title="brush.strokeOrderTip"> <!-- v6.2.0：描边铺底 -->
         <input type="checkbox" id="brushOutlineUnder" checked> <!-- 是否把这批笔的边统一铺底 -->
         <span data-i18n="brush.outlineUnder">描边铺底</span>
       </label>
@@ -705,8 +706,8 @@
     <div class="divider" style="margin: 8px 0;"></div> <!-- 分割线 -->
     <div class="section-title" data-i18n="bounds.title">画布边界</div> <!-- 画布边界标题 -->
     <div class="row"> <!-- 开启边界与优先导出行 -->
-      <button id="btnToggleCanvasBounds">开启画布边界</button> <!-- 开关按钮 -->
-      <button id="btnExportCanvasFirst" class="btn-soft" title="开启后，导出时优先使用画布边界（需先开启画布边界）"><i data-icon="upload"></i><span data-i18n="bounds.exportFirst">导出时画布优先</span></button> <!-- 导出优先级切换 -->
+      <button id="btnToggleCanvasBounds" data-i18n="bounds.on">开启画布边界</button> <!-- 开关按钮 -->
+      <button id="btnExportCanvasFirst" class="btn-soft" title="开启后，导出时优先使用画布边界（需先开启画布边界）" data-i18n-title="bounds.exportFirstTip"><i data-icon="upload"></i><span data-i18n="bounds.exportFirst">导出时画布优先</span></button> <!-- 导出优先级切换 -->
     </div> <!-- 行结束 -->
     <div class="row" style="margin-top:6px;"> <!-- 常用比例按钮组 -->
       <span class="field-label" data-i18n="bounds.ratios">常用比例：</span> <!-- 标签 -->
@@ -734,7 +735,7 @@
     <div class="divider" style="margin: 8px 0;"></div> <!-- 分割线 -->
     <div id="groundLineDetails"> <!-- 地面参考线设置区 -->
       <div class="section-title" data-i18n="ground.title">地面参考线</div> <!-- 标题 -->
-      <div class="row"><button id="btnGroundLine" style="flex:1;">开启地面参考线</button></div> <!-- 开关按钮 -->
+      <div class="row"><button id="btnGroundLine" style="flex:1;" data-i18n="groundLine.on">开启地面参考线</button></div> <!-- 开关按钮 -->
       <div id="groundLineOpts" class="subpanel"> <!-- 参数子面板 -->
         <div class="row slider"> <!-- 位置调整行 -->
           <label data-i18n="ground.y">位置 Y</label> <!-- 标签 -->
@@ -819,7 +820,7 @@
   <div class="section-title" data-i18n="preset.title">本地预设</div> <!-- 本地预设标题 -->
   <div class="row"> <!-- 预设保存行 -->
     <input type="text" id="presetNameInput" placeholder="预设名称..." maxlength="16" data-i18n-placeholder="preset.namePlaceholder"> <!-- 预设名称输入框 -->
-    <button id="btnSavePreset" class="btn-primary">保存预设</button> <!-- 保存按钮 -->
+    <button id="btnSavePreset" class="btn-primary" data-i18n="preset.save">保存预设</button> <!-- 保存按钮 -->
   </div> <!-- 行结束 -->
   <div class="preset-list" id="presetList"></div> <!-- 预设列表容器 -->
   <div class="row" style="margin-top:8px;"> <!-- 清空画布行 -->
@@ -827,8 +828,8 @@
   </div> <!-- 行结束 -->
 
   <div class="row" style="margin-top:8px; gap:6px; flex-wrap:nowrap;"> <!-- 面板锁定与缩放行 -->
-    <button id="btnLockPanel" class="btn-soft" style="flex:1;"><i data-icon="lock"></i>锁定面板位置</button> <!-- 锁定面板拖动 -->
-    <button id="btnToggleResize" class="btn-soft" style="flex:1;"><i data-icon="scale"></i>开启自由缩放</button> <!-- 开启面板缩放 -->
+    <button id="btnLockPanel" class="btn-soft" style="flex:1;" data-i18n-title="panel.lockTitle"><i data-icon="lock"></i><span data-i18n="panel.lock">锁定面板位置</span></button> <!-- 锁定面板拖动 -->
+    <button id="btnToggleResize" class="btn-soft" style="flex:1;"><i data-icon="scale"></i><span data-i18n="panel.resizeOn">开启自由缩放</span></button> <!-- 开启面板缩放 -->
   </div> <!-- 行结束 -->
 
   <div class="divider"></div> <!-- 分割线 -->
@@ -874,19 +875,19 @@
   </div> <!-- #uiScroll 结束 -->
 
   <!-- 底部固定栏：不参与上面的滚动，一行排列、超出可左右滑动 -->
-  <div id="uiBottomBar" role="tablist" aria-label="面板分区">
-    <button class="ui-tab" type="button" data-sheet="objects" role="tab" aria-label="元件" data-i18n-title="tab.objects" title="元件"><i data-icon="layers"></i></button>
-    <button class="ui-tab" type="button" data-sheet="brush" role="tab" aria-label="画笔" data-i18n-title="tab.brush" title="画笔"><i data-icon="high-light"></i></button>
-    <button class="ui-tab" type="button" data-sheet="canvas" role="tab" aria-label="画布" data-i18n-title="tab.canvas" title="画布"><i data-icon="selected"></i></button>
-    <button class="ui-tab" type="button" data-sheet="advanced" role="tab" aria-label="高级" data-i18n-title="tab.advanced" title="高级"><i data-icon="setting"></i></button>
-    <button class="ui-tab" type="button" data-sheet="project" role="tab" aria-label="项目" data-i18n-title="tab.project" title="项目"><i data-icon="folder-open"></i></button>
-    <button class="ui-tab" type="button" data-sheet="export" role="tab" aria-label="导出" data-i18n-title="tab.export" title="导出"><i data-icon="download"></i></button>
-    <button class="ui-tab" type="button" data-sheet="theme" role="tab" aria-label="主题" data-i18n-title="tab.theme" title="主题"><i data-icon="clear"></i></button>
+  <div id="uiBottomBar" role="tablist" aria-label="面板分区" data-i18n-aria-label="tab.listAria">
+    <button class="ui-tab" type="button" data-sheet="objects" role="tab" aria-label="元件" data-i18n-aria-label="tab.objects" data-i18n-title="tab.objects" title="元件"><i data-icon="layers"></i></button>
+    <button class="ui-tab" type="button" data-sheet="brush" role="tab" aria-label="画笔" data-i18n-aria-label="tab.brush" data-i18n-title="tab.brush" title="画笔"><i data-icon="high-light"></i></button>
+    <button class="ui-tab" type="button" data-sheet="canvas" role="tab" aria-label="画布" data-i18n-aria-label="tab.canvas" data-i18n-title="tab.canvas" title="画布"><i data-icon="selected"></i></button>
+    <button class="ui-tab" type="button" data-sheet="advanced" role="tab" aria-label="高级" data-i18n-aria-label="tab.advanced" data-i18n-title="tab.advanced" title="高级"><i data-icon="setting"></i></button>
+    <button class="ui-tab" type="button" data-sheet="project" role="tab" aria-label="项目" data-i18n-aria-label="tab.project" data-i18n-title="tab.project" title="项目"><i data-icon="folder-open"></i></button>
+    <button class="ui-tab" type="button" data-sheet="export" role="tab" aria-label="导出" data-i18n-aria-label="tab.export" data-i18n-title="tab.export" title="导出"><i data-icon="download"></i></button>
+    <button class="ui-tab" type="button" data-sheet="theme" role="tab" aria-label="主题" data-i18n-aria-label="tab.theme" data-i18n-title="tab.theme" title="主题"><i data-icon="clear"></i></button>
   </div> <!-- 底部栏结束 -->
 </div> <!-- ==================== 核心控制面板主容器结束 ==================== -->
 
 <div id="uiResizeHandle" style="display:none;" title="按住拖拽调整大小，双击恢复默认" data-i18n-title="uiResize.title">◢</div> <!-- 控制面板右下角的自由缩放手柄（默认隐藏） -->
-<button id="btnMobileExpand"><i data-icon="triangle"></i><span data-i18n="mobile.expand">控制面板</span></button> <!-- 移动端呼出控制面板的按钮（默认隐藏） -->
+<button id="btnPanelToggle"><i data-icon="triangle"></i><span data-i18n="panel.collapse">收起</span></button> <!-- v7.2.2：常驻左上角的面板收起/展开浮钮（面板外部，桌面与移动端通用） -->
 
 <div id="layerPop"> <!-- ==================== v6.3.0 元件列表（v7.0.6 起改成内联，住在「元件」分区里） ==================== -->
   <div class="lp-head">
@@ -898,7 +899,7 @@
 </div> <!-- 元件列表结束 -->
 
 <div id="timeline"> <!-- ==================== 时间轴（动画面板）主容器 ==================== -->
-  <button id="btnHideTimeline"><i data-icon="down"></i>收起</button> <!-- 收起时间轴按钮 -->
+  <button id="btnHideTimeline" data-i18n-title="timeline.hideTitle"><i data-icon="down"></i><span data-i18n="timeline.hide">收起</span></button> <!-- 收起时间轴按钮 -->
   <div id="frameBar"></div> <!-- 帧列表容器（横向滚动，由 JS 渲染） -->
   <div id="kfCurveWrap"><canvas id="kfCurveStrip"></canvas></div> <!-- v7.0.0：段曲线可视化（无段时自动隐藏） -->
   <div id="scrubberWrap"> <!-- 帧进度条和时间文字包裹层 -->
@@ -909,12 +910,12 @@
   
   <div class="timeline-controls"> <!-- 时间轴操作控制栏 -->
     <button id="btnPrevFrame" title="上一帧" data-i18n-title="timeline.prevTitle"><i data-icon="arrow-left"></i></button> <!-- 上一帧 -->
-    <button id="btnPlay" class="primary" title="播放/暂停" data-i18n-title="timeline.playTitle"><i data-icon="play"></i>播放</button> <!-- 播放/暂停主按钮 -->
+    <button id="btnPlay" class="primary" title="播放/暂停" data-i18n-title="timeline.playTitle"><i data-icon="play"></i><span data-i18n="play.play">播放</span></button> <!-- 播放/暂停主按钮 -->
     <button id="btnNextFrame" title="下一帧" data-i18n-title="timeline.nextTitle"><i data-icon="arrow-right"></i></button> <!-- 下一帧 -->
     <span class="sep">|</span> <!-- 分隔符 -->
     <button id="btnAddFrame" title="在当前帧后插入新帧" data-i18n-title="timeline.addTitle"><i data-icon="add-one"></i><span data-i18n="timeline.add">帧</span></button> <!-- 添加空白帧 -->
     <button id="btnDupFrame" title="复制当前帧" data-i18n="timeline.dup" data-i18n-title="timeline.dupTitle">⧉ 复制帧</button> <!-- 复制当前帧 -->
-    <button id="btnDelFrame" class="danger" title="删除当前帧"><i data-icon="delete"></i>删除帧</button> <!-- 删除当前帧 -->
+    <button id="btnDelFrame" class="danger" title="删除当前帧" data-i18n-title="timeline.delFrameTitle"><i data-icon="delete"></i><span data-i18n="timeline.delFrame">删除帧</span></button> <!-- 删除当前帧 -->
     <label style="font-size:11.5px; cursor:pointer;"><input type="checkbox" id="multiSelectToggle"> <span data-i18n="timeline.multi">多选</span></label> <!-- 多选模式开关 -->
     <span id="multiActions" style="display:none; gap:4px; align-items:center; flex-wrap:wrap;"> <!-- 多选操作区（默认隐藏） -->
       <span id="multiCount" class="text-primary" style="font-size:11px; font-weight:600;"></span> <!-- 已选帧数显示 -->
@@ -925,20 +926,20 @@
       <button id="btnKeyframe" class="btn-soft btn-keyframe" title="把当前帧设为 / 取消关键帧" data-i18n-title="timeline.keyframeTitle"><i data-icon="diamond-two"></i><span data-i18n="timeline.keyframe">关键帧</span></button> <!-- 关键帧开关（R1） -->
       <button id="btnTween" class="btn-soft" title="在当前帧后面插入 N 帧：段内由两端关键帧自动补间，段外则复制当前帧" data-i18n-title="timeline.insertFramesTitle"><i data-icon="add-one"></i><span data-i18n="timeline.insertFrames">插 N 帧</span></button> <!-- 插 N 帧（段内补间 / 段外续帧，v7.2.0 放开段外限制） -->
       <input type="number" id="tweenCount" value="5" min="1" max="60" title="插入帧数" data-i18n-title="timeline.insertCountTitle"> <!-- 插入帧数量 -->
-      <button id="btnTweenMore" class="tween-more-toggle" title="段曲线设置（缓动/分部）" aria-haspopup="menu" aria-expanded="false" aria-controls="tweenMoreMenu"> <!-- 展开段曲线设置 -->
-        <span id="tweenEaseName" class="ease-name">匀速</span><span class="caret"><i data-icon="down"></i></span> <!-- 当前缓动曲线名称和下拉箭头 -->
+      <button id="btnTweenMore" class="tween-more-toggle" title="段曲线设置（缓动/分部）" data-i18n-title="timeline.easeMenuTitle" aria-haspopup="menu" aria-expanded="false" aria-controls="tweenMoreMenu"> <!-- 展开段曲线设置 -->
+        <span id="tweenEaseName" class="ease-name" data-i18n="ease.linear">匀速</span><span class="caret"><i data-icon="down"></i></span> <!-- 当前缓动曲线名称和下拉箭头 -->
       </button> <!-- 展开按钮结束 -->
-      <div class="tween-more-menu" id="tweenMoreMenu" role="menu" aria-label="段曲线设置" hidden> <!-- 段曲线下拉菜单（默认隐藏） -->
+      <div class="tween-more-menu" id="tweenMoreMenu" role="menu" aria-label="段曲线设置" data-i18n-aria-label="timeline.easeMenuTitle" hidden> <!-- 段曲线下拉菜单（默认隐藏） -->
         <div class="tm-section" style="justify-content: center;"> <!-- 顶部操作区 -->
           <button id="btnJointEase" class="btn-soft btn-xs" title="为不同分部（位置/缩放/旋转/关节）分别设置缓动曲线" data-i18n-title="timeline.jointEaseTitle"><i data-icon="aiming"></i><span data-i18n="timeline.jointEase">分部</span></button> <!-- 打开分部缓动面板 -->
         </div> <!-- 顶部操作区结束 -->
         <div class="tm-divider"></div> <!-- 分割线 -->
         <div class="tm-title" data-i18n="timeline.easeTitle">缓动曲线</div> <!-- 标题 -->
-        <div class="tm-ease-list" id="tweenEaseMenu" role="menu" aria-label="缓动曲线"></div> <!-- 缓动曲线列表（JS动态生成） -->
+        <div class="tm-ease-list" id="tweenEaseMenu" role="menu" aria-label="缓动曲线" data-i18n-aria-label="timeline.easeTitle"></div> <!-- 缓动曲线列表（JS动态生成） -->
       </div> <!-- 下拉菜单结束 -->
     </div> <!-- 补间设置组结束 -->
-    <select id="trackSelector" title="选择主时间轴或元件子轨道" aria-label="轨道选择"> <!-- 轨道选择下拉框 -->
-      <option value="all">[全局主时间轴]</option> <!-- 默认选项：全局 -->
+    <select id="trackSelector" title="选择主时间轴或元件子轨道" aria-label="轨道选择" data-i18n-title="track.selectTitle" data-i18n-aria-label="track.selectAria"> <!-- 轨道选择下拉框 -->
+      <option value="all" data-i18n="track.all">[全局主时间轴]</option> <!-- 默认选项：全局 -->
     </select> <!-- 轨道选择结束 -->
     <!-- v7.0.5：原「⚙️ 高级设置」按钮已移除，内容整体搬到控制面板底部栏的「高级」分区 -->
   </div> <!-- 时间轴操作控制栏结束 -->
@@ -961,12 +962,12 @@
 
     <div class="adv-row"> <!-- 其他画面可见性行 -->
       <span class="adv-field-label"><i data-icon="film"></i><span data-i18n="adv.others">其他画面</span></span> <!-- 标签 -->
-      <select id="otherTracksVisibility" title="仅在元件子轨道模式下可用" disabled> <!-- 可见性下拉框（默认禁用） -->
+      <select id="otherTracksVisibility" title="仅在元件子轨道模式下可用" disabled data-i18n-title="track.disabledTitle"> <!-- 可见性下拉框（默认禁用） -->
         <option value="hide" data-i18n="adv.hideOthers">隐藏其他画面</option> <!-- 隐藏 -->
         <option value="show" selected data-i18n="adv.showOthers">显示其他画面</option> <!-- 显示（默认） -->
         <option value="half" data-i18n="adv.halfOthers">50% 显示其他画面</option> <!-- 半透明显示 -->
       </select> <!-- 下拉框结束 -->
-      <span class="adv-field-label" id="otherTracksVisibilityHint">选择元件子轨道后可调整</span> <!-- 提示文字 -->
+      <span class="adv-field-label" id="otherTracksVisibilityHint" data-i18n="track.hintOff">选择元件子轨道后可调整</span> <!-- 提示文字 -->
     </div> <!-- 行结束 -->
 
     <div class="adv-row"> <!-- 各种切换按钮与导出参数设置 -->
@@ -987,8 +988,8 @@
     
 
     <div class="adv-row"> <!-- 视频导出操作行 -->
-      <button id="btnExportGIF" class="btn-primary">导出 GIF</button> <!-- 导出 GIF 动画 -->
-      <button id="btnExportPNGSeq">导出 PNG序列</button> <!-- 导出 PNG 图片序列 -->
+      <button id="btnExportGIF" class="btn-primary" data-i18n="export.gif">导出 GIF</button> <!-- 导出 GIF 动画 -->
+      <button id="btnExportPNGSeq" data-i18n="export.pngSeq">导出 PNG序列</button> <!-- 导出 PNG 图片序列 -->
       <button id="btnExportMP4" class="btn-soft" data-i18n="adv.mp4">导出 MP4</button> <!-- 导出 MP4 视频 -->
       <label class="adv-color-label"><span data-i18n="adv.mp4Bg">背景</span> <input type="color" id="mp4BgColor" value="#f4f6f9" title="MP4背景色" data-i18n-title="adv.mp4BgTitle"></label> <!-- MP4 视频背景色设置 -->
       <button id="btnImportVideo"><i data-icon="videocamera"></i><span data-i18n="adv.importVideo">导入参考视频</span></button> <!-- 导入本地参考视频 -->
@@ -1023,7 +1024,7 @@
 <div class="ease-editor-overlay" id="easeEditorOverlay" hidden> <!-- ==================== 缓动曲线编辑器弹窗 ==================== -->
   <div class="ease-editor-card" role="dialog" aria-modal="true" aria-labelledby="easeEditorTitle"> <!-- 编辑器卡片 -->
     <div class="ease-editor-head"> <!-- 头部 -->
-      <span id="easeEditorTitle">自定义曲线</span> <!-- 标题 -->
+      <span id="easeEditorTitle" data-i18n="ease.customTitle">自定义曲线</span> <!-- 标题 -->
       <button type="button" id="btnEaseEditorClose" class="ease-editor-close" title="关闭" data-i18n-title="common.close"><i data-icon="close"></i></button> <!-- 关闭按钮 -->
     </div> <!-- 头部结束 -->
     
@@ -1033,7 +1034,7 @@
       <button type="button" class="ease-tab-btn" data-mode="elastic2" style="flex:1; padding:6px 0; font-size:12px; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-panel); color:var(--text-main); cursor:pointer;" data-i18n="ease.period">周期</button> <!-- 周期弹性模式 -->
     </div> <!-- 标签组结束 -->
 
-    <div class="ease-editor-hint" id="easeEditorHint">拖动两个控制点调整曲线</div> <!-- 操作提示 -->
+    <div class="ease-editor-hint" id="easeEditorHint" data-i18n="ease.customHint">拖动两个控制点调整曲线</div> <!-- 操作提示 -->
     <canvas id="easeEditorCanvas" class="ease-editor-canvas"></canvas> <!-- 曲线绘制画布 -->
     <div class="ease-editor-value" id="easeEditorValue">cubic-bezier(0.42, 0, 0.58, 1)</div> <!-- 当前曲线参数显示 -->
     

@@ -75,6 +75,11 @@
     applyEach(root, '[data-i18n-label]', function (el) {
       el.setAttribute('label', t(el.getAttribute('data-i18n-label')));
     });
+    /* v7.2.2：之前只认 data-i18n-title，aria-label 全被漏掉 —— 无障碍朗读和部分悬浮提示
+       读到的永远是中文。补一条通用规则，和 title 并列。 */
+    applyEach(root, '[data-i18n-aria-label]', function (el) {
+      el.setAttribute('aria-label', t(el.getAttribute('data-i18n-aria-label')));
+    });
   }
 
   function setLang(lang) {

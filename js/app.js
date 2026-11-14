@@ -7,6 +7,22 @@
      统一走 ic(name)：拿到一段 <svg>，颜色跟随文字，深色/浅色主题都不用改。 */
   function ic(name) { return typeof SKFEIcon === 'function' ? SKFEIcon(name) : ''; }
 
+  /* ==================== 取词助手（v7.2.2） ====================
+     tr2(键, 中文原文)：语言包里有这个键就用译文，没有（或还没加载）就退回中文原文。
+     trv(键, 变量, 原文)：同上，额外支持 {name} 占位符插值（帧号、数量这类带数字的句子）。
+     动态生成的按钮文字必须走它们 —— 直接写死中文的话，切到英文也永远是中文。 */
+  function tr2(key, fallback) {
+    if (typeof window.t !== 'function') return fallback;
+    const v = window.t(key);
+    return (v == null || v === key) ? fallback : v;
+  }
+
+  function trv(key, vars, fallback) {
+    if (typeof window.t !== 'function') return fallback;
+    const v = window.t(key, vars);
+    return (v == null || v === key) ? fallback : v;
+  }
+
   /* ==================== 外部模块解构（SKFE.core） ==================== */
   const { P, TAU, displayY, TRACK_ALL_ID } = SKFE.core.constants;
 
@@ -45,7 +61,7 @@
   const layerListEl = document.getElementById('layerList');
   const targetFigureSelect = document.getElementById('targetFigure');
   const uiPanel = document.getElementById('ui');
-  const btnToggleUI = document.getElementById('btnToggleUI');
+  const btnPanelToggle = document.getElementById('btnPanelToggle'); /* v7.2.2：左上角常驻的收起/展开浮钮 */
   const exportHDCheckbox = document.getElementById('exportHD');
   const btnToggleLock = document.getElementById('btnToggleLock');
   const timelineEl = document.getElementById('timeline');
@@ -367,16 +383,16 @@ function syncDistortToAllFrames(obj) {
       try {
         if (elem.requestFullscreen) await elem.requestFullscreen();
         else if (elem.webkitRequestFullscreen) await elem.webkitRequestFullscreen();
-        else alert('当前浏览器不支持网页全屏。\niPhone Safari 建议使用分享菜单「添加到主屏幕」。');
+        else alert(tr2('fullscreen.unsupported', '当前浏览器不支持网页全屏。\niPhone Safari 建议使用分享菜单「添加到主屏幕」。'));
       } catch (e) {
-        alert('进入全屏失败。');
+        alert(tr2('fullscreen.fail', '进入全屏失败。'));
       }
     }
   }
   btnFullscreen.addEventListener('click', toggleFullscreen);
   const updateFullscreenBtn = () => {
     const isFull = document.fullscreenElement || document.webkitFullscreenElement;
-    btnFullscreen.textContent = isFull ? '退出全屏' : '全屏';
+    btnFullscreen.textContent = isFull ? tr2('fullscreen.exit', '退出全屏') : tr2('fullscreen.enter', '全屏');
   };
   document.addEventListener('fullscreenchange', updateFullscreenBtn);
   document.addEventListener('webkitfullscreenchange', updateFullscreenBtn);
@@ -770,17 +786,17 @@ function syncDistortToAllFrames(obj) {
            硬读会把关键帧段读成一堆空白帧，所以宁可拒绝。 */
         const need = Number(data.minVersion || data.version || 1);
         if (need > PROJECT_VERSION) {
-          alert('这个工程由更新版本的 SKFE 创建（需要 v' + need + '），当前版本是 v' + PROJECT_VERSION +
+          alert(tr2('project.tooNewHead', '这个工程由更新版本的 SKFE 创建（需要 v') + need + tr2('project.tooNewTail', '），当前版本是 v') + PROJECT_VERSION +
             '。\n请升级后再打开，否则动画的关键帧数据会显示不出来。');
           return;
         }
         applyLoadedProject(data).then(() => {
           EventBus.emit('history:save', '导入项目');
           const n = data.version || 1;
-          alert(n >= 3 ? '项目导入成功' : '项目导入成功（旧格式 v' + n + '，已按普通帧加载）');
+          alert(n >= 3 ? tr2('project.importOk', '项目导入成功') : tr2('project.importOkOld', '项目导入成功（旧格式 v') + n + tr2('project.importOkOldTail', '，已按普通帧加载）'));
         });
       } catch (err) {
-        alert('导入失败: ' + err.message);
+        alert(tr2('project.importFail', '导入失败: ') + err.message);
       }
     };
     reader.readAsText(file);
@@ -802,23 +818,23 @@ function syncDistortToAllFrames(obj) {
         canvasMaskBgColor, canvasMaskGridColor, // 新增
       };
       localStorage.setItem(PROJECT_SAVE_KEY, JSON.stringify(projectData));
-      alert('已保存到本地');
+      alert(tr2('project.savedLocal', '已保存到本地'));
     } catch (err) {
-      alert('保存失败，可能超出了本地存储限制: ' + err.message);
+      alert(tr2('project.saveFail', '保存失败，可能超出了本地存储限制: ') + err.message);
     }
   }
 
   function loadProjectFromLocal() {
     const raw = localStorage.getItem(PROJECT_SAVE_KEY);
-    if (!raw) return alert('本地没有保存的项目');
+    if (!raw) return alert(tr2('project.noneLocal', '本地没有保存的项目'));
     try {
       const data = JSON.parse(raw);
       applyLoadedProject(data).then(() => {
         EventBus.emit('history:save', '读取本地项目');
-        alert('本地项目读取成功');
+        alert(tr2('project.loadOk', '本地项目读取成功'));
       });
     } catch (err) {
-      alert('读取失败: ' + err.message);
+      alert(tr2('project.loadFail', '读取失败: ') + err.message);
     }
   }
 
@@ -1091,7 +1107,7 @@ function syncDistortToAllFrames(obj) {
       if (token !== videoLoadToken) return;
       if (ev.lengthComputable) showVideoProgress(ev.loaded / ev.total * 100);
     };
-    reader.onerror = () => { if (token !== videoLoadToken) return; hideVideoProgress(); alert('视频加载失败'); };
+    reader.onerror = () => { if (token !== videoLoadToken) return; hideVideoProgress(); alert(tr2('video.loadFail', '视频加载失败')); };
     reader.onload = () => {
       if (token !== videoLoadToken) return;
       showVideoProgress(100);
@@ -1117,7 +1133,7 @@ function syncDistortToAllFrames(obj) {
       });
       refVideo.addEventListener('error', () => {
         if (token !== videoLoadToken) return;
-        hideVideoProgress(); alert('视频加载失败');
+        hideVideoProgress(); alert(tr2('video.loadFail', '视频加载失败'));
       });
       refVideo.addEventListener('ended', () => {
         refVideoPlaying = false;
@@ -1183,13 +1199,13 @@ function syncDistortToAllFrames(obj) {
   }
   function savePresetsToStorage() {
     try { localStorage.setItem(PRESET_KEY, JSON.stringify(presets)); }
-    catch (e) { alert('保存预设失败，浏览器存储空间可能已满'); }
+    catch (e) { alert(tr2('preset.saveFail', '保存预设失败，浏览器存储空间可能已满')); }
   }
   function updatePresetListUI() {
     const listEl = document.getElementById('presetList');
     listEl.innerHTML = '';
     if (presets.length === 0) {
-      listEl.innerHTML = '<div class="empty-state">暂无预设，选中火柴人后保存吧</div>';
+      listEl.innerHTML = tr2('preset.empty', '<div class="empty-state">暂无预设，选中火柴人后保存吧</div>');
       return;
     }
     presets.forEach((p, index) => {
@@ -1199,7 +1215,7 @@ function syncDistortToAllFrames(obj) {
       infoDiv.className = 'preset-info';
       const nameDiv = document.createElement('div');
       nameDiv.className = 'preset-name';
-      nameDiv.textContent = p.name || '未命名预设';
+      nameDiv.textContent = p.name || tr2('preset.unnamed', '未命名预设');
       if (p.data.color) nameDiv.style.color = p.data.color;
       const metaDiv = document.createElement('div');
       metaDiv.className = 'preset-meta';
@@ -1218,7 +1234,7 @@ function syncDistortToAllFrames(obj) {
       const renameBtn = document.createElement('div');
       renameBtn.className = 'preset-rename';
       renameBtn.innerHTML = ic('pencil');
-      renameBtn.title = '重命名预设';
+      renameBtn.title = tr2('preset.renameTitle', '重命名预设');
       renameBtn.onclick = (e) => {
         e.stopPropagation();
         const newName = prompt('输入新的预设名称：', p.name || '');
@@ -1231,7 +1247,7 @@ function syncDistortToAllFrames(obj) {
       const delBtn = document.createElement('div');
       delBtn.className = 'preset-del';
       delBtn.innerHTML = ic('close');
-      delBtn.title = '删除';
+      delBtn.title = tr2('common.delete', '删除');
       delBtn.onclick = (e) => {
         e.stopPropagation();
         if (confirm('确定删除该预设吗？')) {
@@ -1288,9 +1304,9 @@ function syncDistortToAllFrames(obj) {
     updatePresetListUI();
     nameInput.value = '';
     const btn = document.getElementById('btnSavePreset');
-    btn.innerHTML = '已保存' + ic('check-correct');
+    btn.innerHTML = tr2('preset.saved', '已保存') + ic('check-correct');
     btn.classList.add('is-saved');
-    setTimeout(() => { btn.textContent = '保存预设'; btn.classList.remove('is-saved'); }, 1000);
+    setTimeout(() => { btn.textContent = tr2('preset.save', '保存预设'); btn.classList.remove('is-saved'); }, 1000);
   }
 
   function loadPreset(p) {
@@ -1359,14 +1375,14 @@ function syncDistortToAllFrames(obj) {
   }
   function saveActionPresets() {
     try { localStorage.setItem(ACTION_PRESET_KEY, JSON.stringify(actionPresets)); }
-    catch (e) { alert('保存动作失败，浏览器存储空间可能已满'); }
+    catch (e) { alert(tr2('action.saveFail', '保存动作失败，浏览器存储空间可能已满')); }
   }
 
   function updateActionListUI() {
   const listEl = document.getElementById('actionList');
   listEl.innerHTML = '';
   if (actionPresets.length === 0) {
-    listEl.innerHTML = '<div class="empty-state">暂无动作，选中火柴人保存吧</div>';
+    listEl.innerHTML = tr2('action.empty', '<div class="empty-state">暂无动作，选中火柴人保存吧</div>');
     selectedActionIndex = -1;
     return;
   }
@@ -1376,7 +1392,7 @@ function syncDistortToAllFrames(obj) {
     const div = document.createElement('div');
     div.className = 'preset-item';
     div.style.cursor = 'pointer';
-    div.title = isSelected ? '已选中，点「导出动作」只导出此动作' : '点击选中该动作';
+    div.title = isSelected ? tr2('action.selectedTip', '已选中，点「导出动作」只导出此动作') : tr2('action.selectTip', '点击选中该动作');
     if (isSelected) {
       div.style.background = 'var(--color-primary-soft)';
       div.style.outline = '2px solid var(--color-primary)';
@@ -1393,12 +1409,12 @@ function syncDistortToAllFrames(obj) {
     };
     const infoDiv = document.createElement('div');
     infoDiv.className = 'preset-info';
-    const metaText = p.frames.length + ' 帧' + (isSelected ? ' · 已选中' : ' · 点击选中');
-    infoDiv.innerHTML = `<div class="preset-name">${p.name || '未命名动作'}</div><div class="preset-meta">${metaText}</div>`;
+    const metaText = p.frames.length + tr2('timeline.frameSuffix', ' 帧') + (isSelected ? ' · 已选中' : ' · 点击选中');
+    infoDiv.innerHTML = `<div class="preset-name">${p.name || tr2('action.unnamed', '未命名动作')}</div><div class="preset-meta">${metaText}</div>`;
     const btns = document.createElement('div');
     btns.className = 'preset-actions';
     const applyBtn = document.createElement('button');
-    applyBtn.textContent = '应用';
+    applyBtn.textContent = tr2('action.apply', '应用');
     applyBtn.className = 'btn-soft btn-xs';
     applyBtn.onclick = (e) => { e.stopPropagation(); applyActionPreset(p); };
     const delBtn = document.createElement('div');
@@ -1426,7 +1442,7 @@ function syncDistortToAllFrames(obj) {
   if (!preset || !Array.isArray(preset.frames)) return;
   const safeName = String(preset.name || 'action').replace(/[\\/:*?"<>|]/g, '_').trim() || 'action';
   const payload = {
-    name: preset.name || '未命名动作',
+    name: preset.name || tr2('action.unnamed', '未命名动作'),
     version: preset.version || 2,
     savedBase: preset.savedBase || null,
     frames: preset.frames
@@ -1483,7 +1499,7 @@ function syncDistortToAllFrames(obj) {
   }
 
   function saveActionPreset() {
-    if (!AppState.selected || AppState.selected.type !== 'figure') return alert('请先选中一个火柴人');
+    if (!AppState.selected || AppState.selected.type !== 'figure') return alert(tr2('alert.pickFigure', '请先选中一个火柴人'));
     const nameInput = document.getElementById('actionNameInput');
     const name = nameInput.value.trim() || ('动作 ' + (actionPresets.length + 1));
 
@@ -1495,7 +1511,7 @@ function syncDistortToAllFrames(obj) {
       const fig = getTrackFrame(targetId, i);
       if (fig) { baseFig = fig; break; }
     }
-    if (!baseFig) return alert('当前元件的轨道上没有有效帧，无法保存动作');
+    if (!baseFig) return alert(tr2('action.noValidFrame', '当前元件的轨道上没有有效帧，无法保存动作'));
 
     const savedBase = {
       scale: baseFig.scale || 1,
@@ -1560,7 +1576,7 @@ function syncDistortToAllFrames(obj) {
     saveActionPresets();
     updateActionListUI();
     nameInput.value = '';
-    alert('动作已保存');
+    alert(tr2('action.saved', '动作已保存'));
   }
 
   /* 这条轨道里「绑在 fid 身上的元件」的样本数据；不是绑定轨道就返回 null */
@@ -1706,7 +1722,7 @@ function syncDistortToAllFrames(obj) {
   }
 
   function applyActionPreset(preset) {
-    if (!AppState.selected || AppState.selected.type !== 'figure') return alert('请先选中一个火柴人');
+    if (!AppState.selected || AppState.selected.type !== 'figure') return alert(tr2('alert.pickFigure', '请先选中一个火柴人'));
     const targetId = String(AppState.selected.id);
     const targetX = AppState.selected.x;
     const targetY = AppState.selected.y;
@@ -1903,7 +1919,7 @@ function syncDistortToAllFrames(obj) {
   }
 
   function exportActionPresets() {
-  if (actionPresets.length === 0) return alert('没有保存的动作');
+  if (actionPresets.length === 0) return alert(tr2('action.none', '没有保存的动作'));
   if (selectedActionIndex >= 0 && selectedActionIndex < actionPresets.length) {
     exportSingleActionPreset(actionPresets[selectedActionIndex]);
     return;
@@ -1935,11 +1951,11 @@ function importActionPresets() {
           if (wasEmpty && valid.length === 1) selectedActionIndex = 0;
           saveActionPresets();
           updateActionListUI();
-          alert('成功导入 ' + valid.length + ' 个动作');
+          alert(tr2('action.importedHead', '成功导入 ') + valid.length + tr2('action.importedTail', ' 个动作'));
         } else {
-          alert('导入失败，格式不正确');
+          alert(tr2('action.importFail', '导入失败，格式不正确'));
         }
-      } catch (err) { alert('导入失败，格式不正确'); }
+      } catch (err) { alert(tr2('action.importFail', '导入失败，格式不正确')); }
     };
     reader.readAsText(file);
   };
@@ -1999,7 +2015,7 @@ function importActionPresets() {
 
   function updateLockPanelUI() {
     if (!btnLockPanel) return;
-    btnLockPanel.innerHTML = (isPanelLocked ? ic('unlock') : ic('lock')) + (isPanelLocked ? '解锁面板位置' : '锁定面板位置');
+    { const lkKey = isPanelLocked ? 'panel.unlock' : 'panel.lock'; const lkTxt = isPanelLocked ? tr2('panel.unlock', '解锁面板位置') : tr2('panel.lock', '锁定面板位置'); btnLockPanel.innerHTML = (isPanelLocked ? ic('unlock') : ic('lock')) + '<span data-i18n="' + lkKey + '">' + lkTxt + '</span>'; }
     btnLockPanel.classList.toggle('active', isPanelLocked);
     uiPanel.classList.toggle('ui-locked', isPanelLocked);
   }
@@ -2092,7 +2108,7 @@ function importActionPresets() {
 
   function syncResizeUI() {
     if (btnToggleResize) {
-      btnToggleResize.innerHTML = ic('scale') + (uiResizable ? '关闭自由缩放' : '开启自由缩放');
+      { const rsKey = uiResizable ? 'panel.resizeOff' : 'panel.resizeOn'; const rsTxt = uiResizable ? tr2('panel.resizeOff', '关闭自由缩放') : tr2('panel.resizeOn', '开启自由缩放'); btnToggleResize.innerHTML = ic('scale') + '<span data-i18n="' + rsKey + '">' + rsTxt + '</span>'; }
       btnToggleResize.classList.toggle('active', uiResizable);
     }
     if (uiResizeHandle) {
@@ -2281,19 +2297,32 @@ function importActionPresets() {
   document.addEventListener('pointercancel', () => { uiPendingCollapse = false; }, true);
 
   /* ==================== 移动端 UI ==================== */
-  const btnMobileExpand = document.getElementById('btnMobileExpand');
 
-  /* v7.2.1：移动端控制面板的展开/收起统一入口，行为**完全对齐「🎬 帧动画面板」**：
-       收起 → #ui 直接 display:none（不再留一条 64px 的拖动条），左下角出现同款浮窗按钮；
-       展开 → 面板回来，浮窗按钮消失。
-     原来收起态是 translateY(calc(100% - 64px)) 的半截抽屉，底部永远露着一条拖动条
-     和半屏面板的边，既不算收起也不算浮窗，还压住画布下沿。 */
+  /* v7.2.2：控制面板的展开/收起统一入口，行为**完全对齐「🎬 帧动画面板」**：
+       收起 → #ui 直接 display:none，左上角浮钮改成「展开」；
+       展开 → 面板回来，浮钮改回「收起」。
+     浮钮本身**常驻**（面板开着也在，就在面板左边的左上角），
+     再也不会出现「点一下收起，入口跟着面板一起消失」的死角。
+     桌面端与移动端共用同一套逻辑，只是面板停靠位置不同。 */
+  function syncPanelToggleUI(open) {
+    if (!btnPanelToggle) return;
+    const key = open ? 'panel.collapse' : 'panel.expand';
+    const span = btnPanelToggle.querySelector('[data-i18n]');
+    if (span) {
+      if (span.getAttribute('data-i18n') !== key) span.setAttribute('data-i18n', key);
+      span.textContent = tr2(key, open ? '收起' : '展开');
+    }
+    btnPanelToggle.classList.toggle('collapsed', !open);
+    btnPanelToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    const titleKey = open ? 'panel.collapseTitle' : 'panel.expandTitle';
+    btnPanelToggle.setAttribute('data-i18n-title', titleKey);
+    btnPanelToggle.title = tr2(titleKey, '');
+  }
+
   function toggleUiPanel(show) {
-    if (!isMobile) return;
     const open = !!show;
     uiPanel.classList.toggle('hidden', !open);
-    if (btnToggleUI) btnToggleUI.textContent = open ? '收起' : '展开';
-    if (btnMobileExpand) btnMobileExpand.style.display = open ? 'none' : 'flex';
+    syncPanelToggleUI(open);
     document.body.classList.toggle('ui-open', open);
     /* 收起时把「元件」浮窗一起关掉，别让它孤零零浮在画布上 */
     if (!open) setLayerPopOpen(false);
@@ -2304,23 +2333,25 @@ function importActionPresets() {
   }
 
   if (isMobile) {
-    btnToggleUI.style.display = 'block';
     /* 默认收起 —— 手机上屏幕就这么高，一上来就盖掉半屏画布不合适 */
     uiPanel.classList.add('hidden');
-    if (btnMobileExpand) btnMobileExpand.style.display = 'flex';
-    btnToggleUI.addEventListener('click', (e) => { e.stopPropagation(); toggleUiPanel(false); });
-    if (btnMobileExpand) {
-      btnMobileExpand.addEventListener('click', (e) => { e.stopPropagation(); toggleUiPanel(true); });
-    }
-    /* 注：原来「点收起状态的面板空白处展开」那条监听已经删掉 —— 收起是 display:none，
-       点不到。入口统一走左下角浮窗，和帧动画面板一个交互。 */
+    syncPanelToggleUI(false);
     setTimeout(resize, 100);
     const tip = document.createElement('div');
-    tip.innerHTML = ic('tips') + '双指拖动平移，捏合缩放';
+    tip.innerHTML = ic('tips') + tr2('mobile.gestureTip', '双指拖动平移，捏合缩放');
     tip.className = 'ui-toast mobile-tip';
     document.body.appendChild(tip);
     setTimeout(() => { tip.style.opacity = '0'; }, 2500);
     setTimeout(() => { tip.remove(); }, 3500);
+  } else {
+    /* 桌面端默认展开，浮钮显示「收起」 */
+    syncPanelToggleUI(true);
+  }
+  if (btnPanelToggle) {
+    btnPanelToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleUiPanel(uiPanel.classList.contains('hidden'));
+    });
   }
 
   /* ==================== 时间轴开关 ==================== */
@@ -2337,9 +2368,8 @@ function importActionPresets() {
       TIMELINE_H = 0;
     }
     
-    if (isMobile) {
-      btnMobileExpand.style.display = uiPanel.classList.contains('hidden') ? 'flex' : 'none';
-    }
+    /* v7.2.2：#btnPanelToggle 常驻显示，不再随时间轴/面板状态切换显隐 */
+
     // 所有的面板位置计算统一交给 refreshTimelineDockOffsets 处理
     refreshTimelineDockOffsets();
     resize();
@@ -5139,7 +5169,7 @@ function importActionPresets() {
     }
     if (target !== CANVAS_BOUNDS_TARGET && target.type === 'figure' && (mode === 'move' || mode === 'rotate')) {
       if (hasAnyPinInAllFrames(target)) {
-        alert('当前元件存在关节固定，请先在「关节」面板中解除所有帧的固定，才能整体位移或旋转。');
+        alert(tr2('alert.ikGroup', '当前元件存在关节固定，请先在「关节」面板中解除所有帧的固定，才能整体位移或旋转。'));
         return false;
       }
     }
@@ -5657,7 +5687,7 @@ function importActionPresets() {
     if (!el) return;
     
     if (AppState.canvasSelected && AppState.canvasBoundsEnabled && !isPlaying) {
-      document.getElementById('coordType').innerHTML = ic('picture') + ' 画布';
+      document.getElementById('coordType').innerHTML = ic('picture') + tr2('coord.canvas', ' 画布');
       document.getElementById('coordXY').textContent =
         `X: ${Math.round(AppState.canvasBounds.x + AppState.canvasBounds.w / 2)}  Y: ${Math.round(displayY(AppState.canvasBounds.y + AppState.canvasBounds.h / 2))}`;
     } else if (AppState.selected && !isPlaying) {
@@ -6658,7 +6688,7 @@ function importActionPresets() {
     if (!layerPopOpen || !layerPopListEl) return;
     if (layerDragState) return;   /* 拖动中重建会把 DOM 换掉，手势就断了 */
     const list = getLayerUIObjects();
-    if (layerPopCountEl) layerPopCountEl.textContent = list.length + ' 个';
+    if (layerPopCountEl) layerPopCountEl.textContent = list.length + tr2('layerPop.countSuffix', ' 个');
     layerPopListEl.innerHTML = '';
     list.forEach((o) => {
       const item = document.createElement('div');
@@ -6691,7 +6721,7 @@ function importActionPresets() {
       eye.type = 'button';
       eye.className = 'lp-eye' + (o.hidden ? ' on' : '');
       eye.innerHTML = o.hidden ? ic('forbid') : ic('preview-open');
-      eye.title = o.hidden ? tr2('layerPop.showTip', '点击显示（全帧生效）') : tr2('layerPop.hideTip', '点击隐藏（全帧生效）');
+      eye.title = o.hidden ? tr2('layerPop.showTip', tr2('layerPop.showTip', '点击显示（全帧生效）')) : tr2('layerPop.hideTip', tr2('layerPop.hideTip', '点击隐藏（全帧生效）'));
       eye.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
       eye.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -6705,7 +6735,7 @@ function importActionPresets() {
       lock.type = 'button';
       lock.className = 'lp-lock' + (o.locked ? ' on' : '');
       lock.innerHTML = o.locked ? ic('lock') : ic('unlock');
-      lock.title = o.locked ? tr2('layerPop.unlockTip', '点击解锁') : tr2('layerPop.lockTip', '点击锁定（锁定后画布上无法拖动/选中）');
+      lock.title = o.locked ? tr2('layerPop.unlockTip', tr2('layerPop.unlockTip', '点击解锁')) : tr2('layerPop.lockTip', tr2('layerPop.lockTip', '点击锁定（锁定后画布上无法拖动/选中）'));
       lock.setAttribute('aria-pressed', o.locked ? 'true' : 'false');
       lock.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
       lock.addEventListener('click', (e) => {
@@ -6724,8 +6754,8 @@ function importActionPresets() {
       del.type = 'button';
       del.className = 'lp-del';
       del.innerHTML = ic('delete');
-      del.title = tr2('layerPop.delTip', '删除这个元件');
-      del.setAttribute('aria-label', tr2('layerPop.delTip', '删除这个元件'));
+      del.title = tr2('layerPop.delTip', tr2('layerPop.delTip', '删除这个元件'));
+      del.setAttribute('aria-label', tr2('layerPop.delTip', tr2('layerPop.delTip', '删除这个元件')));
       del.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
       del.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -6737,7 +6767,7 @@ function importActionPresets() {
       const handle = document.createElement('div');
       handle.className = 'lp-drag';
       handle.textContent = '≡';
-      handle.title = tr2('layerPop.dragTip', '长按 0.5 秒后左右拖动，调整图层上下顺序');
+      handle.title = tr2('layerPop.dragTip', tr2('layerPop.dragTip', '长按 0.5 秒后左右拖动，调整图层上下顺序'));
       attachLayerDragHandle(handle, o, item);
       rail.appendChild(handle);
 
@@ -6749,7 +6779,7 @@ function importActionPresets() {
       else name.innerHTML = ic(layerItemIconId(o));
       item.appendChild(name);
 
-      item.title = (o.name || '') + (o.hidden ? '（已隐藏）' : '') + (o.locked ? '（已锁定）' : '');
+      item.title = (o.name || '') + (o.hidden ? tr2('layerPop.hiddenTag', '（已隐藏）') : '') + (o.locked ? tr2('layerPop.lockedTag', '（已锁定）') : '');
       item.addEventListener('click', (e) => {
         if (e.target.closest('.lp-eye') || e.target.closest('.lp-drag') || e.target.closest('.lp-lock') || e.target.closest('.lp-del')) return;
         select(o);
@@ -6759,11 +6789,6 @@ function importActionPresets() {
 
       layerPopListEl.appendChild(item);
     });
-  }
-
-  function tr2(key, fallback) {
-    try { if (typeof window.t === 'function') { const s = window.t(key); if (s && s !== key) return s; } } catch (_) {}
-    return fallback;
   }
 
   /* 长按 0.5 秒进入拖动；v6.3.1 起不画竖线指示器，改为「被拖行跟手 + 其余行实时让位」 */
@@ -6996,7 +7021,7 @@ function importActionPresets() {
       else if (o.type === 'video') icon = 'video'; /* 兜底：万一别处把视频带进来，也不要显示问号 */
       btn.innerHTML = `<span>${ic(icon)}</span><span class="idx">${idx++}</span>`;
       attachLayerName(btn, o);
-      if (o.hidden) { btn.classList.add('hidden-obj'); btn.title = (o.name || '') + '（已隐藏）'; }
+      if (o.hidden) { btn.classList.add('hidden-obj'); btn.title = (o.name || '') + tr2('layerPop.hiddenTag', '（已隐藏）'); }
       btn.onclick = () => { select(o); EventBus.emit('need:render'); };
       layerListEl.appendChild(btn);
     });
@@ -7004,10 +7029,10 @@ function importActionPresets() {
     if (AppState.selected && btnToggleLock) {
       btnToggleLock.style.display = 'block';
       if (AppState.selected.locked) {
-        btnToggleLock.innerHTML = ic('unlock') + '解锁';
+        btnToggleLock.innerHTML = ic('unlock') + tr2('lock.unlock', '解锁');
         btnToggleLock.classList.add('danger');
       } else {
-        btnToggleLock.innerHTML = ic('lock') + '锁定';
+        btnToggleLock.innerHTML = ic('lock') + tr2('lock.lock', '锁定');
         btnToggleLock.classList.remove('danger');
       }
     } else if (btnToggleLock) {
@@ -7257,8 +7282,8 @@ function importActionPresets() {
     const enabled = isSubTrackMode();
     sel.disabled = !enabled;
     sel.value = otherTracksVisibility;
-    sel.title = enabled ? '设置非当前元件轨道的画布显示方式' : '仅在元件子轨道模式下可用';
-    if (hint) hint.textContent = enabled ? '非当前元件轨道' : '选择元件子轨道后可调整';
+    sel.title = enabled ? tr2('track.otherTitle', '设置非当前元件轨道的画布显示方式') : tr2('track.disabledTitle', '仅在元件子轨道模式下可用');
+    if (hint) hint.textContent = enabled ? tr2('track.hintOn', '非当前元件轨道') : tr2('track.hintOff', '选择元件子轨道后可调整');
   }
 
   function refreshSubTrackOptions() {
@@ -7276,7 +7301,8 @@ function importActionPresets() {
       sel.innerHTML = '';
       const allOpt = document.createElement('option');
       allOpt.value = TRACK_ALL_ID;
-      allOpt.textContent = '[全局主时间轴]';
+      allOpt.textContent = tr2('track.all', '[全局主时间轴]');
+      allOpt.setAttribute('data-i18n', 'track.all'); /* v7.2.2：挂上 data-i18n，切语言时选项文字跟着换 */
       sel.appendChild(allOpt);
       entries.forEach(e => {
         const opt = document.createElement('option');
@@ -7340,14 +7366,14 @@ function importActionPresets() {
   function updateTrackOptions() {
     const sel = document.getElementById('editTargetSelect');
     if (sel) {
-      sel.innerHTML = '<option value="all">全部对象 (主时间线)</option>';
+      sel.innerHTML = tr2('track.allOption', '<option value="all">全部对象 (主时间线)</option>');
       sel.disabled = true;
     }
   }
 
   function updateTargetFigureOptions() {
     const figures = AppState.objects.filter(o => o.type === 'figure');
-    targetFigureSelect.innerHTML = '<option value="">-- 请选择 --</option>';
+    targetFigureSelect.innerHTML = tr2('track.placeholder', '<option value="">-- 请选择 --</option>');
     figures.forEach(f => {
       const opt = document.createElement('option');
       opt.value = f.id; opt.textContent = f.name;
@@ -7629,7 +7655,7 @@ function importActionPresets() {
       } else has.push(t.name || id);
     }
     if (!has.length) return;
-    const msg = '部分关键帧：' + has.join('、') + ' 有锚点' + (missing.length ? ('；' + missing.join('、') + ' 没有') : '');
+    const msg = tr2('kf.partialHead', '部分关键帧：') + has.join('、') + ' 有锚点' + (missing.length ? ('；' + missing.join('、') + ' 没有') : '');
     showHistoryToast(msg, undefined, 2600);
   }
 
@@ -7658,10 +7684,10 @@ function importActionPresets() {
     btn.classList.toggle('kf-partial-on', st === 'partial');
     /* v7.2.1：i18n 实际挂在 window.t / window.SKFE_I18N 上，SKFE.i18n 一直是 undefined */
     const base = (typeof window.t === 'function' ? window.t('timeline.keyframeTitle') : '') || '把当前帧设为 / 取消关键帧';
-    if (st === 'all') btn.title = '这一帧已是关键帧，点一下取消（只取消主轨广播的锚点）';
+    if (st === 'all') btn.title = tr2('kf.titleFull', '这一帧已是关键帧，点一下取消（只取消主轨广播的锚点）');
     else if (st === 'partial') {
       const names = kfPartialNames(AppState.currentFrameIndex);
-      btn.title = '部分关键帧：' + (names.join('、') || '—') + ' 已有锚点，点一下补齐其余元件';
+      btn.title = tr2('kf.partialHead', '部分关键帧：') + (names.join('、') || '—') + tr2('kf.partialTail', ' 已有锚点，点一下补齐其余元件');
     } else btn.title = base;
   }
 
@@ -7839,7 +7865,7 @@ function importActionPresets() {
     if (!bar) return;
     bar.classList.toggle('thumb-mode', frameThumbMode);
     /* v7.2.0：拖动语义写在容器标题上，Alt 重排不靠猜 */
-    bar.title = '拖动帧块：把这一帧的姿态覆盖到落点，后面跟着延展；按住 Alt 拖动：整帧挪位（重排顺序）';
+    bar.title = tr2('frame.dragTitle', '拖动帧块：把这一帧的姿态覆盖到落点，后面跟着延展；按住 Alt 拖动：整帧挪位（重排顺序）');
 
     if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = Math.max(0, AppState.frames.length - 1);
     if (AppState.currentFrameIndex < 0) AppState.currentFrameIndex = 0;
@@ -7869,7 +7895,7 @@ function importActionPresets() {
       const emptyTrackFrame = isSubTrackMode() && !getFrameTrackObject(fr, i);
       if (emptyTrackFrame) {
         chip.classList.add('empty-frame');
-        chip.title = `第 ${i + 1} 帧 · 当前元件未出场`;
+        chip.title = trv('frame.chipAway', { n: i + 1 }, `第 ${i + 1} 帧 · 当前元件未出场`);
         chip.setAttribute('aria-label', `第 ${i + 1} 帧，当前元件未出场`);
       }
       chip.dataset.index = i;
@@ -8104,7 +8130,7 @@ function importActionPresets() {
       /* D10：部分关键帧要说清是哪几个元件有锚点 */
       if (chip.dataset.kfPartial) {
         const names = kfPartialNames(i);
-        chip.title = '第 ' + (i + 1) + ' 帧 · 部分关键帧：' + (names.join('、') || '—') + ' 有锚点，其余元件没有';
+        chip.title = tr2('frame.chipHead', '第 ') + (i + 1) + tr2('frame.chipMid', ' 帧 · 部分关键帧：') + (names.join('、') || '—') + tr2('frame.chipTail', ' 有锚点，其余元件没有');
       }
     });
 
@@ -8255,7 +8281,7 @@ function importActionPresets() {
       EventBus.emit('history:save', '删除元件帧');
       return;
     }
-    if (AppState.frames.length <= 1) { alert('至少保留一帧'); return; }
+    if (AppState.frames.length <= 1) { alert(tr2('timeline.keepOne', '至少保留一帧')); return; }
     /* v7.0.1：删掉的是末端 / 首位关键帧 → 先按相邻关键帧铺满，再抽掉这一格。
        中间关键帧不用铺：抽掉后前后两段合并，reconcile 会自动补出插值帧。 */
     prepareHoldBeforeSplice(AppState.currentFrameIndex);
@@ -8276,7 +8302,7 @@ function importActionPresets() {
     seekVideoToFrame(AppState.currentFrameIndex);
     updateFrameBar();
     EventBus.emit('need:render'); EventBus.emit('need:syncUI');
-    EventBus.emit('history:save', '删除帧');
+    EventBus.emit('history:save', tr2('timeline.delFrame', '删除帧'));
   }
 
   function applyFPS(fps) {
@@ -8295,7 +8321,7 @@ function importActionPresets() {
     isPlaying = true;
     AppState.selected = null; drag = null; AppState.canvasSelected = false;
     cancelTransformBoxDrag(); anchorModeOn = false;
-    document.getElementById('btnPlay').innerHTML = ic('pause') + '暂停';
+    document.getElementById('btnPlay').innerHTML = ic('pause') + '<span data-i18n="play.pause">' + tr2('play.pause', '暂停') + '</span>';
     document.getElementById('playBadge').style.display = 'block';
     let idx = AppState.currentFrameIndex;
     playState = { idx, acc: 0, last: performance.now() };
@@ -8319,7 +8345,7 @@ function importActionPresets() {
     isPlaying = false;
     if (playTimer) cancelAnimationFrame(playTimer);
     playTimer = null;
-    document.getElementById('btnPlay').innerHTML = ic('play') + '播放';
+    document.getElementById('btnPlay').innerHTML = ic('play') + '<span data-i18n="play.play">' + tr2('play.play', '播放') + '</span>';
     document.getElementById('playBadge').style.display = 'none';
     if (refVideo && refVideoPlaying) {
       refVideo.pause();
@@ -8442,18 +8468,18 @@ function importActionPresets() {
     if (ek && ek.startsWith('preset:')) {
       const id = ek.slice(7);
       const p = customEasePresets.find(x => x.id === id);
-      label = p ? p.name : '自定义';
+      label = p ? p.name : tr2('ease.customName', '自定义');
     } else if (ek === 'custom') {
-      label = '自定义';
+      label = tr2('ease.customName', '自定义');
     } else if (ek === 'elastic1') {
-      label = '阻尼振荡';
+      label = tr2('ease.elastic1Name', '阻尼振荡');
     } else if (ek === 'elastic2') {
-      label = '周期';
+      label = tr2('ease.elastic2Name', '周期');
     } else {
-      label = (TWEEN_EASE_PRESETS[ek] || TWEEN_EASE_PRESETS.linear).label;
+      label = tr2('ease.' + ((TWEEN_EASE_PRESETS[ek] ? ek : 'linear')), (TWEEN_EASE_PRESETS[ek] || TWEEN_EASE_PRESETS.linear).label);
     }
     tweenEaseName.textContent = label;
-    tweenEaseBtn.title = (segEase ? '当前段曲线 · ' : '段曲线（默认）· ') + label;
+    tweenEaseBtn.title = (segEase ? tr2('ease.segmentTitle', '当前段曲线 · ') : tr2('ease.defaultTitle', '段曲线（默认）· ')) + label;
   }
 
   function renderTweenEaseMenu() {
@@ -8466,16 +8492,16 @@ function importActionPresets() {
       let label, thumbInput;
       
       if (key === 'elastic1') {
-        label = '阻尼振荡';
+        label = tr2('ease.elastic1Name', '阻尼振荡');
         thumbInput = u => easeElastic1(u, elastic1Params.damping, elastic1Params.period);
       } else if (key === 'elastic2') {
-        label = '周期';
+        label = tr2('ease.elastic2Name', '周期');
         thumbInput = u => easeElastic2(u, elastic2Params.period, elastic2Params.skew);
       } else if (custom) {
-        label = '自定义曲线…';
+        label = tr2('ease.customCurve', '自定义曲线…');
         thumbInput = tweenCustomBezier;
       } else {
-        label = TWEEN_EASE_PRESETS[key].label;
+        label = tr2('ease.' + key, TWEEN_EASE_PRESETS[key].label);
         thumbInput = TWEEN_EASE_PRESETS[key].bezier;
       }
       
@@ -8501,7 +8527,7 @@ function importActionPresets() {
     }
     html += '<div class="ease-divider"></div>' +
       '<button type="button" class="ease-item ease-preset-add" data-action="add-preset" role="menuitem">' +
-        '<span class="ease-label">＋ 新建自定义预设…</span>' +
+        '<span class="ease-label">' + tr2('ease.newPreset', '＋ 新建自定义预设…') + '</span>' +
       '</button>';
     tweenEaseMenu.innerHTML = html;
   }
@@ -8658,7 +8684,7 @@ function importActionPresets() {
   function renderEasePresetListInline() {
     if (!easePresetListInline) return;
     if (!customEasePresets.length) {
-      easePresetListInline.innerHTML = '<div class="empty-state">暂无自定义预设</div>';
+      easePresetListInline.innerHTML = tr2('ease.emptyPreset', '<div class="empty-state">暂无自定义预设</div>');
       return;
     }
     
@@ -8666,11 +8692,11 @@ function importActionPresets() {
       let metaText = '';
       let typeName = '';
       if (p.type === 'elastic1') { 
-        metaText = `阻:${p.params.damping.toFixed(2)} 周:${p.params.period.toFixed(2)}`; typeName = '[阻尼]'; 
+        metaText = tr2('ease.shortDamping', '阻') + ':' + p.params.damping.toFixed(2) + ' ' + tr2('ease.shortPeriod', '周') + ':' + p.params.period.toFixed(2); typeName = tr2('ease.tagDamped', '[阻尼]'); 
       } else if (p.type === 'elastic2') { 
-        metaText = `周:${p.params.period.toFixed(2)} 偏:${p.params.skew.toFixed(2)}`; typeName = '[周期]'; 
+        metaText = tr2('ease.shortPeriod', '周') + ':' + p.params.period.toFixed(2) + ' ' + tr2('ease.shortSkew', '偏') + ':' + p.params.skew.toFixed(2); typeName = tr2('ease.tagPeriod', '[周期]'); 
       } else { 
-        metaText = p.bezier ? p.bezier.map(v => v.toFixed(2)).join(', ') : ''; typeName = '[贝塞尔]'; 
+        metaText = p.bezier ? p.bezier.map(v => v.toFixed(2)).join(', ') : ''; typeName = tr2('ease.tagBezier', '[贝塞尔]'); 
       }
       
       const isSelected = (p.id === easeEditorSelectedPresetId);
@@ -8679,7 +8705,7 @@ function importActionPresets() {
       return `<div class="ease-preset-item" data-id="${p.id}" style="${bgStyle}">
         <span class="name">${typeName} ${p.name}</span>
         <span class="preset-bezier">${metaText}</span>
-        <span class="del" title="删除">${ic('close')}</span>
+        <span class="del" title="${tr2('common.delete', '删除')}">${ic('close')}</span>
       </div>`;
     }).join('');
     easePresetListInline.querySelectorAll('.ease-preset-item').forEach(row => {
@@ -8883,9 +8909,9 @@ function importActionPresets() {
     });
 
     if (easeEditorMode === 'elastic1') {
-      easeValueEl.textContent = `阻尼: ${elastic1Params.damping.toFixed(2)} | 周期: ${elastic1Params.period.toFixed(2)}`;
+      easeValueEl.textContent = tr2('ease.damping', '阻尼') + ': ' + elastic1Params.damping.toFixed(2) + ' | ' + tr2('ease.period', '周期') + ': ' + elastic1Params.period.toFixed(2);
     } else {
-      easeValueEl.textContent = `周期: ${elastic2Params.period.toFixed(2)} | 偏斜: ${elastic2Params.skew.toFixed(2)}`;
+      easeValueEl.textContent = tr2('ease.period', '周期') + ': ' + elastic2Params.period.toFixed(2) + ' | ' + tr2('ease.skew', '偏斜') + ': ' + elastic2Params.skew.toFixed(2);
     }
   }
 
@@ -8904,8 +8930,8 @@ function importActionPresets() {
 
   function openEaseEditor() {
     easeDraft = tweenCustomBezier.slice();
-    document.getElementById('easeEditorTitle').textContent = '自定义曲线';
-    document.getElementById('easeEditorHint').textContent = '拖动两个控制点调整曲线';
+    document.getElementById('easeEditorTitle').textContent = tr2('ease.customTitle', '自定义曲线');
+    document.getElementById('easeEditorHint').textContent = tr2('ease.customHint', '拖动两个控制点调整曲线');
     
     // 恢复默认状态
     document.querySelector('.ease-preset-row').style.display = 'flex';
@@ -8955,11 +8981,11 @@ function importActionPresets() {
     // 现在所有 Tab 都支持预设，不再隐藏预设框
     const hint = document.getElementById('easeEditorHint');
     if (easeEditorMode === 'elastic1') {
-      hint.textContent = '拖动上方点调阻尼(衰减)，下方点调周期(快慢)';
+      hint.textContent = tr2('ease.hintElastic1', '拖动上方点调阻尼(衰减)，下方点调周期(快慢)');
     } else if (easeEditorMode === 'elastic2') {
-      hint.textContent = '下方点控制周期，上方点左右拖动控制波形倾斜';
+      hint.textContent = tr2('ease.hintElastic2', '下方点控制周期，上方点左右拖动控制波形倾斜');
     } else {
-      hint.textContent = '拖动两个控制点调整曲线';
+      hint.textContent = tr2('ease.customHint', '拖动两个控制点调整曲线');
     }
   }
 
@@ -9126,11 +9152,11 @@ function importActionPresets() {
   };
 
   function populateEaseSelect(select, currentKey) {
-    let html = '<option value="">跟随全局</option>';
+    let html = '<option value="">' + tr2('ease.followGlobal', '跟随全局') + '</option>';
     ['linear', 'easeIn', 'easeOut', 'easeInOut'].forEach(key => {
       html += '<option value="' + key + '">' + TWEEN_EASE_PRESETS[key].label + '</option>';
     });
-    html += '<option value="custom">自定义</option>';
+    html += '<option value="custom">' + tr2('ease.customName', '自定义') + '</option>';
     customEasePresets.forEach(p => {
       html += '<option value="preset:' + p.id + '">' + p.name + '</option>';
     });
@@ -9202,7 +9228,7 @@ function importActionPresets() {
     const changes = getJointChanges();
     jointEaseList.innerHTML = '';
     if (!changes.length) {
-      jointEaseList.innerHTML = '<div class="empty-state">当前两帧之间没有检测到分部变化。<br>请先制作两个不同姿势/位置的关键帧。</div>';
+      jointEaseList.innerHTML = tr2('jointEase.empty', '<div class="empty-state">当前两帧之间没有检测到分部变化。<br>请先制作两个不同姿势/位置的关键帧。</div>');
     } else {
       changes.forEach(ch => {
         const row = document.createElement('div');
@@ -9276,7 +9302,7 @@ function importActionPresets() {
     if (el) el.style.display = multiSelectMode ? 'inline-flex' : 'none';
     const has = multiSelectedFrames.size > 0;
     const cnt = document.getElementById('multiCount');
-    if (cnt) cnt.textContent = has ? multiSelectedFrames.size + ' 帧' : '';
+    if (cnt) cnt.textContent = has ? multiSelectedFrames.size + tr2('timeline.frameSuffix', ' 帧') : '';
     
     const btnT = document.getElementById('btnMultiTween');
     if (btnT) btnT.disabled = multiSelectedFrames.size < 2;
@@ -9287,25 +9313,25 @@ function importActionPresets() {
     // 1. 动画面板的删除帧
     const delBtn = document.getElementById('btnDelFrame');
     if (delBtn) {
-      delBtn.innerHTML = ic('delete') + (isMulti ? '删除多选帧' : '删除帧');
-      delBtn.title = isMulti ? '删除所有勾选的帧' : '删除当前帧';
+      delBtn.innerHTML = ic('delete') + (isMulti ? tr2('timeline.delFrames', '删除多选帧') : tr2('timeline.delFrame', '删除帧'));
+      delBtn.title = isMulti ? tr2('timeline.delFramesTitle', '删除所有勾选的帧') : tr2('timeline.delFrameTitle', '删除当前帧');
     }
 
     // 2. 控制面板的导出 PNG / JPG
     const pngBtn = document.getElementById('btnExportPNG');
-    if (pngBtn) pngBtn.textContent = isMulti ? '导出多选帧PNG' : '导出PNG';
+    if (pngBtn) pngBtn.textContent = isMulti ? tr2('export.multiPng', '导出多选帧PNG') : tr2('export.png', '导出PNG');
     const jpgBtn = document.getElementById('btnExportJPG');
-    if (jpgBtn) jpgBtn.textContent = isMulti ? '导出多选帧JPG' : '导出JPG';
+    if (jpgBtn) jpgBtn.textContent = isMulti ? tr2('export.multiJpg', '导出多选帧JPG') : tr2('export.jpg', '导出JPG');
 
     // 3. 高级设置的 GIF / PNG序列
     const gifBtn = document.getElementById('btnExportGIF');
-    if (gifBtn) gifBtn.textContent = isMulti ? '导出多选帧GIF' : '导出 GIF';
+    if (gifBtn) gifBtn.textContent = isMulti ? tr2('export.multiGif', '导出多选帧GIF') : tr2('export.gif', '导出 GIF');
     const seqBtn = document.getElementById('btnExportPNGSeq');
-    if (seqBtn) seqBtn.textContent = isMulti ? '导出多选帧PNG序列' : '导出 PNG序列';
+    if (seqBtn) seqBtn.textContent = isMulti ? tr2('export.multiPngSeq', '导出多选帧PNG序列') : tr2('export.pngSeq', '导出 PNG序列');
 
     // 4. 全局属性修改标签
     const geBtn = document.querySelector('.adv-toggle[data-toggle="globalEdit"]');
-    if (geBtn) geBtn.textContent = isMulti ? '多选帧全局属性修改' : '全局属性修改';
+    if (geBtn) geBtn.textContent = isMulti ? tr2('prop.multiGlobalEdit', '多选帧全局属性修改') : tr2('prop.globalEdit', '全局属性修改');
     const geHelp = document.getElementById('globalEditHelpBtn');
     if (geHelp) geHelp.style.display = isMulti ? 'none' : 'inline'; // 多选模式下隐藏原说明
   }
@@ -9553,7 +9579,7 @@ function importActionPresets() {
     if (isSubTrackMode()) {
       const t = AppState.tracks[AppState.activeTrackId];
       if (!t) return;
-      if (t.frames.length - multiSelectedFrames.size < 1) { alert('至少保留一帧'); return; }
+      if (t.frames.length - multiSelectedFrames.size < 1) { alert(tr2('timeline.keepOne', '至少保留一帧')); return; }
       const indices = Array.from(multiSelectedFrames).sort((a, b) => b - a);
       indices.forEach(i => {
         if (i >= 0 && i < t.frames.length) {
@@ -9576,7 +9602,7 @@ function importActionPresets() {
       EventBus.emit('history:save', '删除选中帧');
       return;
     }
-    if (AppState.frames.length - multiSelectedFrames.size < 1) { alert('至少保留一帧'); return; }
+    if (AppState.frames.length - multiSelectedFrames.size < 1) { alert(tr2('timeline.keepOne', '至少保留一帧')); return; }
     const indices = Array.from(multiSelectedFrames).sort((a, b) => b - a);
     indices.forEach(i => {
       if (i < 0 || i >= AppState.frames.length) return;
@@ -9603,7 +9629,7 @@ function importActionPresets() {
   function tweenSelectedFrames() {
     if (!multiSelectMode || multiSelectedFrames.size < 2) return;
     const count = parseInt(document.getElementById('tweenCount').value) || 5;
-    if (count < 1 || count > 60) { alert('补间帧数需在 1-60 之间'); return; }
+    if (count < 1 || count > 60) { alert(tr2('alert.tweenCount', '补间帧数需在 1-60 之间')); return; }
     if (isPlaying) pause();
     syncFrameRef();
     const subMode = isSubTrackMode();
@@ -9646,8 +9672,8 @@ function importActionPresets() {
       }
     }
     if (pairs === 0) {
-      if (subMode) alert('所选相邻帧中，没有两端对该元件都非空白的帧对，无法补间。');
-      else alert('请选择相邻的帧（例如 1、2、3），才能在这些相邻帧之间补间。');
+      if (subMode) alert(tr2('alert.tweenNoPair', '所选相邻帧中，没有两端对该元件都非空白的帧对，无法补间。'));
+      else alert(tr2('alert.tweenNeedAdjacent', '请选择相邻的帧（例如 1、2、3），才能在这些相邻帧之间补间。'));
       return;
     }
     syncMainLengthFromTracks();
@@ -9659,7 +9685,7 @@ function importActionPresets() {
     updateFrameBar();
     EventBus.emit('need:render'); EventBus.emit('need:syncUI');
     EventBus.emit('history:save', '批量补间');
-    alert(`已在 ${pairs} 对相邻帧之间生成补间帧。`);
+    alert(trv('alert.tweened', { n: pairs }, `已在 ${pairs} 对相邻帧之间生成补间帧。`));
   }
 
   /* ==================== 离屏渲染导出（已迁移至 js/features/export.js） ==================== */
@@ -9965,7 +9991,7 @@ function importActionPresets() {
     if (sub) {
       const id = String(AppState.activeTrackId);
       const t = AppState.tracks[id];
-      if (!t) { alert('当前帧没有可打关键帧的元件'); return; }
+      if (!t) { alert(tr2('alert.kfNone', '当前帧没有可打关键帧的元件')); return; }
       if (!t.frames) t.frames = [];
       const slot = (idx < t.frames.length) ? t.frames[idx] : undefined;
       if (slot !== undefined && KF.isKey(slot)) {
@@ -9974,7 +10000,7 @@ function importActionPresets() {
         return;
       }
       const live = liveOf(id);
-      if (!live) { alert('当前帧没有可打关键帧的元件'); return; }
+      if (!live) { alert(tr2('alert.kfNone', '当前帧没有可打关键帧的元件')); return; }
       while (t.frames.length <= idx) t.frames.push(null);
       t.frames[idx] = live;
       KF.markKey(live, 'sub');
@@ -9994,7 +10020,7 @@ function importActionPresets() {
       if (!hasKey && !live) continue;      /* 这一帧本来就没这个元件，不参与广播 */
       rows.push({ id: id, t: t, hasKey: hasKey, origin: hasKey ? KF.originOf(slot) : null, live: live });
     }
-    if (!rows.length) { alert('当前帧没有可打关键帧的元件'); return; }
+    if (!rows.length) { alert(tr2('alert.kfNone', '当前帧没有可打关键帧的元件')); return; }
 
     /* 这一帧已经是「主轨广播」状态吗？还缺锚点、且参数确实变了的元件有几个？
        这两个数决定这次点击是「补」还是「收」。 */
@@ -10185,7 +10211,7 @@ function importActionPresets() {
 
   document.getElementById('btnTween').onclick = () => {
     const count = parseInt(document.getElementById('tweenCount').value) || 5;
-    if (count < 1 || count > 60) { alert('插入帧数需在 1-60 之间'); return; }
+    if (count < 1 || count > 60) { alert(tr2('alert.insertCount', '插入帧数需在 1-60 之间')); return; }
     insertFramesInSegment(count);
   };
 
@@ -10742,7 +10768,7 @@ function importActionPresets() {
     f.shadowEnabled = !f.shadowEnabled;
     setGlobalProp(f, 'shadowEnabled', f.shadowEnabled);
     btnGroundShadow.classList.toggle('on', f.shadowEnabled);
-    btnGroundShadow.textContent = f.shadowEnabled ? '关闭地面阴影' : '开启地面阴影';
+    btnGroundShadow.textContent = f.shadowEnabled ? tr2('shadow.off', '关闭地面阴影') : tr2('shadow.on', '开启地面阴影');
     shadowEditMode = activeTool === 'glow';
     EventBus.emit('need:render');
     markCurrentFrameModified();
@@ -10801,7 +10827,7 @@ function importActionPresets() {
   btnGroundLine.onclick = () => {
     groundLineEnabled = !groundLineEnabled;
     btnGroundLine.classList.toggle('on', groundLineEnabled);
-    btnGroundLine.textContent = groundLineEnabled ? '关闭地面参考线' : '开启地面参考线';
+    btnGroundLine.textContent = groundLineEnabled ? tr2('groundLine.off', '关闭地面参考线') : tr2('groundLine.on', '开启地面参考线');
     if (groundLineEnabled) {
       const firstFig = AppState.objects.find(o => o.type === 'figure');
       if (firstFig) {
@@ -10988,7 +11014,7 @@ function importActionPresets() {
     }
     if (btnToggleCanvasBounds) {
       btnToggleCanvasBounds.classList.toggle('on', AppState.canvasBoundsEnabled);
-      btnToggleCanvasBounds.textContent = AppState.canvasBoundsEnabled ? '关闭画布边界' : '开启画布边界';
+      btnToggleCanvasBounds.textContent = AppState.canvasBoundsEnabled ? tr2('bounds.off', '关闭画布边界') : tr2('bounds.on', '开启画布边界');
     }
     syncExportCanvasFirstBtn();
     updatePosInputs(); // 确保基础属性面板中的 X/Y 同步
@@ -11001,7 +11027,7 @@ function importActionPresets() {
     btnExportCanvasFirst.disabled = !AppState.canvasBoundsEnabled;
     btnExportCanvasFirst.title = AppState.canvasBoundsEnabled
       ? (exportCanvasFirst ? '已开启：导出时优先使用画布边界（点击关闭）' : '开启后，导出时优先使用画布边界')
-      : '请先开启画布边界';
+      : tr2('alert.boundsFirst', '请先开启画布边界');
   }
   if (btnExportCanvasFirst) {
     btnExportCanvasFirst.addEventListener('click', () => {
@@ -11039,7 +11065,7 @@ function importActionPresets() {
   btnToggleCanvasBounds.onclick = () => {
     AppState.canvasBoundsEnabled = !AppState.canvasBoundsEnabled;
     btnToggleCanvasBounds.classList.toggle('on', AppState.canvasBoundsEnabled);
-    btnToggleCanvasBounds.textContent = AppState.canvasBoundsEnabled ? '关闭画布边界' : '开启画布边界';
+    btnToggleCanvasBounds.textContent = AppState.canvasBoundsEnabled ? tr2('bounds.off', '关闭画布边界') : tr2('bounds.on', '开启画布边界');
     canvasSliders.style.display = AppState.canvasBoundsEnabled ? 'block' : 'none';
     if (AppState.canvasBoundsEnabled) {
       const bbox = computeAllFramesBounds();
@@ -11116,7 +11142,7 @@ function importActionPresets() {
   const btnCenterCanvas = document.getElementById('btnCenterCanvas');
   if (btnCenterCanvas) {
     btnCenterCanvas.addEventListener('click', () => {
-      if (!AppState.canvasBoundsEnabled) { alert('请先开启画布边界'); return; }
+      if (!AppState.canvasBoundsEnabled) { alert(tr2('alert.boundsFirst', '请先开启画布边界')); return; }
 
       // ① 用 getComputedStyle 判断可见性（能识别 CSS display:none 的初始状态）
       const timelineVisible = getComputedStyle(timelineEl).display !== 'none';
@@ -11174,7 +11200,7 @@ function importActionPresets() {
   function syncPinViewBtn() {
     if (!btnPinView) return;
     btnPinView.classList.toggle('on', viewPinned);
-    btnPinView.innerHTML = ic('pushpin') + (viewPinned ? '已固定' : '固定');
+    { const pinKey = viewPinned ? 'pin.pinned' : 'pin.pin'; const pinTxt = viewPinned ? tr2('pin.pinned', '已固定') : tr2('pin.pin', '固定'); btnPinView.innerHTML = ic('pushpin') + '<span data-i18n="' + pinKey + '">' + pinTxt + '</span>'; }
   }
   if (btnPinView) {
     btnPinView.addEventListener('click', () => {
@@ -11745,9 +11771,9 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       lightColorInput.value = AppState.selected.light.color;
       lightSizeInput.value = AppState.selected.light.size; lightSizeVal.textContent = AppState.selected.light.size.toFixed(1);
       lightAngleInput.value = AppState.selected.light.angle; lightAngleVal.textContent = AppState.selected.light.angle + '°';
-      btnLight.textContent = AppState.selected.light.enabled ? '关闭侧面高光' : '开启侧面高光';
+      btnLight.textContent = AppState.selected.light.enabled ? tr2('light.off', '关闭侧面高光') : tr2('light.on', '开启侧面高光');
       btnLight.classList.toggle('on', AppState.selected.light.enabled);
-      btnExtremity.textContent = AppState.selected.extremity.enabled ? '关闭小手小脚' : '开启小手小脚';
+      btnExtremity.textContent = AppState.selected.extremity.enabled ? tr2('ext.off', '关闭小手小脚') : tr2('ext.on', '开启小手小脚');
       btnExtremity.classList.toggle('on', AppState.selected.extremity.enabled);
       // 控制手腕脚踝面板显隐
       document.querySelectorAll('.ext-joint-row').forEach(el => {
@@ -11782,7 +11808,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       legLenRInput.value = isIndep ? bs.legR : bs.leg; legLenRVal.textContent = (+legLenRInput.value).toFixed(2);
       shinRatioLInput.value = isIndep ? bs.shinL : sh; shinRatioLVal.textContent = (+shinRatioLInput.value).toFixed(2);
       shinRatioRInput.value = isIndep ? bs.shinR : sh; shinRatioRVal.textContent = (+shinRatioRInput.value).toFixed(2);
-      btnHeadFill.textContent = AppState.selected.headFilled ? '头部实心' : '头部空心';
+      btnHeadFill.textContent = AppState.selected.headFilled ? tr2('head.solid', '头部实心') : tr2('head.hollow', '头部空心');
       btnHeadFill.classList.toggle('on', AppState.selected.headFilled);
       /* v6.4.0：回填当前头型（旧工程没有这个字段 → 正圆） */
       const curHeadShape = AppState.selected.headShape || 'circle';
@@ -11801,16 +11827,16 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       if (glowOffsetY) { glowOffsetY.value = GV.offsetY; glowOffsetYVal.textContent = Math.round(GV.offsetY); }
       if (glowSpread) { glowSpread.value = GV.spread; glowSpreadVal.textContent = Math.round(GV.spread); }
       if (glowIncludeAcc) glowIncludeAcc.checked = !!GV.includeAcc;
-      btnGlow.textContent = GV.enabled ? '关闭描边阴影' : '开启描边阴影';
+      btnGlow.textContent = GV.enabled ? tr2('glow.off', '关闭描边阴影') : tr2('glow.on', '开启描边阴影');
       btnGlow.classList.toggle('on', GV.enabled);
       jointColor.value = AppState.selected.joint.color;
       jointLen.value = AppState.selected.joint.len; jointLenVal.textContent = AppState.selected.joint.len.toFixed(2);
-      btnJoint.textContent = AppState.selected.joint.enabled ? '关闭渐变' : '开启渐变';
+      btnJoint.textContent = AppState.selected.joint.enabled ? tr2('joint.off', '关闭渐变') : tr2('joint.on', '开启渐变');
       btnJoint.classList.toggle('on', AppState.selected.joint.enabled);
       /* v7.2.1：地面阴影（已改成每个火柴人独立，所以这里跟着选中对象走） */
       shadowFill(AppState.selected);
       if (btnGroundShadow) {
-        btnGroundShadow.textContent = AppState.selected.shadowEnabled ? '关闭地面阴影' : '开启地面阴影';
+        btnGroundShadow.textContent = AppState.selected.shadowEnabled ? tr2('shadow.off', '关闭地面阴影') : tr2('shadow.on', '开启地面阴影');
         btnGroundShadow.classList.toggle('on', !!AppState.selected.shadowEnabled);
       }
       if (shadowColorInput) shadowColorInput.value = AppState.selected.shadowColor;
@@ -12242,7 +12268,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     if (pointers.size > 2) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (e.target.closest('#transformBoxUI') || e.target.closest('#ui') || e.target.closest('#timeline') ||
-        e.target.closest('#btnShowTimeline') || e.target.closest('#btnMobileExpand') ||
+        e.target.closest('#btnShowTimeline') || e.target.closest('#btnPanelToggle') ||
         e.target.closest('#uiResizeHandle') || e.target.closest('#historyControls') ||
         e.target.closest('#layerPop')) return;
 
@@ -12414,7 +12440,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
                 if (best.name === 'waist' && o.pinned.pelvis) isPinned = true;
               }
               if (isPinned) {
-                alert('该肢体正在被 IK（关节固定）保护，无法拉伸。\n请先在「关节」面板中解除固定。');
+                alert(tr2('alert.ikStretch', '该肢体正在被 IK（关节固定）保护，无法拉伸。\n请先在「关节」面板中解除固定。'));
                 return;
               }
             }
@@ -13177,7 +13203,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     }
     if (!AppState.selected) return;
     if (globalEditEnabled && AppState.selected.type === 'figure' && hasAnyPinInAllFrames(AppState.selected)) {
-      alert('当前元件存在关节固定，请先在「关节」面板中解除所有帧的固定，才能整体位移。');
+      alert(tr2('alert.ikMove', '当前元件存在关节固定，请先在「关节」面板中解除所有帧的固定，才能整体位移。'));
       updatePosInputs();
       return;
     }
@@ -13245,7 +13271,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     btnSnapToggle.style.color = snapEnabled ? 'var(--color-primary)' : '';
     btnSnapToggle.style.background = snapEnabled ? 'var(--color-primary-soft)' : '';
     btnSnapToggle.style.borderRadius = '8px';
-    btnSnapToggle.title = snapEnabled ? '关闭吸附' : '开启吸附';
+    btnSnapToggle.title = snapEnabled ? tr2('snap.off', '关闭吸附') : tr2('snap.on', '开启吸附');
   }
   if (btnSnapToggle) {
     syncSnapBtn();
@@ -13450,7 +13476,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
 
   function cloneSelected() {
     if (!AppState.selected || AppState.selected.type === 'video') return;
-    if (AppState.selected.type === 'camera') { alert('摄像机只能存在一个。'); return; }
+    if (AppState.selected.type === 'camera') { alert(tr2('alert.cameraSingle', '摄像机只能存在一个。')); return; }
     const copy = JSON.parse(JSON.stringify(AppState.selected, (k, v) => (k === 'img' ? undefined : v)));
     copy.id = ++uid; generateName(copy);
     if (AppState.selected.img) copy.img = AppState.selected.img;
@@ -13845,7 +13871,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
   if (btnReplace) {
     btnReplace.onclick = () => {
       if (!AppState.selected || (AppState.selected.type !== 'image' && AppState.selected.type !== 'acc')) {
-        alert('请先在画布中选中一个图片或配饰，再进行替换。');
+        alert(tr2('alert.replaceNeedImage', '请先在画布中选中一个图片或配饰，再进行替换。'));
         return;
       }
       fileInputEl.dataset.mode = 'replace';
@@ -14375,7 +14401,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
 
   document.getElementById('btnClearOtherFrames').onclick = () => {
     if (AppState.frames.length <= 1) {
-      alert('当前只有一帧，无需清空。');
+      alert(tr2('alert.onlyOneFrame', '当前只有一帧，无需清空。'));
       return;
     }
     if (isPlaying) pause();
@@ -14433,7 +14459,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       if (taps < 5) return;
       taps = 0;
       if (!SKFE.platform || typeof SKFE.platform.diag !== 'function') {
-        alert('诊断不可用：platform.diag 缺失（platform.js 版本过旧）');
+        alert(tr2('diag.unavailable', '诊断不可用：platform.diag 缺失（platform.js 版本过旧）'));
         return;
       }
       SKFE.platform.diag().then(txt => {
@@ -14443,7 +14469,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
             SKFE.platform.save(new Blob([txt], { type: 'text/plain' }), 'skfe_diag_' + Date.now() + '.txt');
           } catch (_) {}
         }
-      }).catch(e => alert('诊断失败：' + (e && e.message)));
+      }).catch(e => alert(tr2('diag.fail', '诊断失败：') + (e && e.message)));
     });
   })();
 
@@ -14563,7 +14589,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       renderCanvas(true);
       dataURL = format === 'png' ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.92);
     } catch (err) {
-      alert('导出失败：' + err.message);
+      alert(tr2('export.fail', '导出失败：') + err.message);
     } finally {
       canvas.width = origW; canvas.height = origH;
       canvas.style.width = origStyleW; canvas.style.height = origStyleH;
@@ -14597,7 +14623,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       if (isIOS) {
         setTimeout(() => {
           window.open(dataURL, '_blank');
-          alert('iOS 已在新标签页打开图片，\n长按图片即可"存储到照片"。');
+          alert(tr2('export.iosSave', 'iOS 已在新标签页打开图片，\n长按图片即可"存储到照片"。'));
         }, 300);
       }
     }
@@ -14655,7 +14681,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       back.type = 'button';
       back.className = 'ui-sheet-back';
       back.dataset.i18n = 'tab.back';       /* 返回按钮也跟着切 */
-      back.textContent = '返回属性';
+      back.textContent = tr2('panel.backToProps', '返回属性');
       back.addEventListener('click', () => switchUiSheet(null));
       head.appendChild(tEl); head.appendChild(back);
       box.appendChild(head);
@@ -14875,17 +14901,17 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       }
     }
 
-    /* v7.2.1：左下角「展开控制面板」浮窗，规则和右边那颗「🎬 帧动画面板」浮钮一致 ——
-       时间轴贴底展开时抬到时间轴上方，否则回到 CSS 的 bottom:40px。
-       放在 uiResizable 的提前 return 之前，自由缩放态也要跟着时间轴让位。 */
-    if (isMobile) {
-      const expandBtn = document.getElementById('btnMobileExpand');
-      if (expandBtn) expandBtn.style.bottom = (timelineDock === 'bottom' && visible) ? (h + 8) + 'px' : '';
+    /* v7.2.2：左上角「收起 / 展开」浮钮。它是 fixed 的常驻入口，只有一种情况要让位 ——
+       时间轴改成停靠在顶部时会把屏幕上方整条盖住，这时把它顺下来（h + 12），否则回到 CSS 的 top:12px。
+       放在 uiResizable 的提前 return 之前，自由缩放态也要跟着让位。 */
+    const panelToggleBtn = document.getElementById('btnPanelToggle');
+    if (panelToggleBtn) {
+      panelToggleBtn.style.top = (timelineDock === 'top' && visible) ? (h + 12) + 'px' : '';
     }
 
     // 【修复】不论是否开启了自由缩放，桌面端顶部停靠时先把 UI 面板往下推，否则会被时间轴压住
     if (!isMobile && ui) {
-      const baseTop = 14;
+      const baseTop = 52; /* v7.2.2：原来是 14，左上角 12–44px 这段让给了常驻的 #btnPanelToggle */
       const reserved = baseTop + (timelineDock === 'top' ? h : 0) + 100;   /* 顶部偏移 + 时间轴 + 底部留白 */
       ui.style.top = (baseTop + (timelineDock === 'top' ? h : 0)) + 'px';
       ui.style.maxHeight = 'calc(100vh - ' + reserved + 'px)';
@@ -14946,9 +14972,9 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     tl.style.left = '0';
     tl.style.right = '0';
     const hideBtn = document.getElementById('btnHideTimeline');
-    if (hideBtn) hideBtn.innerHTML = ic(timelineDock === 'top' ? 'up' : 'down') + '收起';
+    if (hideBtn) hideBtn.innerHTML = ic(timelineDock === 'top' ? 'up' : 'down') + '<span data-i18n="timeline.hide">' + tr2('timeline.hide', '收起') + '</span>';
     const dockBtn = document.getElementById('btnTimelineDock');
-    if (dockBtn) dockBtn.innerHTML = ic(timelineDock === 'top' ? 'align-bottom' : 'to-top') + (timelineDock === 'top' ? '置底' : '置顶');
+    if (dockBtn) { const dockKey = timelineDock === 'top' ? 'timeline.dockBottom' : 'timeline.dockTop'; const dockTxt = timelineDock === 'top' ? tr2('timeline.dockBottom', '置底') : tr2('timeline.dockTop', '置顶'); dockBtn.innerHTML = ic(timelineDock === 'top' ? 'align-bottom' : 'to-top') + '<span data-i18n="' + dockKey + '">' + dockTxt + '</span>'; }
     refreshTimelineDockOffsets();
     if (!opts.skipResize) resize();
 }
@@ -15257,6 +15283,16 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     updateFrameBar(); updatePresetListUI(); updateActionListUI();
     SKFE.features.theme.updateThemePresetUI(); EventBus.emit('need:syncUI'); syncAdvToggles();
     updateVideoUI(); updateMultiActions();
+    /* v7.2.2：这几处文字是 JS 拼出来的，不挂在 data-i18n 上，切语言必须手动重刷，
+       否则会留着一整排上一门语言的按钮（「开启自由缩放」「锁定面板位置」之类）。 */
+    syncResizeUI();
+    updateLockPanelUI();
+    updateTweenEaseLabel();
+    renderTweenEaseMenu();
+    syncPinViewBtn();
+    SKFE.features.colorTools.updateColorToolLabels();
+    syncPanelToggleUI(!uiPanel.classList.contains('hidden'));
+    if (typeof syncSnapBtn === 'function') syncSnapBtn();
     /* v7.1.0：元件列表每行的眼睛/锁/删除按钮 title 是渲染时用 t() 取词的，换语言要重画一次 */
     scheduleRenderLayerPop();
   };

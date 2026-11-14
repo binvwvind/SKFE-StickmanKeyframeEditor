@@ -1926,6 +1926,21 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
   #trackStrip { display: none; flex: 1 1 auto; min-height: 0; margin: 2px -10px -4px; }
   #trackStrip[hidden] { display: none !important; }
 
+  /* 轨道模式下控制栏只留「播放组 + 分割 / 删除 / 关键帧 / 插 N 帧 / 曲线」 */
+  #btnSplit, #btnTrackDel { display: none; }
+  #timeline.track-mode #btnSplit,
+  #timeline.track-mode #btnTrackDel { display: inline-flex; }
+  #timeline.track-mode .timeline-controls > #btnAddFrame,
+  #timeline.track-mode .timeline-controls > #btnDupFrame,
+  #timeline.track-mode .timeline-controls > #btnDelFrame,
+  #timeline.track-mode .timeline-controls > label,
+  #timeline.track-mode .timeline-controls > #multiActions,
+  #timeline.track-mode .timeline-controls > #trackSelector,
+  #timeline.track-mode .timeline-controls > .sep { display: none !important; }
+
+  /* 控制面板与底部栏压在轨道面板之上（轨道面板在它下方） */
+  body.track-mode-on #ui { z-index: 26; }
+
   .ts-scroll {
     position: relative; height: 100%; overflow: auto;
     scrollbar-width: thin; scrollbar-color: var(--border-color) transparent;
@@ -1972,6 +1987,18 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
     background-repeat: repeat-x;
   }
   .ts-ruler { border-bottom: 1px solid var(--border-color); }
+  .ts-gutter-head { justify-content: flex-start; gap: 4px; font-size: 11px; color: var(--text-sub); }
+  .ts-gutter-head > span { margin-right: auto; }
+  /* 刻度尺左边的放大 / 缩小 */
+  .ts-zoom {
+    width: 20px; height: 18px; padding: 0; margin-left: 3px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 13px; line-height: 1; font-weight: 700;
+    border: 1px solid var(--border-color); border-radius: 5px;
+    background: var(--bg-panel); color: var(--text-sub); cursor: pointer;
+  }
+  .ts-zoom:hover { background: var(--btn-hover); color: var(--text-main); }
+  .ts-zoom:active { transform: scale(.94); }
   .ts-tick {
     position: absolute; top: 4px; padding-left: 3px;
     font-size: 10px; line-height: 1; color: var(--text-sub);
@@ -1990,9 +2017,11 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
   .ts-clip:hover { filter: brightness(1.08); }
   .ts-clip.dragging { cursor: grabbing; filter: brightness(1.12); z-index: 3; }
   .ts-clip.drag-l, .ts-clip.drag-r { cursor: ew-resize; }
+  .ts-clip.sel { box-shadow: 0 0 0 2px var(--text-main) inset; }
   .ts-lab {
-    font-size: 10px; padding: 0 12px; white-space: nowrap;
+    font-size: 10px; padding: 0 12px 0 20px; white-space: nowrap;   /* 左边留出关键帧菱形的位置 */
     pointer-events: none; overflow: hidden; text-overflow: ellipsis;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, .25);
   }
   .ts-h {
     position: absolute; top: 0; bottom: 0; width: 10px;
@@ -2002,12 +2031,19 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
   .ts-h-r { right: 0; border-radius: 0 5px 5px 0; }
   .ts-clip:hover .ts-h { background: rgba(0, 0, 0, .28); }
 
-  /* 关键帧圆点：压在长条下沿外面，免得盖住条上的帧号文字 */
+  /* 关键帧菱形：压在长条正中间，可以单拖改这一帧的时间。
+     视觉 6px，命中区用 ::before 撑到 13px，免得点不中。 */
   .ts-key {
-    position: absolute; top: auto; bottom: 2px; width: 6px; height: 6px; margin: 0 0 0 -3px;
+    position: absolute; top: 13px; width: 6px; height: 6px; margin: -3px 0 0 -3px;
     background: #fff; border: 1px solid rgba(0, 0, 0, .45);
-    transform: rotate(45deg); pointer-events: none; z-index: 2;
+    transform: rotate(45deg); z-index: 2;
+    cursor: grab; touch-action: none;
   }
+  .ts-key::before { content: ''; position: absolute; inset: -5px; }
+  .ts-key:hover { background: #fffbe8; border-color: rgba(0, 0, 0, .7); }
+  .ts-key.dragging { cursor: grabbing; background: var(--color-primary); border-color: #fff; z-index: 4; }
+  .ts-key.off { background: rgba(255, 255, 255, .5); }        /* 隐藏态的关键帧 */
+  .ts-key.cut { background: #e24b4a; border-color: #fff; }     /* 分割点 */
 
   /* 播放头 */
   .ts-playhead {

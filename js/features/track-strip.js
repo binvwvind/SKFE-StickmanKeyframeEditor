@@ -1,18 +1,23 @@
-/*! SKFE 轨道模式 v7.4.0
- *  ---------------------------------------------------------------------------
- *  在动画面板左侧点「轨道」切换：每个元件一条长条，条 = 该元件从出场到退场的连续帧。
- *  拖两端 = 伸缩；拖中间 = 整体平移；点眼睛 = 全帧隐藏；点刻度/空白 = 跳帧。
- *
- *  三条硬约束（改这个文件前先读）：
- *   1. 本模块只读 AppState.tracks，不改 #frameBar / updateFrameBar 的任何行为。
- *   2. 关键帧模型里「任意相邻两个关键帧自动成段，段内空槽一律被派生帧填满」——
- *      所以直接往段内写 null 是无效的，会被 reconcileTrack 重新填满。
- *      「元件不出场」只有两种合法表达：段外的 null，或段起点关键帧的 hidden（D6 hold）。
- *      切割就是后者：在播放头处打一个 hidden 关键帧。
- *   3. 一次拖拽只在 pointerup 时写一次数据 + 一条撤销；拖动过程中只动 DOM。
- *  ------------------------------------------------------------------------- */
+/* ============================================================================
+   track-strip.js — 轨道视图（v7.4.x，类 AM / 剪映的多轨时间轴）
+   ----------------------------------------------------------------------------
+   三条硬约束（改这个文件前先看这三条，否则很容易把工程数据写坏）：
+
+   1. 轨道数据只认 AppState.tracks —— 读用 getTrackFrame / KF.segments，
+      写只通过本文件的 takeRange / putRange / vacate，最后必须走 reconcileTrack。
+   2. 段规则：任意相邻两个关键帧之间叫一个「段」，段内所有空槽都会被
+      reconcileTrack 填成派生帧（= 那一帧元件在场）。所以
+        · 让元件「不出场」只有一条合法路子：在某帧落一个 hidden 关键帧，
+          它到下一个关键帧之间的派生帧就全部算「不在场」；
+        · 拉长/补帧只能用**普通帧**（不带 __k），否则会平白多出关键帧。
+   3. 一次拖拽 = 一步撤销：pointerdown 时取快照，pointerup 时 pushPre + saveHistory。
+
+   本文件不修改 updateFrameBar / 帧块 DOM / 拖帧 / 多选 / 补间，只订阅事件总线
+   被动刷新（rAF 去抖 + 数据指纹比对），所以不点「轨道」按钮时行为与旧版一致。
+   ============================================================================ */
 (function () {
   'use strict';
+
   const root = window;
   root.SKFE = root.SKFE || {};
   root.SKFE.features = root.SKFE.features || {};
@@ -22,19 +27,23 @@
   const MODE_KEY = 'skfe_track_mode_v1';
 
   const GUTTER = 108;      /* 左列宽（眼睛 + 元件名），sticky 不随横向滚动 */
-  const ROW_H = 32;        /* 每条轨道高度（条 22 + 上留 2 + 下留 8 放关键帧点） */
+  const ROW_H = 32;        /* 每条轨道高度 */
   const RULER_H = 22;      /* 顶部刻度尺高度 */
   const HANDLE_W = 10;     /* 两端手柄的命中宽度 */
+  const KEY_HIT = 13;      /* 关键帧菱形的命中直径 */
   const MIN_H = 160;       /* 面板最小高度 */
   const MAX_FRAMES = 600;  /* 拖拽时允许撑长的上限，防止误拖出几万帧 */
+  const TIME_MIN_CW = 14;  /* 列宽小于它就改用「分:秒」刻度 */
+  const COLW_STEPS = [6, 8, 10, 13, 16, 20, 26, 33, 42, 54];
 
   let api = null;
   let enabled = false;
   let colW = 26;
-  let panelH = 240;        /* 面板高度默认值：约 4~5 条轨道，能在屏幕上留出画布 */
+  let panelH = 240;        /* 面板高度默认值：约 4~5 条轨道，屏幕上还留得出画布 */
   let drag = null;
-  let lastPickedId = null;   /* 最近点过的轨道：切帧会把 AppState.selected 清空，切割要靠它兜底 */
-  let lastSig = '';          /* 上次渲染时的数据指纹，用来跳过无变化的重画 */
+  let selClip = null;      /* 当前选中的长条 { id, a, b } —— 分割 / 删除都认它 */
+  let lastPickedId = null; /* 最近点过的轨道：切帧会把 AppState.selected 清空，靠它兜底 */
+  let lastSig = '';        /* 上次渲染时的数据指纹，用来跳过无变化的重画 */
   let refreshQueued = false;
 
   const $ = (id) => document.getElementById(id);
@@ -47,6 +56,7 @@
   function KF() { return root.SKFE.systems.keyframes; }
   function tracksMap() { return api ? api.tracks() : {}; }
   function totalFrames() { return Math.max(1, api ? api.totalFrames() : 1); }
+  function fps() { const f = api && api.fps ? api.fps() : 12; return (f > 0 ? f : 12); }
 
   /* ---------------- 出场判定 ---------------- */
   /* 某一帧这个元件在不在：键帧/普通帧看自身，派生帧和段内空槽都看「段起点那一帧」的 hidden。
@@ -70,27 +80,36 @@
     return null;
   }
 
-  /* 连续的「在场」帧合并成一条长条 */
+  /* 分割标记：落在某一帧上的 __cut 表示「这一帧起算新的一段长条」。
+     只挂在真实帧（关键帧）上 —— 派生帧是共享的冻结哨兵，绝不能往上写东西。 */
+  function isCut(slot) {
+    return !!(slot && !KF().isDerived(slot) && slot.__cut);
+  }
+
+  /* 连续的「在场」帧合并成一条长条；__cut 处也要断开（分割出来的左右两段） */
   function computeSpans(arr) {
     const segs = KF().segments(arr);
     const n = Math.max(totalFrames(), arr.length);
     const out = [];
     let cur = null;
     for (let i = 0; i < n; i++) {
-      if (presentAt(arr, segs, i)) {
-        if (cur) cur.b = i; else cur = { a: i, b: i };
+      const on = presentAt(arr, segs, i);
+      const cut = i > 0 && on && isCut(arr[i]);
+      if (on) {
+        if (cur && !cut) cur.b = i;
+        else { if (cur) out.push(cur); cur = { a: i, b: i }; }
       } else if (cur) { out.push(cur); cur = null; }
     }
     if (cur) out.push(cur);
     return out;
   }
 
-  /* ---------------- 渲染 ---------------- */
-  /* 数据指纹：轨道数、帧数、每帧的槽位身份与显隐。
+  /* ---------------- 数据指纹 ---------------- */
+  /* 轨道数、帧数、每帧的槽位身份 / 显隐 / 分割标记。
      比整块重画便宜得多，用来避免「滑条一动就重建上千个 DOM」。 */
   function signature() {
     const map = tracksMap();
-    let s = totalFrames() + '#' + (colW + '') + '#';
+    let s = totalFrames() + '#' + colW + '#';
     for (const id in map) {
       const arr = (map[id] && map[id].frames) || [];
       s += id + ':' + arr.length + ':' + (map[id].name || '') + ':';
@@ -98,11 +117,43 @@
         const slot = arr[i];
         if (slot == null) s += '.';
         else if (KF().isDerived(slot)) s += 'd';
-        else s += (KF().isKey(slot) ? 'k' : 'p') + (slot.hidden ? 'h' : '');
+        else s += (KF().isKey(slot) ? 'k' : 'p') + (slot.hidden ? 'h' : '') + (slot.__cut ? 'c' : '');
       }
       s += ';';
     }
     return s;
+  }
+
+  /* ---------------- 刻度 ---------------- */
+  function fmtClock(frame) {
+    const sec = Math.floor(frame / fps());
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return m + ':' + (s < 10 ? '0' + s : s);
+  }
+
+  /* 列宽太小就改成分:秒刻度（和剪映一样，缩到一定程度就不再数帧了） */
+  function rulerStep() {
+    if (colW < TIME_MIN_CW) {
+      const secPx = fps() * colW;                    /* 1 秒占多少像素 */
+      const stepSec = secPx >= 56 ? 1 : Math.ceil(56 / secPx);
+      return { step: Math.max(1, Math.round(stepSec * fps())), time: true };
+    }
+    return { step: colW >= 22 ? 1 : (colW >= 12 ? 5 : 10), time: false };
+  }
+
+  /* ---------------- 渲染 ---------------- */
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  /* 高亮「最近点过的那一行」，不重画整块（拖拽/点选时用，避免抖动） */
+  function markRow(id) {
+    const cv = $('tsCanvas');
+    if (!cv) return;
+    cv.querySelectorAll('.ts-row[data-id]').forEach((r) => {
+      r.classList.toggle('ts-row-sel', String(r.dataset.id) === String(id));
+    });
   }
 
   function render() {
@@ -126,15 +177,20 @@
     }
 
     const cur = api.currentFrame();
+    const rs = rulerStep();
     let html = '';
 
-    /* 刻度尺 */
+    /* 刻度尺（左列顺带放放大/缩小） */
     html += '<div class="ts-row ts-ruler-row">';
-    html += '<div class="ts-gutter ts-gutter-head"><span>' + T('track.gutterHead', '元件') + '</span></div>';
+    html += '<div class="ts-gutter ts-gutter-head">' +
+      '<span>' + T('track.gutterHead', '元件') + '</span>' +
+      '<button class="ts-zoom" type="button" data-zoom="-1" title="' + esc(T('track.zoomOut', '缩小（缩到很小改显示分:秒）')) + '">−</button>' +
+      '<button class="ts-zoom" type="button" data-zoom="1" title="' + esc(T('track.zoomIn', '放大')) + '">＋</button>' +
+      '</div>';
     html += '<div class="ts-lane ts-ruler" style="width:' + width + 'px">';
-    const step = colW >= 22 ? 1 : (colW >= 12 ? 5 : 10);
-    for (let i = 0; i < total; i += step) {
-      html += '<span class="ts-tick" style="left:' + (i * colW) + 'px">' + (i + 1) + '</span>';
+    for (let i = 0; i < total; i += rs.step) {
+      html += '<span class="ts-tick" style="left:' + (i * colW) + 'px">' +
+        (rs.time ? fmtClock(i) : (i + 1)) + '</span>';
     }
     html += '</div></div>';
 
@@ -144,7 +200,7 @@
       const arr = t.frames;
       const spans = computeSpans(arr);
       /* 眼睛状态看「这条轨上有没有 hidden 数据」，不能看第一段 —— 全隐藏时一段都没有 */
-      const hidden = arr.some(x => x && x.hidden);
+      const hidden = arr.some(x => x && !KF().isDerived(x) && x.hidden);
       const name = t.name || id;
 
       html += '<div class="ts-row' + (String(id) === String(lastPickedId) ? ' ts-row-sel' : '') + '" data-id="' + esc(id) + '">';
@@ -159,39 +215,27 @@
         const left = s.a * colW;
         const w = Math.max(colW, (s.b - s.a + 1) * colW);
         const label = (s.a + 1) + (s.b > s.a ? '–' + (s.b + 1) : '');
-        html += '<div class="ts-clip" data-id="' + esc(id) + '" data-si="' + si + '" data-a="' + s.a + '" data-b="' + s.b + '"' +
+        const sel = selClip && String(selClip.id) === String(id) && selClip.a === s.a && selClip.b === s.b;
+        html += '<div class="ts-clip' + (sel ? ' sel' : '') + '" data-id="' + esc(id) + '" data-si="' + si + '" data-a="' + s.a + '" data-b="' + s.b + '"' +
           ' style="left:' + left + 'px;width:' + w + 'px">' +
           '<i class="ts-h ts-h-l"></i><span class="ts-lab">' + label + '</span><i class="ts-h ts-h-r"></i></div>';
       });
-      /* 关键帧圆点 */
+      /* 关键帧菱形：压在长条正中间，可以单拖（改这一帧的时间） */
       for (let i = 0; i < arr.length; i++) {
-        if (!KF().isKey(arr[i])) continue;
-        html += '<i class="ts-key" style="left:' + (i * colW + colW / 2) + 'px"></i>';
+        const slot = arr[i];
+        if (!KF().isKey(slot)) continue;
+        html += '<i class="ts-key' + (slot.hidden ? ' off' : '') + (isCut(slot) ? ' cut' : '') +
+          '" data-id="' + esc(id) + '" data-i="' + i + '" style="left:' + (i * colW + colW / 2) + 'px"></i>';
       }
       html += '</div></div>';
     });
 
-    /* 播放头（放在内容层里，跟着横向滚动走） */
-    html += '<div class="ts-playhead" style="left:' + (GUTTER + cur * colW) + 'px;height:' + (RULER_H + rowsH) + 'px"></div>';
+    /* 播放头放在所选帧的正中间 */
+    html += '<div class="ts-playhead" style="left:' + (GUTTER + cur * colW + colW / 2) + 'px;height:' + (RULER_H + rowsH) + 'px"></div>';
 
     cv.innerHTML = html;
     if (root.SKFEApplyIcons) root.SKFEApplyIcons(cv);
     scrollPlayheadIntoView();
-  }
-
-  function esc(s) {
-    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  }
-
-  /* 高亮「最近点过的那一行」，不重画整块（拖拽/点选时用，避免抖动） */
-  function markRow(id) {
-    const cv = $('tsCanvas');
-    if (!cv) return;
-    const rows = cv.querySelectorAll('.ts-row[data-id]');
-    rows.forEach((r) => {
-      if (String(r.dataset.id) === String(id)) r.classList.add('ts-row-sel');
-      else r.classList.remove('ts-row-sel');
-    });
   }
 
   /* 播放头跑出可视区时把滚动带过去 */
@@ -208,138 +252,273 @@
   function syncPlayhead() {
     const ph = document.querySelector('#tsCanvas .ts-playhead');
     if (!ph) return;
-    ph.style.left = (GUTTER + api.currentFrame() * colW) + 'px';
+    ph.style.left = (GUTTER + api.currentFrame() * colW + colW / 2) + 'px';
   }
 
-  /* ---------------- 拖拽写回 ---------------- */
-
+  /* ---------------- 写回工具 ---------------- */
   function ensureLen(arr, n) { while (arr.length < n) arr.push(null); }
 
-  function cloneAt(trackId, i) {
-    const o = api.getTrackFrame(trackId, i);
+  function trackOf(id) {
+    const t = tracksMap()[id];
+    if (!t) return null;
+    if (!t.frames) t.frames = [];
+    return t;
+  }
+
+  function cloneAt(id, i) {
+    const o = api.getTrackFrame(id, i);
     return o ? api.clone(o) : null;
   }
 
-  /* 把某一帧变成「带同姿态的关键帧」 */
-  function keyFrom(arr, i, obj) {
-    if (!obj) { arr[i] = null; return null; }
-    const c = api.clone(obj);
-    KF().markKey(c, 'sub');
-    arr[i] = c;
+  /* 普通帧：不挂关键帧标记（拉长时用 —— 要求「不要在末尾加关键帧」） */
+  function plainFrom(o) {
+    if (!o) return null;
+    const c = api.clone(o);
+    KF().clearKey(c);
+    delete c.__cut;
     return c;
   }
 
-  /* 保证某一帧是关键帧（原来只是普通帧就升格，空/派生就按求值结果补一个） */
-  function ensureKey(trackId, arr, i) {
-    if (i < 0) return;
-    ensureLen(arr, i + 1);
-    if (KF().isKey(arr[i])) return;
-    keyFrom(arr, i, cloneAt(trackId, i));
+  /* 关键帧：带上原来那段曲线的配置 */
+  function keyFrom(o, hidden) {
+    if (!o) return null;
+    const c = api.clone(o);
+    KF().markKey(c, 'sub', KF().curveOf(o));
+    c.hidden = !!hidden;
+    delete c.__cut;
+    return c;
+  }
+
+  /* 把 [a..b] 求值后抓出来（原本是关键帧的那些保持关键帧身份和曲线） */
+  function takeRange(id, a, b) {
+    const t = trackOf(id);
+    const arr = t ? t.frames : [];
+    const out = [];
+    for (let i = a; i <= b; i++) {
+      const o = cloneAt(id, i);
+      if (!o) { out.push(null); continue; }
+      const raw = arr[i];
+      if (KF().isKey(raw)) KF().markKey(o, 'sub', KF().curveOf(raw));
+      else KF().clearKey(o);
+      o.hidden = !!raw.hidden;
+      if (isCut(raw)) o.__cut = 1; else delete o.__cut;
+      out.push(o);
+    }
+    return out;
+  }
+
+  /* 把一串帧写到 [na..]：首帧一定是可见关键帧（新段的锚点），其余沿用原来的身份 */
+  function putRange(arr, na, srcs) {
+    ensureLen(arr, na + srcs.length);
+    for (let k = 0; k < srcs.length; k++) {
+      const o = srcs[k];
+      if (!o) { arr[na + k] = null; continue; }
+      const c = api.clone(o);
+      if (k === 0) { KF().markKey(c, 'sub'); c.hidden = false; }
+      else if (!KF().isKey(o)) KF().clearKey(c);
+      arr[na + k] = c;
+    }
+  }
+
+  /* 让 [from..to] 不再出场：from 落一个 hidden 关键帧当初不见段的头，其余清空。
+     这是这个数据模型里唯一能让「中间一段消失」的写法。 */
+  function vacate(id, arr, from, to) {
+    if (to < from || from < 0) return;
+    ensureLen(arr, to + 1);
+    const head = keyFrom(cloneAt(id, from), true);
+    if (!head) return;
+    arr[from] = head;
+    for (let i = from + 1; i <= to; i++) arr[i] = null;
+  }
+
+  /* 每一步操作的最后一步：段内空槽归位 + 记一步历史。
+     ⚠️ 历史里存的是**操作之后**的状态 —— app.js 的 undo() 是「弹掉栈顶、恢复到新栈顶」，
+        所以每条记录都必须等于它那一刻的当前状态，否则一次撤销会退两步。 */
+  function commit(id, label) {
+    const t = trackOf(id);
+    if (t) KF().reconcileTrack(t);
+    api.afterChange();
+    api.pushPre(api.snapshot(), label);
+  }
+
+  /* ---------------- 伸缩 / 平移 ---------------- */
+  /* 可移动的横向范围：别撞到同一轨上相邻的长条 */
+  function moveBounds(id, a, b) {
+    const t = tracksMap()[id];
+    const spans = t ? computeSpans(t.frames) : [];
+    let lo = -a, hi = MAX_FRAMES - b;
+    spans.forEach((s) => {
+      if (s.a === a && s.b === b) return;
+      if (s.b < a) lo = Math.max(lo, s.b + 1 - a);
+      else if (s.a > b) hi = Math.min(hi, s.a - 1 - b);
+    });
+    return { lo: lo, hi: hi };
   }
 
   function applyDrag(st, d) {
-    const map = tracksMap();
-    const t = map[st.id];
+    const t = trackOf(st.id);
     if (!t) return;
-    const arr = t.frames || (t.frames = []);
+    const arr = t.frames;
     ensureLen(arr, Math.max(totalFrames(), arr.length));
+    const pre = st.pre;
 
     if (st.mode === 'm') {
-      /* 平移：把整段求值后的快照搬走，原区间清空 */
-      const data = [];
-      for (let i = st.a; i <= st.b; i++) data.push(cloneAt(st.id, i));
+      /* 平移：抓出整段 → 原位腾空 → 写到新位置 */
+      const srcs = takeRange(st.id, st.a, st.b);
       const na = st.a + d, nb = st.b + d;
-      for (let i = st.a; i <= st.b; i++) arr[i] = null;
-      ensureLen(arr, nb + 1);
-      for (let k = 0; k <= nb - na; k++) {
-        const o = data[k];
-        arr[na + k] = o ? api.clone(o) : null;
-      }
-      ensureKey(st.id, arr, na);
-      ensureKey(st.id, arr, nb);
+      vacate(st.id, arr, st.a, st.b);
+      putRange(arr, na, srcs);
+      if (nb < st.b) vacate(st.id, arr, nb + 1, st.b);   /* 往左挪时右端要腾干净 */
+      commit(st.id, T('track.dragLabel', '调整轨道'));
     } else if (st.mode === 'r') {
       const b = st.b, nb = b + d;
-      ensureLen(arr, Math.max(b, nb) + 1);
       if (nb > b) {
-        /* 拉长：末端补一个同姿态关键帧，中间交给段插值 → 静止保持 */
-        const src = cloneAt(st.id, b);
-        for (let i = b + 1; i <= nb; i++) arr[i] = null;
-        keyFrom(arr, nb, src);
-        ensureKey(st.id, arr, b);
+        /* 拉长：补普通帧（不产生关键帧），姿态静止保持 */
+        const base = plainFrom(cloneAt(st.id, b));
+        if (!base) return;
+        ensureLen(arr, nb + 1);
+        for (let i = b + 1; i <= nb; i++) arr[i] = api.clone(base);
       } else if (nb < b) {
-        /* 缩短：新末端同姿态落一个关键帧，后面全部清空 */
-        const src = cloneAt(st.id, nb);
-        keyFrom(arr, nb, src);
-        for (let i = nb + 1; i <= b; i++) arr[i] = null;
-        ensureKey(st.id, arr, st.a);
+        vacate(st.id, arr, nb + 1, b);
       }
+      commit(st.id, T('track.dragLabel', '调整轨道'));
     } else {
       const a = st.a, na = a + d;
-      ensureLen(arr, Math.max(a, na) + 1);
       if (na < a) {
-        /* 拉起：头部补一个同姿态关键帧 */
-        const src = cloneAt(st.id, a);
-        for (let i = na; i < a; i++) arr[i] = null;
-        keyFrom(arr, na, src);
-        ensureKey(st.id, arr, a);
+        /* 往左拉长：补普通帧 */
+        const base = plainFrom(cloneAt(st.id, a));
+        if (!base) return;
+        for (let i = na; i < a; i++) arr[i] = api.clone(base);
       } else if (na > a) {
-        const src = cloneAt(st.id, na);
-        keyFrom(arr, na, src);
-        for (let i = a; i < na; i++) arr[i] = null;
-        ensureKey(st.id, arr, st.b);
+        vacate(st.id, arr, a, na - 1);
       }
+      commit(st.id, T('track.dragLabel', '调整轨道'));
     }
-
-    /* 段内空槽归位、段外悬空派生退回空白 —— 让数据回到模型认可的状态 */
-    KF().reconcileTrack(t);
-    api.afterChange();
   }
 
-  /* 切割：在播放头处打一个 hidden 关键帧，让条从该帧断开 */
-  function cut() {
-    /* 切帧会把 AppState.selected 清空，所以取不到目标时用「最近点过的轨道」兜底 */
-    const id = api.targetTrackId() || lastPickedId;
-    if (!id) { api.toast(T('track.needPick', '先在轨道上点一条长条，选中要切割的元件')); return; }
-    const map = tracksMap();
-    const t = map[id];
-    if (!t || !t.frames) { api.toast(T('track.needPick', '先在轨道上点一条长条，选中要切割的元件')); return; }
+  /* 单拖关键帧：默认「覆盖落点」（原帧保留），按住 Alt 是「整帧挪位」 */
+  function applyKeyDrag(st, to) {
+    const t = trackOf(st.id);
+    if (!t) return;
+    const arr = t.frames;
+    const src = cloneAt(st.id, st.i);
+    if (!src) return;
+    const raw = arr[st.i];
+    KF().markKey(src, 'sub', raw ? KF().curveOf(raw) : null);
+    src.hidden = !!(raw && raw.hidden);
+    if (isCut(raw)) src.__cut = 1; else delete src.__cut;
+    ensureLen(arr, to + 1);
+    arr[to] = src;
+    if (st.alt) arr[st.i] = null;      /* Alt = 挪位，原位交还给 reconcile */
+    commit(st.id, st.alt ? T('track.keyMoveLabel', '移动关键帧') : T('track.keyCopyLabel', '关键帧覆盖到落点'));
+  }
+
+  /* ---------------- 分割 / 删除 / 关键帧 ---------------- */
+  function needClip() {
+    api.toast(T('track.needPick', '先在轨道上点一条长条，选中要操作的段'));
+    return null;
+  }
+
+  /* 分割：在播放头把当前段切成左右两段（剪映式），两边都还在，只是各自成段 */
+  function split() {
+    const clip = selClip;
+    if (!clip) return needClip();
+    const t = trackOf(clip.id);
+    if (!t) return needClip();
     const arr = t.frames;
     const i = api.currentFrame();
-    const on = computeSpans(arr).some(s => i >= s.a && i <= s.b);
-    if (!on) { api.toast(T('track.cutEmpty', '播放头这一帧这个元件本来就不在场')); return; }
-
-    const pre = api.snapshot();
-    const src = cloneAt(id, i);
+    if (i <= clip.a || i > clip.b) {
+      api.toast(T('track.splitOut', '播放头要落在选中长条的中间（不含左端）才能分割'));
+      return;
+    }
+    const src = keyFrom(cloneAt(clip.id, i), false);
     if (!src) return;
-    src.hidden = true;
-    KF().markKey(src, 'sub');
-    ensureLen(arr, i + 1);
+    src.__cut = 1;
+    ensureLen(arr, Math.max(clip.b, i) + 1);
     arr[i] = src;
-    KF().reconcileTrack(t);
-    api.pushPre(pre, T('track.cutLabel', '切割轨道'));
-    api.afterChange();
+    commit(clip.id, T('track.splitLabel', '分割'));
+    selClip = { id: clip.id, a: i, b: clip.b };   /* 分割后选中右半段 */
     render();
-    api.toast(T('track.cutDone', '已切开：后面那段可以单独拖走了'));
+    api.toast(T('track.splitDone', '已从这一帧分成左右两段，可以各自拖了'));
+  }
+
+  /* 删除选中的那一段（范围变空白，前后两段自动接上） */
+  function deleteClip() {
+    const clip = selClip;
+    if (!clip) return needClip();
+    const t = trackOf(clip.id);
+    if (!t) return needClip();
+    ensureLen(t.frames, Math.max(totalFrames(), t.frames.length));
+    vacate(clip.id, t.frames, clip.a, clip.b);
+    commit(clip.id, T('track.delLabel', '删除这一段的帧'));
+    selClip = null;
+    lastPickedId = null;
+    render();
+    api.toast(T('track.delDone', '这一段已经删掉'));
+  }
+
+  /* 关键帧：给「选中的那条轨」在播放头处开/关关键帧（轨道模式下不认子轨选择器） */
+  function toggleKey() {
+    const id = (selClip && selClip.id) || lastPickedId;
+    if (!id) { api.toast(T('track.needPick', '先在轨道上点一条长条，选中要操作的段')); return; }
+    const t = trackOf(id);
+    if (!t) return;
+    const arr = t.frames;
+    const i = api.currentFrame();
+    ensureLen(arr, i + 1);
+    if (KF().isKey(arr[i])) {
+      KF().clearKey(arr[i]);
+    } else {
+      const src = keyFrom(cloneAt(id, i), false);
+      if (!src) return;
+      arr[i] = src;
+    }
+    commit(id, T('track.keyLabel', '关键帧'));
+    render();
+  }
+
+  /* ---------------- 缩放 ---------------- */
+  function zoom(dir) {
+    const i = COLW_STEPS.indexOf(colW);
+    let k = i < 0 ? COLW_STEPS.indexOf(26) : i;
+    k = Math.max(0, Math.min(COLW_STEPS.length - 1, k + (dir > 0 ? 1 : -1)));
+    if (COLW_STEPS[k] === colW) return;
+    colW = COLW_STEPS[k];
+    try { localStorage.setItem(COLW_KEY, String(colW)); } catch (_) {}
+    render();
   }
 
   /* ---------------- 交互绑定 ---------------- */
-
   function bindDrag() {
     const cv = $('tsCanvas');
-    const sc = $('tsScroll');
     if (!cv || cv.dataset.bound === '1') return;
     cv.dataset.bound = '1';
 
     cv.addEventListener('pointerdown', (e) => {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
 
-      /* 眼睛 */
-      const eye = e.target.closest('[data-eye]');
-      if (eye) {
+      /* 放大 / 缩小、眼睛都是「按一下」的动作，交给 click 处理（键盘也能用），这里只让路 */
+      if (e.target.closest('[data-zoom]') || e.target.closest('[data-eye]')) return;
+
+      /* 关键帧菱形：单拖改这一帧的时间 */
+      const kEl = e.target.closest('.ts-key');
+      if (kEl) {
+        const kr = kEl.getBoundingClientRect();
+        drag = {
+          kind: 'key',
+          id: kEl.dataset.id,
+          i: +kEl.dataset.i,
+          to: +kEl.dataset.i,
+          startX: e.clientX,
+          alt: !!e.altKey,
+          el: kEl,
+          moved: false
+        };
+        lastPickedId = kEl.dataset.id;
+        markRow(kEl.dataset.id);
+        kEl.classList.add('dragging');
+        try { cv.setPointerCapture(e.pointerId); } catch (_) {}
         e.preventDefault();
-        lastPickedId = eye.dataset.eye;
-        api.toggleHidden(eye.dataset.eye);
-        render();   /* 隐藏态只发 need:render，这里自己跟一次，图标和长条才会立刻变 */
         return;
       }
 
@@ -349,8 +528,12 @@
         const dx = e.clientX - rect.left;
         const mode = dx <= HANDLE_W ? 'l' : (rect.width - dx <= HANDLE_W ? 'r' : 'm');
         lastPickedId = clip.dataset.id;
+        selClip = { id: clip.dataset.id, a: +clip.dataset.a, b: +clip.dataset.b };
         markRow(clip.dataset.id);
+        cv.querySelectorAll('.ts-clip.sel').forEach(c => c.classList.remove('sel'));
+        clip.classList.add('sel');
         drag = {
+          kind: 'clip',
           id: clip.dataset.id,
           si: +clip.dataset.si,
           a: +clip.dataset.a,
@@ -359,8 +542,7 @@
           startX: e.clientX,
           d: 0,
           el: clip,
-          moved: false,
-          pre: api.snapshot()
+          moved: false
         };
         clip.classList.add('dragging', 'drag-' + mode);
         try { cv.setPointerCapture(e.pointerId); } catch (_) {}
@@ -378,9 +560,21 @@
       }
     });
 
+    /* 按一下的动作：缩放、眼睛 */
+    cv.addEventListener('click', (e) => {
+      const zm = e.target.closest('[data-zoom]');
+      if (zm) { zoom(+zm.dataset.zoom); return; }
+      const eye = e.target.closest('[data-eye]');
+      if (eye) {
+        lastPickedId = eye.dataset.eye;
+        api.toggleHidden(eye.dataset.eye);
+        render();   /* 隐藏态只发 need:render，这里自己跟一次，图标和长条才会立刻变 */
+      }
+    });
+
     cv.addEventListener('pointermove', (e) => {
       if (!drag) {
-        /* 光标提示：手柄处显示左右箭头 */
+        /* 光标提示：手柄处左右箭头，关键帧上抓手 */
         const clip = e.target.closest('.ts-clip');
         if (clip) {
           const rect = clip.getBoundingClientRect();
@@ -389,10 +583,22 @@
         }
         return;
       }
+
+      if (drag.kind === 'key') {
+        const to = Math.max(0, Math.min(MAX_FRAMES - 1,
+          drag.i + Math.round((e.clientX - drag.startX) / colW)));
+        if (to === drag.to) return;
+        drag.to = to;
+        drag.moved = to !== drag.i;
+        drag.el.style.left = (to * colW + colW / 2) + 'px';
+        return;
+      }
+
       const raw = Math.round((e.clientX - drag.startX) / colW);
       let d = raw;
       if (drag.mode === 'm') {
-        d = Math.max(-drag.a, Math.min(MAX_FRAMES - drag.b - 1, d));
+        const bd = moveBounds(drag.id, drag.a, drag.b);
+        d = Math.max(bd.lo, Math.min(bd.hi, d));
       } else if (drag.mode === 'r') {
         d = Math.max(-(drag.b - drag.a), Math.min(MAX_FRAMES - drag.b - 1, d));
       } else {
@@ -421,22 +627,26 @@
       if (!drag) return;
       const st = drag;
       drag = null;
+      try { cv.releasePointerCapture(e.pointerId); } catch (_) {}
       st.el.classList.remove('dragging', 'drag-l', 'drag-r', 'drag-m');
+
+      if (st.kind === 'key') {
+        if (!st.moved) return;                       /* 没拖动 = 啥都不做 */
+        applyKeyDrag(st, st.to);
+        render();
+        return;
+      }
+
       if (!st.moved) {
-        /* 没拖动 = 点选：只选中这个元件，不切子轨、不动帧号 */
+        /* 没拖动 = 点选：只选中这个元件和这条长条，不切子轨、不动帧号 */
         api.selectTrack(st.id);
         return;
       }
-      try { cv.releasePointerCapture(e.pointerId); } catch (_) {}
       applyDrag(st, st.d);
-      api.pushPre(st.pre, T('track.dragLabel', '调整轨道'));
       render();
     };
     cv.addEventListener('pointerup', finish);
     cv.addEventListener('pointercancel', finish);
-
-    /* 横向滚动时播放头要留在视野内（滚轮/触摸都由浏览器处理，这里只在滚动后校正） */
-    if (sc) sc.addEventListener('scroll', () => { /* 播放头在内容层里，天然跟随 */ }, { passive: true });
   }
 
   /* 面板高度拖拽 */
@@ -471,6 +681,21 @@
     grip.addEventListener('pointercancel', up);
   }
 
+  /* 轨道模式下，「关键帧」按钮要认选中的那条轨，而不是子轨选择器。
+     用捕获阶段先拦下来，再 stopPropagation —— 这样不必改动 app.js 里原来的监听。 */
+  function bindToolbar() {
+    const tl = $('timeline');
+    if (!tl || tl.dataset.tsTools === '1') return;
+    tl.dataset.tsTools = '1';
+    tl.addEventListener('click', (e) => {
+      if (!enabled) return;
+      if (!e.target.closest('#btnKeyframe')) return;
+      e.stopPropagation();
+      e.preventDefault();
+      toggleKey();
+    }, true);
+  }
+
   function applyHeight() {
     const tl = $('timeline');
     if (!tl) return;
@@ -479,6 +704,7 @@
   }
 
   /* ---------------- 模式开关 ---------------- */
+  let dockBefore = null;   /* 进来之前是不是置顶的，退出时还原 */
 
   function setEnabled(on) {
     const tl = $('timeline');
@@ -492,6 +718,21 @@
       btn.classList.toggle('active', enabled);
       btn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
     }
+    /* 控制面板与底部栏要压在轨道面板之上 */
+    document.body.classList.toggle('track-mode-on', enabled);
+    if (!enabled) { selClip = null; }
+
+    /* 「轨道面板要在控制面板下方」—— 开着的时候就先临时落到屏幕底部 */
+    if (enabled) {
+      if (api && api.getDock && api.setDock && api.getDock() === 'top') {
+        dockBefore = 'top';
+        api.setDock('bottom');
+      }
+    } else if (dockBefore === 'top') {
+      dockBefore = null;
+      if (api && api.setDock) api.setDock('top');
+    }
+
     applyHeight();
     if (enabled) render();
     try { localStorage.setItem(MODE_KEY, enabled ? '1' : '0'); } catch (_) {}
@@ -499,19 +740,19 @@
   }
 
   /* ---------------- 对外 ---------------- */
-
   const TrackStrip = {
     init(a) {
       api = a;
       try {
         const c = parseInt(localStorage.getItem(COLW_KEY) || '', 10);
-        if (c >= 10 && c <= 60) colW = c;
+        if (COLW_STEPS.indexOf(c) >= 0) colW = c;
         const h = parseInt(localStorage.getItem(HEIGHT_KEY) || '', 10);
         if (h >= MIN_H) panelH = h;
       } catch (_) {}
 
       bindGrip();
       bindDrag();
+      bindToolbar();
 
       /* 完全被动地跟随现有事件总线：不改 app.js 里任何一个函数，
          现有功能该发什么事件照发，这边只是「听到就顺手更新一下自己」。 */
@@ -524,8 +765,10 @@
       const btn = $('btnTrackMode');
       if (btn) btn.addEventListener('click', () => setEnabled(!enabled));
 
-      const split = $('btnSplit');
-      if (split) split.addEventListener('click', cut);
+      const splitBtn = $('btnSplit');
+      if (splitBtn) splitBtn.addEventListener('click', split);
+      const delBtn = $('btnTrackDel');
+      if (delBtn) delBtn.addEventListener('click', deleteClip);
 
       /* 恢复上次的模式；手机屏幕矮，默认不给开 */
       let restore = false;
@@ -550,7 +793,6 @@
         if (signature() !== lastSig) render();
       });
     },
-    /* 强制重画（自己的编辑操作结束后用） */
     refresh() { if (enabled) render(); },
     isEnabled() { return enabled; },
     setEnabled,

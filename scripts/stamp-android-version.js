@@ -9,7 +9,7 @@
      · Android 覆盖安装只认 versionCode，不递增就永远停在 1，
        一旦以后想拦旧版本、或者走应用商店，都没法用。
    这里按 package.json 的 version 写入：
-     7.4.7 → versionCode 70407 / versionName "7.4.7"
+     7.4.8 → versionCode 70408 / versionName "7.4.8"
      （主版本×10000 + 次版本×100 + 修订号，够用到 99.99.99）
 
    用法（CI 里在 npx cap sync android 之后调）：

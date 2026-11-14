@@ -609,76 +609,10 @@ function syncDistortToAllFrames(obj) {
      返回 true = 落了新关键帧（调用方要刷新缩略图 / 帧条）。
      allowPlain=false 时只认派生帧（②）—— 给「不是用户正在改的那只元件」用，
      免得拖 A 的动作时顺手把 B 的普通帧也点成关键帧。 */
-  /* v7.4.7：轨道尾部「定格帧」刷新。
-     最后一颗关键帧之后那些普通帧，本来就是「关键帧姿势的复制品」——
-     建元件时烘出来的、拉长时 clone 出来的、裁短时定格出来的，来源都是它。
-     所以最后一颗关键帧一改，尾巴必须跟着改；不然就是用户说的
-     「第 2 个关键帧上挪了位置，后面几十帧全都还是老位置」。
-     只动普通帧：空白帧（不出场）保持空白，派生帧 / 关键帧不碰。 */
-  function holdTailFromKey(tid, idx) {
-    const t = AppState.tracks[tid];
-    if (!t || !t.frames || !KF.isKey(t.frames[idx])) return 0;
-    if (KF.nextKeyIndex(t.frames, idx) >= 0) return 0;   /* 后面还有关键帧 → 中间是段，交给补间 */
-    const src = t.frames[idx];
-    let n = 0;
-    for (let i = idx + 1; i < t.frames.length; i++) {
-      const d = t.frames[i];
-      if (d == null) continue;                            /* 不出场，别补回来 */
-      if (KF.isDerived(d) || KF.isKey(d)) continue;
-      const c = cloneObjectKeepImg(src);
-      if (!c) continue;
-      delete c[KF.KEY];
-      t.frames[i] = c;
-      n++;
-    }
-    return n;
-  }
-
-  /* v7.4.7：打开工程时修一次「尾巴和最后一颗关键帧对不上」的旧数据。
-     只认一种情况：最后一颗关键帧之后全是普通帧，并且这些普通帧的**姿势**彼此完全一样
-     （= 同一张烘出来的画被复制了很多份）。这种尾巴一定是历史遗留，
-     真正的逐帧动画不会整段长得一模一样，所以不会误伤老工程。
-     ⚠️ 只比姿势，不比整个对象：同一个姿势在不同帧里可能一个有 shadowAlpha、
-     一个没有（缺省即默认值），逐字段比会把它们判成「不一样」。 */
-  function holdPoseSig(o) {
-    if (!o) return '';
-    try {
-      const r2 = (v) => Math.round((v || 0) * 100) / 100;
-      return JSON.stringify([
-        r2(o.x), r2(o.y), Math.round((o.scale == null ? 1 : o.scale) * 1000) / 1000,
-        Math.round((o.rot || 0) * 1000) / 1000, o.alpha == null ? 1 : o.alpha,
-        o.color || '', o.headShape || '', !!o.mirror, !!o.hidden,
-        o.a || null, r2(o.headAngle), o.bodyScale || null, o.extremity || null
-      ]);
-    } catch (_) { return ''; }
-  }
-
-  function repairHoldTails() {
-    let fixed = 0;
-    for (const tid in AppState.tracks) {
-      const t = AppState.tracks[tid];
-      if (!t || !t.frames || !t.frames.length) continue;
-      let last = -1;
-      for (let i = t.frames.length - 1; i >= 0; i--) { if (KF.isKey(t.frames[i])) { last = i; break; } }
-      if (last < 0 || last === t.frames.length - 1) continue;
-      const tail = [];
-      let bad = false;
-      for (let i = last + 1; i < t.frames.length; i++) {
-        const d = t.frames[i];
-        if (d == null) continue;
-        if (!KF.isPlain(d)) { bad = true; break; }
-        tail.push(d);
-      }
-      if (bad || tail.length < 2) continue;
-      const sig0 = holdPoseSig(tail[0]);
-      if (!tail.every(d => holdPoseSig(d) === sig0)) continue;   /* 尾巴不一致 → 可能是真动画，别动 */
-      if (sig0 === holdPoseSig(t.frames[last])) continue;        /* 本来就一样，省事 */
-      fixed += holdTailFromKey(tid, last);
-    }
-    if (fixed) bumpKfEval();
-    return fixed;
-  }
-
+  /* v7.4.8：撤销 v7.4.7 的「尾巴跟随最后一颗关键帧」（holdTailFromKey / repairHoldTails）。
+     关键帧只对「它和下一颗关键帧之间那一段」负责，段外的普通帧是各自独立的烘焙帧 ——
+     这是原本就定好的模型，用户实测后确认要保留：改最后一颗关键帧不会改写它后面的帧，
+     想要尾巴跟着走，就在尾巴那头再打一颗关键帧。 */
   function landAutoKey(tid, idx, allowPlain) {
     const t = AppState.tracks[tid];
     if (!t || !t.frames) return false;
@@ -687,7 +621,7 @@ function syncDistortToAllFrames(obj) {
        这一帧的对象就是关键帧本身，数据已经写进去了，但段内的派生帧还在
        缓存里 —— 不失效的话播放时只有「第一次改动的那条肢体」在动，
        后面改的肢体要等到这一帧才突然跳过去。 */
-    if (KF.isKey(slot)) { bumpKfEval(); holdTailFromKey(tid, idx); return false; }
+    if (KF.isKey(slot)) { bumpKfEval(); return false; }
     const live = AppState.objects.find(o => o && o.type !== 'video' && String(o.id) === tid) || null;
     if (KF.isDerived(slot)) {                              /* ② */
       if (!live) return false;
@@ -715,8 +649,6 @@ function syncDistortToAllFrames(obj) {
        因为段内每一帧还各自留着自己那张画，补间永远没机会上场。
        （轨道视图一直有 reconcile，所以只有从画布上改动作时才会踩到。） */
     KF.reconcileTrack(t);
-    /* v7.4.7：新落的关键帧如果正好是这一轨的最后一颗，尾巴也要跟着换成它的姿势 */
-    holdTailFromKey(tid, idx);
     bumpKfEval();
     return true;
   }
@@ -967,9 +899,8 @@ function syncDistortToAllFrames(obj) {
       AppState.frames = newFrames;
       AppState.tracks = newTracks;
       reconcileAllTracks({ adoptPlain: false });
-      /* v7.4.7：清掉一个元件都没有的空轨道；再把「尾巴和最后一颗关键帧对不上」的旧数据修一次 */
+      /* v7.4.7：清掉一个元件都没有的空轨道 */
       pruneEmptyTracks();
-      repairHoldTails();
       syncMainLengthFromTracks();
       AppState.currentFrameIndex = data.currentFrameIndex || 0;
       if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = 0;
@@ -15789,7 +15720,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       toggleKeyframe: () => toggleKeyframeAtCurrent(),
       insertFrames: (n) => insertFramesInSegment(n),
       trimTrailingEmptyFrames, addFrame, deleteFrame,
-      pruneEmptyTracks, repairHoldTails, holdTailFromKey,
+      pruneEmptyTracks,
       deleteSelectedFrames, deleteSelected,
       applyEase: (k) => applyEaseToCurrentSegments(k),
       applyChannelEase: (objId, part, k) => pushChannelEaseToSegments(objId, part, k),

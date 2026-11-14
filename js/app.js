@@ -615,24 +615,28 @@ function syncDistortToAllFrames(obj) {
       if (!poseChanged(tid, idx, live)) return false;      /* 没被改过：别平白加一颗菱形 */
       t.frames[idx] = live;
       KF.markKey(live, 'sub');
-      bumpKfEval();
-      return true;
+    } else {
+      /* ③ 普通帧 / 空白帧 */
+      if (allowPlain === false) return false;
+      if (!t.frames.some(k => KF.isKey(k))) return false;  /* 整轨没关键帧：保持烘焙语义 */
+      let base = live;
+      if (!base && KF.isReal(slot)) base = slot;           /* 这一帧本来有画面，用它自己 */
+      if (!base) base = nearestPose(tid, idx);             /* 空白帧：借最近的姿势补一张 */
+      if (!base) return false;
+      while (t.frames.length <= idx) t.frames.push(null);
+      t.frames[idx] = base;
+      KF.markKey(base, 'sub');
+      base.hidden = false;
+      /* 空白帧补出来的对象不在 AppState.objects 里，重取一遍，否则下一次
+         goToFrame→syncFrameRef 会把这一帧当成「本帧不该有它」又抹成空白。 */
+      if (base !== live) refreshObjectsNow();
     }
-    /* ③ 普通帧 / 空白帧 */
-    if (allowPlain === false) return false;
-    if (!t.frames.some(k => KF.isKey(k))) return false;    /* 整轨没关键帧：保持烘焙语义 */
-    let base = live;
-    if (!base && KF.isReal(slot)) base = slot;             /* 这一帧本来有画面，用它自己 */
-    if (!base) base = nearestPose(tid, idx);               /* 空白帧：借最近的姿势补一张 */
-    if (!base) return false;
-    while (t.frames.length <= idx) t.frames.push(null);
-    t.frames[idx] = base;
-    KF.markKey(base, 'sub');
-    base.hidden = false;
+    /* ★ v7.4.4 关键一步：新关键帧一落，就把它和前后关键帧之间的普通帧交给补间接管。
+       少了这步会看到「关键帧生成了，但中间几帧一动不动，到那一帧才突然跳过去」——
+       因为段内每一帧还各自留着自己那张画，补间永远没机会上场。
+       （轨道视图一直有 reconcile，所以只有从画布上改动作时才会踩到。） */
+    KF.reconcileTrack(t);
     bumpKfEval();
-    /* 空白帧补出来的对象不在 AppState.objects 里，重取一遍，否则下一次
-       goToFrame→syncFrameRef 会把这一帧当成「本帧不该有它」又抹成空白。 */
-    if (base !== live) refreshObjectsNow();
     return true;
   }
 

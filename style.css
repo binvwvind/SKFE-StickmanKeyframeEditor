@@ -2029,21 +2029,27 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
   }
   .ts-clip.has-thumb .ts-lab {
     background: rgba(0, 0, 0, .45); border-radius: 4px;
-    padding: 0 5px; margin-left: 13px; line-height: 14px;
+    padding: 0 5px; margin-left: 15px; line-height: 14px;
     text-shadow: none;
   }
   .ts-lab {
-    font-size: 10px; padding: 0 12px 0 20px; white-space: nowrap;   /* 左边留出关键帧菱形的位置 */
+    font-size: 10px; padding: 0 12px 0 24px; white-space: nowrap;   /* 左边留出关键帧菱形 + 左侧手柄的位置 */
     pointer-events: none; overflow: hidden; text-overflow: ellipsis;
     text-shadow: 0 1px 2px rgba(0, 0, 0, .25);
   }
   .ts-h {
-    position: absolute; top: 0; bottom: 0; width: 10px;
+    position: absolute; top: 0; bottom: 0; width: 11px;
     cursor: ew-resize; background: rgba(0, 0, 0, .16);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; font-style: normal; line-height: 1; color: transparent;
+    user-select: none;
   }
   .ts-h-l { left: 0; border-radius: 5px 0 0 5px; }
   .ts-h-r { right: 0; border-radius: 0 5px 5px 0; }
   .ts-clip:hover .ts-h { background: rgba(0, 0, 0, .28); }
+  /* v7.4.4：选中的长条两端显出 ‹ › —— 看得出这里能拖着改长度 */
+  .ts-clip.sel .ts-h { background: rgba(0, 0, 0, .32); color: #fff; }
+  .ts-clip.sel .ts-h:hover { background: rgba(0, 0, 0, .5); }
 
   /* 关键帧菱形：压在长条正中间，可以单拖改这一帧的时间。
      视觉 6px，命中区用 ::before 撑到 13px，免得点不中。 */
@@ -2074,6 +2080,17 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
   .ts-playhead {
     position: absolute; top: 0; width: 1px;
     background: #e24b4a; pointer-events: none; z-index: 5;
+  }
+
+  /* v7.4.4：空白处拖出来的框选框（压到哪几条长条就选哪几条） */
+  .ts-marquee {
+    position: absolute; z-index: 6; pointer-events: none;
+    /* 面板本身是浅绿底，浅绿虚线等于看不见：用深绿虚线 + 外侧白描边，
+       压在任何底色（含缩略图）上都分得清。 */
+    border: 1.5px dashed #2f6b12;
+    background: rgba(47, 107, 18, .10);
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, .7);
   }
 
   .ts-empty { padding: 18px 14px; font-size: 12px; color: var(--text-sub); }

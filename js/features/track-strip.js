@@ -41,7 +41,8 @@
   let colW = 26;
   let panelH = 240;        /* 面板高度默认值：约 4~5 条轨道，屏幕上还留得出画布 */
   let drag = null;
-  let selClip = null;      /* 当前选中的长条 { id, a, b } —— 分割 / 删除都认它 */
+  let selClip = null;      /* 最近点选的那一条长条 { id, a, b } —— 分割认它 */
+  let selClips = [];       /* v7.4.4：多选长条（框选 / Ctrl 点选）。整体移动、整体删除认它 */
   let lastPickedId = null; /* 最近点过的轨道：切帧会把 AppState.selected 清空，靠它兜底 */
   let lastSig = '';        /* 上次渲染时的数据指纹，用来跳过无变化的重画 */
   let refreshQueued = false;
@@ -93,6 +94,35 @@
     selKeys.clear();
     const cv = $('tsCanvas');
     if (cv) cv.querySelectorAll('.ts-key.sel').forEach(el => el.classList.remove('sel'));
+  }
+
+  /* ---------------- 长条多选 ----------------
+     单选时 selClips 就是一条，selClip 指同一条（分割 / 关键帧按钮只认单条）。
+     框选、批量移动、批量删除都读 selClips。 */
+  function isClipSelected(id, a, b) {
+    for (let i = 0; i < selClips.length; i++) {
+      const c = selClips[i];
+      if (String(c.id) === String(id) && c.a === a && c.b === b) return true;
+    }
+    return false;
+  }
+  function setClipSel(list, primary) {
+    const seen = Object.create(null);
+    const out = [];
+    (list || []).forEach((c) => {
+      if (!c) return;
+      const k = c.id + '|' + c.a + '|' + c.b;
+      if (seen[k]) return;
+      seen[k] = 1;
+      out.push({ id: String(c.id), a: +c.a, b: +c.b });
+    });
+    selClips = out;
+    selClip = primary || out[0] || null;
+    if (selClip) { lastPickedId = selClip.id; }
+  }
+  function clearClipSel() {
+    selClips = [];
+    selClip = null;
   }
 
   /* ---------------- 出场判定 ---------------- */
@@ -264,7 +294,7 @@
         const left = s.a * colW;
         const w = Math.max(colW, (s.b - s.a + 1) * colW);
         const label = (s.a + 1) + (s.b > s.a ? '–' + (s.b + 1) : '');
-        const sel = selClip && String(selClip.id) === String(id) && selClip.a === s.a && selClip.b === s.b;
+        const sel = isClipSelected(id, s.a, s.b);
         /* 缩略图：只取这一段的头一帧，横向平铺成胶片条 —— 每段只渲染一次，不拖慢大工程 */
         let cls = '', style = 'left:' + left + 'px;width:' + w + 'px';
         if (thumbOn && api.renderThumb) {
@@ -272,9 +302,10 @@
           try { url = api.renderThumb(id, s.a); } catch (_) { url = null; }
           if (url) { cls = ' has-thumb'; style += ';background-image:url(' + url + ')'; }
         }
+        /* 选中的长条两端冒出 ‹ › 两个把手（对应两条 10px 的命中区），一眼能看出可以拖 */
         html += '<div class="ts-clip' + cls + (sel ? ' sel' : '') + '" data-id="' + esc(id) + '" data-si="' + si + '" data-a="' + s.a + '" data-b="' + s.b + '"' +
           ' style="' + style + '">' +
-          '<i class="ts-h ts-h-l"></i><span class="ts-lab">' + label + '</span><i class="ts-h ts-h-r"></i></div>';
+          '<i class="ts-h ts-h-l">‹</i><span class="ts-lab">' + label + '</span><i class="ts-h ts-h-r">›</i></div>';
       });
       /* 关键帧菱形：压在长条正中间，可以单拖（改这一帧的时间）／Ctrl 点选多颗 */
       for (let i = 0; i < arr.length; i++) {
@@ -387,16 +418,18 @@
   }
 
   /* 让 [from..to] 不再出场。
-     段内（前面已经有关键帧）必须落一个 hidden 关键帧当初不见段的头，
+     段内（前面已经有关键帧、且后面也还有关键帧）必须落一个 hidden 关键帧当「不见段的头」，
      否则前一个关键帧的段会一路盖过来，把这里又填成可见。
-     前面一个关键帧都没有时（第一段之前 / 只有一段的尾巴）直接清空就够，
-     免得平白多出一个用户没点过的隐藏关键帧菱形。 */
+     v7.4.4：后面**没有**关键帧时不再插这颗 —— 那时候清空就够，
+     否则缩短长条会在空白处留下一个谁也点不掉的隐藏菱形（就是「轨道缩短后空白处还有帧」那个 bug）。 */
   function vacate(id, arr, from, to) {
     if (to < from || from < 0) return;
     ensureLen(arr, to + 1);
     let keyBefore = false;
     for (let i = 0; i < from; i++) { if (KF().isKey(arr[i])) { keyBefore = true; break; } }
-    if (keyBefore) {
+    let keyAfter = false;
+    for (let i = to + 1; i < arr.length; i++) { if (KF().isKey(arr[i])) { keyAfter = true; break; } }
+    if (keyBefore && keyAfter) {
       const head = keyFrom(cloneAt(id, from), true, false);
       arr[from] = head || null;
     } else {
@@ -546,6 +579,42 @@
       });
     }
     commit(ids, T('track.dragLabel', '调整轨道'));
+  }
+
+  /* ---------------- 多条长条整体平移（框选后用） ----------------
+     每条各自按自己的邻居夹紧，再取交集 —— 这样一起拖的时候不会有一条撞进隔壁。 */
+  function multiMoveBounds(items) {
+    let lo = -MAX_FRAMES, hi = MAX_FRAMES;
+    items.forEach((c) => {
+      const bd = moveBounds(c.id, c.a, c.b);
+      lo = Math.max(lo, bd.lo);
+      hi = Math.min(hi, bd.hi);
+    });
+    if (!isFinite(lo)) lo = -MAX_FRAMES;
+    if (!isFinite(hi)) hi = MAX_FRAMES;
+    if (lo > hi) return { lo: 0, hi: 0 };     /* 互相顶死：不许动，免得写坏数据 */
+    return { lo: lo, hi: hi };
+  }
+
+  function applyClipsMove(items, d) {
+    if (!d) return;
+    const ids = [];
+    /* 从右往左处理：右边先腾空，左边再落位，同一轨道上两条也不会互相吃格子 */
+    items.slice().sort((x, y) => (x.id === y.id ? y.a - x.a : (x.id < y.id ? -1 : 1))).forEach((c) => {
+      const t = trackOf(c.id);
+      if (!t) return;
+      const arr = t.frames;
+      ensureLen(arr, Math.max(totalFrames(), arr.length));
+      const srcs = takeRange(c.id, c.a, c.b);
+      const na = c.a + d, nb = c.b + d;
+      vacate(c.id, arr, c.a, c.b);
+      putRange(arr, na, srcs);
+      if (nb < c.b) vacate(c.id, arr, nb + 1, c.b);
+      if (ids.indexOf(c.id) < 0) ids.push(c.id);
+    });
+    commit(ids, T('track.moveClipLabel', '整体移动长条'));
+    /* 落位之后按新的位置重选，接着还能再拖 */
+    setClipSel(items.map(c => ({ id: c.id, a: c.a + d, b: c.b + d })));
   }
 
   /* ---------------- 关键帧平移 / 复制 / 粘贴 ----------------
@@ -747,24 +816,35 @@
     ensureLen(arr, Math.max(clip.b, i) + 1);
     arr[i] = src;
     commit(clip.id, T('track.splitLabel', '分割'));
-    selClip = { id: clip.id, a: i, b: clip.b };   /* 分割后选中右半段 */
+    setClipSel([{ id: clip.id, a: i, b: clip.b }]);   /* 分割后选中右半段 */
     render();
     api.toast(T('track.splitDone', '已从这一帧分成左右两段，可以各自拖了'));
   }
 
-  /* 删除选中的那一段（范围变空白，前后两段自动接上） */
+  /* 删除选中的长条（可以是框选出来的好几条；范围变空白，前后两段自动接上） */
   function deleteClip() {
-    const clip = selClip;
-    if (!clip) return needClip();
-    const t = trackOf(clip.id);
-    if (!t) return needClip();
-    ensureLen(t.frames, Math.max(totalFrames(), t.frames.length));
-    vacate(clip.id, t.frames, clip.a, clip.b);
-    commit(clip.id, T('track.delLabel', '删除这一段的帧'));
-    selClip = null;
+    const list = selClips.slice();
+    if (!list.length && selClip) list.push(selClip);
+    if (!list.length) return needClip();
+    const ids = [];
+    const n = list.length;
+    withTx(T('track.delLabel', '删除这一段的帧'), () => {
+      /* 从右往左：右边先腾空，左边的 vacate 才不会把右边刚写进去的撑长 */
+      list.slice().sort((x, y) => (x.id === y.id ? y.a - x.a : (x.id < y.id ? -1 : 1))).forEach((clip) => {
+        const t = trackOf(clip.id);
+        if (!t) return;
+        ensureLen(t.frames, Math.max(totalFrames(), t.frames.length));
+        vacate(clip.id, t.frames, clip.a, clip.b);
+        if (ids.indexOf(clip.id) < 0) ids.push(clip.id);
+      });
+      if (ids.length) commit(ids, T('track.delLabel', '删除这一段的帧'));
+    });
+    clearClipSel();
     lastPickedId = null;
     render();
-    api.toast(T('track.delDone', '这一段已经删掉'));
+    api.toast(n > 1
+      ? T('track.delDoneMulti', '已删除 %n 段').replace('%n', n)
+      : T('track.delDone', '这一段已经删掉'));
   }
 
   /* 关键帧：给「选中的那条轨」在播放头处开/关关键帧（轨道模式下不认子轨选择器） */
@@ -800,6 +880,37 @@
     colW = COLW_STEPS[k];
     try { localStorage.setItem(COLW_KEY, String(colW)); } catch (_) {}
     render();
+  }
+
+  /* ---------------- 框选（空白处按住拖） ---------------- */
+  let marqEl = null;
+
+  function marqueeEl() {
+    const cv = $('tsCanvas');
+    if (marqEl && marqEl.parentNode === cv) return marqEl;
+    if (!cv) return null;
+    marqEl = document.createElement('div');
+    marqEl.className = 'ts-marquee';
+    marqEl.hidden = true;
+    cv.appendChild(marqEl);
+    return marqEl;
+  }
+  function hideMarquee() {
+    if (marqEl) { marqEl.hidden = true; marqEl.style.width = '0px'; marqEl.style.height = '0px'; }
+  }
+  /* 视口坐标的矩形 ∩ 每条长条的包围盒 —— 全用视口坐标，滚动/缩放都不用自己算 */
+  function clipsInRect(rect) {
+    const cv = $('tsCanvas');
+    if (!cv || !rect) return [];
+    const x2 = rect.x + rect.w, y2 = rect.y + rect.h;
+    const out = [];
+    cv.querySelectorAll('.ts-clip').forEach((el) => {
+      const r = el.getBoundingClientRect();
+      if (r.right < rect.x || r.left > x2 || r.bottom < rect.y || r.top > y2) return;
+      out.push({ id: el.dataset.id, a: +el.dataset.a, b: +el.dataset.b, top: r.top });
+    });
+    out.sort((p, q2) => p.top - q2.top);
+    return out;
   }
 
   /* ---------------- 交互绑定 ---------------- */
@@ -876,37 +987,70 @@
         const rect = clip.getBoundingClientRect();
         const dx = e.clientX - rect.left;
         const mode = dx <= HANDLE_W ? 'l' : (rect.width - dx <= HANDLE_W ? 'r' : 'm');
-        lastPickedId = clip.dataset.id;
-        selClip = { id: clip.dataset.id, a: +clip.dataset.a, b: +clip.dataset.b };
+        const cid = clip.dataset.id;
+        const ca = +clip.dataset.a, cb = +clip.dataset.b;
+        const additive = !!(e.ctrlKey || e.metaKey || e.shiftKey);
+
+        /* 点一条没被选中的 = 单选它；点在「已经多选」的其中一条上 = 保留整组 */
+        if (!isClipSelected(cid, ca, cb)) {
+          if (additive && selClips.length) setClipSel(selClips.concat([{ id: cid, a: ca, b: cb }]), { id: cid, a: ca, b: cb });
+          else setClipSel([{ id: cid, a: ca, b: cb }]);
+        } else {
+          setClipSel(selClips, { id: cid, a: ca, b: cb });   /* 只换「主选」 */
+        }
+        lastPickedId = cid;
         clearKeySel();              /* 选中长条就不再认关键帧多选，两套选择互斥 */
-        markRow(clip.dataset.id);
-        cv.querySelectorAll('.ts-clip.sel').forEach(c => c.classList.remove('sel'));
-        clip.classList.add('sel');
+        markRow(cid);
+        cv.querySelectorAll('.ts-clip').forEach((el) => {
+          el.classList.toggle('sel', isClipSelected(el.dataset.id, +el.dataset.a, +el.dataset.b));
+        });
+
+        /* 多选 + 抓中间 = 整组平移；抓两端只动这一条 */
+        const group = (mode === 'm' && selClips.length > 1) ? selClips.slice() : null;
+        const els = [];
+        if (group) {
+          group.forEach((c) => {
+            const el = cv.querySelector('.ts-clip[data-id="' + c.id + '"][data-a="' + c.a + '"][data-b="' + c.b + '"]');
+            if (el) els.push({ c: c, el: el });
+          });
+        }
+
         drag = {
           kind: 'clip',
-          id: clip.dataset.id,
+          id: cid,
           si: +clip.dataset.si,
-          a: +clip.dataset.a,
-          b: +clip.dataset.b,
+          a: ca,
+          b: cb,
           mode,
           startX: e.clientX,
           d: 0,
           el: clip,
+          group: group,
+          els: els,
           moved: false
         };
-        clip.classList.add('dragging', 'drag-' + mode);
+        (group ? els.map(x => x.el) : [clip]).forEach(el => el.classList.add('dragging', 'drag-' + mode));
         try { cv.setPointerCapture(e.pointerId); } catch (_) {}
         e.preventDefault();
         return;
       }
 
-      /* 点空白 / 刻度尺：跳帧 */
+      /* 点空白 / 刻度尺：短按跳帧 + 选中这一行的元件，按住拖 = 框选多条长条 */
       const lane = e.target.closest('.ts-lane');
       if (lane) {
         const lr = lane.getBoundingClientRect();
         const i = Math.floor((e.clientX - lr.left) / colW);
-        if (selKeys.size) { clearKeySel(); render(); }
-        if (i >= 0 && i < totalFrames()) api.goToFrame(i);
+        const row = e.target.closest('.ts-row[data-id]');
+        drag = {
+          kind: 'marquee',
+          i: i,
+          rowId: row ? row.dataset.id : null,
+          sx: e.clientX,
+          sy: e.clientY,
+          rect: null,
+          moved: false
+        };
+        try { cv.setPointerCapture(e.pointerId); } catch (_) {}
         return;
       }
     });
@@ -954,9 +1098,37 @@
         return;
       }
 
+      /* 框选：空白处按住拖出一个选框，压到哪几条长条就选哪几条 */
+      if (drag.kind === 'marquee') {
+        const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+        if (!drag.moved && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;   /* 抖动阈值：短按还是当点击 */
+        drag.moved = true;
+        drag.rect = {
+          x: Math.min(drag.sx, e.clientX), y: Math.min(drag.sy, e.clientY),
+          w: Math.abs(dx), h: Math.abs(dy)
+        };
+        const el = marqueeEl();
+        const cr = cv.getBoundingClientRect();
+        el.hidden = false;
+        el.style.left = (drag.rect.x - cr.left) + 'px';
+        el.style.top = (drag.rect.y - cr.top) + 'px';
+        el.style.width = drag.rect.w + 'px';
+        el.style.height = drag.rect.h + 'px';
+        const hits = clipsInRect(drag.rect);
+        cv.querySelectorAll('.ts-clip').forEach((c) => {
+          const on = hits.some(h => String(h.id) === c.dataset.id && h.a === +c.dataset.a && h.b === +c.dataset.b);
+          c.classList.toggle('sel', on);
+        });
+        return;
+      }
+
       const raw = Math.round((e.clientX - drag.startX) / colW);
       let d = raw;
-      if (drag.mode === 'm') {
+      if (drag.group) {
+        /* 整组平移：所有选中长条共用一套夹紧区间 */
+        const bd = multiMoveBounds(drag.group);
+        d = Math.max(bd.lo, Math.min(bd.hi, d));
+      } else if (drag.mode === 'm') {
         const bd = moveBounds(drag.id, drag.a, drag.b);
         d = Math.max(bd.lo, Math.min(bd.hi, d));
       } else if (drag.mode === 'r') {
@@ -971,6 +1143,14 @@
       drag.moved = d !== 0;
 
       /* 只动 DOM，不碰数据 */
+      if (drag.group) {
+        drag.els.forEach((x) => {
+          x.el.style.left = ((x.c.a + d) * colW) + 'px';
+          const lab = x.el.querySelector('.ts-lab');
+          if (lab) lab.textContent = (x.c.a + d + 1) + (x.c.b > x.c.a ? '–' + (x.c.b + d + 1) : '');
+        });
+        return;
+      }
       const el = drag.el;
       if (drag.mode === 'm') {
         el.style.left = ((drag.a + d) * colW) + 'px';
@@ -990,11 +1170,43 @@
       const st = drag;
       drag = null;
       try { cv.releasePointerCapture(e.pointerId); } catch (_) {}
+      if (st.kind === 'marquee') hideMarquee();
       if (st.els) st.els.forEach(x => x.el.classList.remove('dragging'));
       else if (st.el) st.el.classList.remove('dragging', 'drag-l', 'drag-r', 'drag-m');
 
+      if (st.kind === 'marquee') {
+        if (!st.moved) {
+          /* 短按空白 = 跳帧 + 选中这一行的元件（用户点哪条轨就选哪个元件）。
+             先跳帧再选：goToFrame 会重建 AppState.objects，反过来的话选中的是旧对象。 */
+          if (selKeys.size) clearKeySel();
+          clearClipSel();
+          if (st.i >= 0 && st.i < totalFrames()) api.goToFrame(st.i);
+          if (st.rowId) { lastPickedId = st.rowId; api.selectTrack(st.rowId); markRow(st.rowId); }
+          render();
+          return;
+        }
+        const hits = clipsInRect(st.rect || { x: 0, y: 0, w: 0, h: 0 });
+        clearKeySel();
+        if (!hits.length) {
+          clearClipSel();
+          render();
+          api.toast(T('track.marqueeNone', '框选范围内没有长条 —— 要把框拖到长条上'));
+          return;
+        }
+        /* 主选 = 最上面那条；用户框完直接按 Delete 就能整段删 */
+        setClipSel(hits, hits[0]);
+        render();
+        api.toast(T('track.marqueeDone', '已选中 %n 段长条：可以整组拖动，或按删除').replace('%n', hits.length));
+        return;
+      }
+
       if (st.kind === 'keys') {
-        if (!st.moved) return;                       /* 没拖动 = 只是改了下选择 */
+        if (!st.moved) {
+          /* v7.4.4：点轨道上的关键帧也算「点了这一行」，顺手把这行的元件选上，
+             用户点完就能直接去左上属性面板改它。 */
+          if (st.items.length) api.selectTrack(st.items[0].id);
+          return;
+        }
         if (st.items.length === 1) {
           const one = st.items[0];
           withTx(st.alt ? T('track.keyCopyLabel', '复制关键帧到落点') : T('track.keyMoveLabel', '移动关键帧'),
@@ -1010,9 +1222,14 @@
       if (!st.moved) {
         /* 没拖动 = 点选：只选中这个元件和这条长条，不切子轨、不动帧号 */
         api.selectTrack(st.id);
+        render();
         return;
       }
-      withTx(T('track.dragLabel', '调整轨道'), () => applyDrag(st, st.d));
+      if (st.group) {
+        withTx(T('track.moveClipLabel', '整体移动长条'), () => applyClipsMove(st.group, st.d));
+      } else {
+        withTx(T('track.dragLabel', '调整轨道'), () => applyDrag(st, st.d));
+      }
       render();
     };
     cv.addEventListener('pointerup', finish);
@@ -1046,13 +1263,22 @@
         return;
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (!has) return;
-        e.preventDefault(); e.stopPropagation();
-        deleteSelKeys();
+        if (has) {
+          e.preventDefault(); e.stopPropagation();
+          deleteSelKeys();
+          return;
+        }
+        /* 没选关键帧但要删「框选出来的一整组」→ 删这几段。
+           只选了一条时不抢 Delete：那时候 Delete 还是删元件（和以前一样）。 */
+        if (selClips.length > 1) {
+          e.preventDefault(); e.stopPropagation();
+          deleteClip();
+        }
         return;
       }
-      if (e.key === 'Escape' && has) {
+      if (e.key === 'Escape' && (has || selClips.length)) {
         clearKeySel();
+        clearClipSel();
         render();
         return;
       }
@@ -1143,7 +1369,7 @@
     }
     /* 控制面板与底部栏要压在轨道面板之上 */
     document.body.classList.toggle('track-mode-on', enabled);
-    if (!enabled) { selClip = null; selKeys.clear(); }
+    if (!enabled) { clearClipSel(); selKeys.clear(); }
 
     /* 「轨道面板要在控制面板下方」—— 开着的时候就先临时落到屏幕底部 */
     if (enabled) {
@@ -1228,6 +1454,10 @@
     copyKeys,
     pasteKeys,
     deleteSelKeys,
+    /* 长条选择（框选 / 多选）的调试入口 */
+    selectedClips() { return selClips.slice(); },
+    clearClipSel() { clearClipSel(); if (enabled) render(); },
+    deleteClips() { deleteClip(); },
     selectAllKeys(id) { selectTrackKeys(id); },
     selectedKeys() { return liveSelKeys(); },
     hasClip() { return !!(keyClip && keyClip.items.length); },

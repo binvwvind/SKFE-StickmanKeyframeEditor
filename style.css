@@ -2085,10 +2085,10 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
   /* v7.4.4：空白处拖出来的框选框（压到哪几条长条就选哪几条） */
   .ts-marquee {
     position: absolute; z-index: 6; pointer-events: none;
-    /* 面板本身是浅绿底，浅绿虚线等于看不见：用深绿虚线 + 外侧白描边，
-       压在任何底色（含缩略图）上都分得清。 */
-    border: 1.5px dashed #2f6b12;
-    background: rgba(47, 107, 18, .10);
+    /* 配色由 JS 按主题主色压暗后写在行内（v7.4.6），
+       这里只留一个主题色兜底，不再写死深绿。 */
+    border: 1.5px dashed var(--color-primary);
+    background: var(--color-primary-soft);
     border-radius: 3px;
     box-shadow: 0 0 0 1px rgba(255, 255, 255, .7);
   }

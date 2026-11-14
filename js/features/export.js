@@ -251,8 +251,10 @@ SKFE.features.export = (function () {
     recorder.start();
     const savedCtx = D.getCtx();
     D.setCtx(recCtx);
+    /* v7.4.6：只录到「最后一个有内容的帧」，时间轴尾巴上的空白帧不要 */
+    const vN = contentFrameCount(tid);
     try {
-      for (let i = 0; i < D.AppState.frames.length; i++) {
+      for (let i = 0; i < vN; i++) {
         recCtx.save();
         recCtx.setTransform(1, 0, 0, 1, 0, 0);
         recCtx.clearRect(0, 0, outW, outH);
@@ -287,7 +289,12 @@ SKFE.features.export = (function () {
     SKFE.platform.save(blob, 'stickman_video_' + Date.now() + '.webm');
   }
 
-  /* ==================== MP4 ==================== */
+  /* ==================== MP4 ====================
+     v7.4.6：两条路。
+     ① 浏览器自带 MP4 录制（桌面 Chrome / Edge 有）—— 直接用 MediaRecorder，实时录。
+     ② 移动端（Android Chrome / WebView）没有 MediaRecorder('video/mp4')，
+        以前直接弹「不支持」就没了。现在改走 WebCodecs 的 VideoEncoder(H.264)
+        + 内置的 mp4-muxer 封装成真正的 MP4 —— 不依赖实时录制，画多快编多快。 */
   function getMP4MimeType() {
     if (typeof MediaRecorder === 'undefined') return null;
     const candidates = ['video/mp4;codecs=avc1.42E01E', 'video/mp4;codecs=avc1', 'video/mp4;codecs=h264', 'video/mp4'];
@@ -297,30 +304,56 @@ SKFE.features.export = (function () {
     return null;
   }
 
-  async function exportMP4() {
-    if (D.AppState.frames.length === 0) return;
-    if (D.getIsPlaying()) D.pause();
-    D.syncFrameRef();
-    const tid = D.isSubTrackMode() ? String(D.AppState.activeTrackId) : null;
-    const mimeType = getMP4MimeType();
-    if (!mimeType) {
-      alert('当前浏览器不支持 MP4 录制。\n请使用较新版本的 Chrome / Edge。');
-      return;
+  /* 有没有「WebCodecs 编码 + mp4 封装」这一套 */
+  function canEncodeMp4() {
+    return typeof window.VideoEncoder !== 'undefined' &&
+      typeof window.VideoFrame !== 'undefined' &&
+      !!(window.Mp4Muxer && window.Mp4Muxer.Muxer && window.Mp4Muxer.ArrayBufferTarget);
+  }
+
+  async function pickAvcConfig(w, h, fps, bitrate) {
+    /* 基线 / 主档 / 高档都试一遍：不同机器的硬编码器支持的不一样。
+       42001f = Baseline 3.1，420028 = Baseline 4.0，4d0028 = Main 4.0，640028 = High 4.0 */
+    const cands = ['avc1.42001f', 'avc1.420028', 'avc1.4d0028', 'avc1.640028', 'avc1.42E01E'];
+    for (const codec of cands) {
+      try {
+        const cfg = { codec: codec, width: w, height: h, bitrate: bitrate, framerate: fps, avc: { format: 'avc' } };
+        const r = await window.VideoEncoder.isConfigSupported(cfg);
+        if (r && r.supported) return cfg;
+      } catch (_) {}
     }
+    return null;
+  }
+
+  /* 导出到「最后一个有内容的帧」为止 —— 时间轴尾巴上那些谁都没出场的空白帧不要录进去 */
+  function contentFrameCount(tid) {
+    const total = D.AppState.frames.length;
+    const ids = tid ? [String(tid)] : Object.keys(D.AppState.tracks || {});
+    let last = -1;
+    ids.forEach((id) => {
+      const t = D.AppState.tracks[id];
+      if (!t || !t.frames) return;
+      for (let i = 0; i < t.frames.length; i++) {
+        const f = t.frames[i];
+        if (f && !(f.__d)) last = Math.max(last, i);
+      }
+    });
+    if (last < 0) return total;
+    return Math.min(total, last + 1);
+  }
+
+  /* 画布尺寸 / 取景 / 背景 —— 两条路共用 */
+  function mp4Setup(tid) {
     const isHD = document.getElementById('gifHD3x').checked;
     const is1080 = !!(document.getElementById('hd1080p') && document.getElementById('hd1080p').checked);
-    const bgColor = document.getElementById('mp4BgColor').value || D.getPageBgColor();
-    let outW, outH, baseCrop;
-    
+    const bgColor = (document.getElementById('mp4BgColor') && document.getElementById('mp4BgColor').value) || D.getPageBgColor();
     const cam = D.shouldSkipCameraForExport() ? null : (D.getCurrentCameraObject() || D.getCameraAtFrame(0));
     const baseSize = is1080 ? 1920 : (isHD ? 1200 : 800);
-    
+    let outW, outH, baseCrop = null;
     if (cam && cam.w > 0 && cam.h > 0) {
-      /* 有摄像机 → 优先按摄像机比例 */
       const a = cam.w / cam.h;
       if (a >= 1) { outW = baseSize; outH = Math.round(baseSize / a); }
       else { outH = baseSize; outW = Math.round(baseSize * a); }
-      baseCrop = null; // 关键：不锁死视角，留空让循环内逐帧计算
     } else if (D.AppState.canvasBoundsEnabled) {
       const sz = D.getExportSize();
       outW = sz.w; outH = sz.h;
@@ -332,79 +365,193 @@ SKFE.features.export = (function () {
       };
     } else {
       outW = baseSize; outH = baseSize;
-      const ec = D.getExportCrop(outW, outH, tid);
+      const ec = D.getExportCrop(outW, outH, tid || null);
       baseCrop = { cx: ec.cx, cy: ec.cy, scale: ec.scale, rotation: ec.rotation || 0 };
     }
-    
     outW = Math.max(2, outW - (outW % 2));
     outH = Math.max(2, outH - (outH % 2));
+    return { outW: outW, outH: outH, baseCrop: baseCrop, cam: cam, bgColor: bgColor };
+  }
+
+  /* 把第 i 帧画到导出画布上（两条路共用，免得改一处漏一处） */
+  function paintFrame(recCtx, i, plan, tid) {
+    let curCrop = plan.baseCrop;
+    if (plan.cam) {
+      const frameCam = D.getCameraAtFrame(i) || plan.cam;
+      const cc = D.cameraToCrop(frameCam, plan.outW, plan.outH);
+      curCrop = { cx: cc.cx, cy: cc.cy, scale: cc.scale, rotation: cc.rotation || 0 };
+    }
+    recCtx.save();
+    recCtx.setTransform(1, 0, 0, 1, 0, 0);
+    recCtx.fillStyle = plan.bgColor;
+    recCtx.fillRect(0, 0, plan.outW, plan.outH);
+    recCtx.translate(plan.outW / 2, plan.outH / 2);
+    if (curCrop) {
+      if (curCrop.rotation) recCtx.rotate(-curCrop.rotation);
+      recCtx.scale(curCrop.scale, curCrop.scale);
+      recCtx.translate(-curCrop.cx, -curCrop.cy);
+    }
+    if (D.AppState.canvasBoundsEnabled) {
+      recCtx.save();
+      recCtx.translate(D.AppState.canvasBounds.x + D.AppState.canvasBounds.w / 2, D.AppState.canvasBounds.y + D.AppState.canvasBounds.h / 2);
+      recCtx.rotate(D.AppState.canvasBounds.rotation || 0);
+      recCtx.beginPath();
+      recCtx.rect(-D.AppState.canvasBounds.w / 2, -D.AppState.canvasBounds.h / 2, D.AppState.canvasBounds.w, D.AppState.canvasBounds.h);
+      recCtx.clip();
+      recCtx.restore();
+    }
+    D.renderScene(D.getObjectsForFrameAt(i, tid), { isExporting: true });
+    recCtx.restore();
+  }
+
+  /* ② WebCodecs 编码 → mp4-muxer 封装（移动端主用） */
+  async function exportMP4WithEncoder(plan, tid) {
+    const mux = window.Mp4Muxer;
+    const n = contentFrameCount(tid);
+    if (!n) throw new Error('没有可导出的帧');
+    const fps = Math.max(1, Math.min(60, Math.round(1000 / ((D.AppState.frames[0] && D.AppState.frames[0].duration) || 83))));
+    const bitrate = Math.max(800000, Math.round(plan.outW * plan.outH * fps * 0.12));
+    const cfg = await pickAvcConfig(plan.outW, plan.outH, fps, bitrate);
+    if (!cfg) throw new Error('这台设备的浏览器没有可用的 H.264 编码器');
+
     const recCanvas = document.createElement('canvas');
-    recCanvas.width = outW; recCanvas.height = outH;
+    recCanvas.width = plan.outW; recCanvas.height = plan.outH;
+    const recCtx = recCanvas.getContext('2d', { alpha: false });
+
+    const muxer = new mux.Muxer({
+      target: new mux.ArrayBufferTarget(),
+      video: { codec: 'avc', width: plan.outW, height: plan.outH, frameRate: fps },
+      fastStart: 'in-memory',
+      firstTimestampBehavior: 'offset'
+    });
+
+    let encError = null;
+    const encoder = new window.VideoEncoder({
+      output: (chunk, meta) => { try { muxer.addVideoChunk(chunk, meta); } catch (_) {} },
+      error: (e) => { encError = e; }
+    });
+    encoder.configure(cfg);
+
+    const btn = document.getElementById('btnExportMP4');
+    const oldText = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; }
+    const savedCtx = D.getCtx();
+    D.setCtx(recCtx);
+    let tUs = 0;
+    try {
+      for (let i = 0; i < n; i++) {
+        if (encError) throw encError;
+        if (btn) btn.textContent = `MP4 ${i + 1}/${n}`;
+        paintFrame(recCtx, i, plan, tid);
+        const frameObj = D.AppState.frames[i] || {};
+        const durUs = Math.max(1000, Math.round((frameObj.duration || Math.round(1000 / fps)) * 1000));
+        const vf = new window.VideoFrame(recCanvas, { timestamp: tUs, duration: durUs });
+        encoder.encode(vf, { keyFrame: (i % Math.max(1, fps)) === 0 });
+        vf.close();
+        tUs += durUs;
+        /* 编码是异步的：队列堆太多就喘一口气，顺便让进度文字刷出来 */
+        if (encoder.encodeQueueSize > 8) await new Promise(r => setTimeout(r, 8));
+        else if (i % 6 === 0) await new Promise(r => setTimeout(r, 0));
+      }
+      await encoder.flush();
+      muxer.finalize();
+    } finally {
+      try { encoder.close(); } catch (_) {}
+      D.setCtx(savedCtx);
+      if (btn) { btn.textContent = oldText; btn.disabled = false; }
+      D.EventBus.emit('need:render');
+    }
+    if (encError) throw encError;
+    const buf = muxer.target.buffer;
+    if (!buf || !buf.byteLength) throw new Error('没有生成视频数据');
+    SKFE.platform.save(new Blob([buf], { type: 'video/mp4' }), 'stickman_video_' + Date.now() + '.mp4');
+  }
+
+  /* ① 浏览器自带 MP4 录制（桌面） */
+  async function exportMP4WithRecorder(plan, mimeType, tid) {
+    const n = contentFrameCount(tid);
+    const recCanvas = document.createElement('canvas');
+    recCanvas.width = plan.outW; recCanvas.height = plan.outH;
     const recCtx = recCanvas.getContext('2d', { alpha: false });
     const stream = recCanvas.captureStream(30);
     const track = stream.getVideoTracks()[0];
     let recorder;
-    try { recorder = new MediaRecorder(stream, { mimeType }); }
-    catch (e) { alert('创建 MP4 录制器失败：' + e.message); return; }
+    try { recorder = new MediaRecorder(stream, { mimeType: mimeType }); }
+    catch (e) { throw new Error('创建 MP4 录制器失败：' + e.message); }
     const chunks = [];
     recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
     const blobPromise = new Promise(resolve => { recorder.onstop = () => resolve(new Blob(chunks, { type: 'video/mp4' })); });
     const btn = document.getElementById('btnExportMP4');
-    const oldText = btn.textContent;
-    btn.disabled = true;
+    const oldText = btn ? btn.textContent : '';
+    if (btn) btn.disabled = true;
     recorder.start();
     const savedCtx = D.getCtx();
     D.setCtx(recCtx);
     try {
-      for (let i = 0; i < D.AppState.frames.length; i++) {
-        btn.textContent = `MP4 ${i + 1}/${D.AppState.frames.length}`;
-        
-        // 逐帧获取当前帧对应的摄像机视角
-        let curCrop = baseCrop;
-        if (cam) {
-           const frameCam = D.getCameraAtFrame(i) || cam;
-           const cc = D.cameraToCrop(frameCam, outW, outH);
-           curCrop = { cx: cc.cx, cy: cc.cy, scale: cc.scale, rotation: cc.rotation || 0 };
-        }
-
-        recCtx.save();
-        recCtx.setTransform(1, 0, 0, 1, 0, 0);
-        recCtx.fillStyle = bgColor;
-        recCtx.fillRect(0, 0, outW, outH);
-        recCtx.translate(outW / 2, outH / 2);
-        
-        if (curCrop) {
-          if (curCrop.rotation) recCtx.rotate(-curCrop.rotation);
-          recCtx.scale(curCrop.scale, curCrop.scale);
-          recCtx.translate(-curCrop.cx, -curCrop.cy);
-        }
-
-        if (D.AppState.canvasBoundsEnabled) {
-          recCtx.save();
-          recCtx.translate(D.AppState.canvasBounds.x + D.AppState.canvasBounds.w / 2, D.AppState.canvasBounds.y + D.AppState.canvasBounds.h / 2);
-          recCtx.rotate(D.AppState.canvasBounds.rotation || 0);
-          recCtx.beginPath();
-          recCtx.rect(-D.AppState.canvasBounds.w / 2, -D.AppState.canvasBounds.h / 2, D.AppState.canvasBounds.w, D.AppState.canvasBounds.h);
-          recCtx.clip();
-          recCtx.restore();
-        }
-        D.renderScene(D.getObjectsForFrameAt(i, tid), { isExporting: true });
-        recCtx.restore();
+      for (let i = 0; i < n; i++) {
+        if (btn) btn.textContent = `MP4 ${i + 1}/${n}`;
+        paintFrame(recCtx, i, plan, tid);
         if (track.requestFrame) track.requestFrame();
-        await new Promise(r => setTimeout(r, D.AppState.frames[i].duration));
+        await new Promise(r => setTimeout(r, (D.AppState.frames[i] && D.AppState.frames[i].duration) || 83));
       }
-    } catch (e) {
-      alert('MP4 导出失败：' + e.message);
     } finally {
       D.setCtx(savedCtx);
       recorder.stop();
-      btn.textContent = oldText;
-      btn.disabled = false;
+      if (btn) { btn.textContent = oldText; btn.disabled = false; }
       D.EventBus.emit('need:render');
     }
     const blob = await blobPromise;
-    if (!blob || blob.size === 0) { alert('MP4 导出失败：未生成视频数据'); return; }
+    if (!blob || blob.size === 0) throw new Error('未生成视频数据');
     SKFE.platform.save(blob, 'stickman_video_' + Date.now() + '.mp4');
+  }
+
+  /* 触屏移动端判定（v7.4.6）：手机上的 MediaRecorder 对 mp4 常常「嘴上说支持、录出来不是那么回事」，
+     所以移动端有 WebCodecs 就优先走编码路，别再赌 MediaRecorder。 */
+  function looksMobile() {
+    try {
+      const ua = navigator.userAgent || '';
+      if (/Android|iPhone|iPad|iPod|Mobile|HarmonyOS|OpenHarmony/i.test(ua)) return true;
+      /* iPadOS 13+ 的 UA 伪装成 Macintosh，靠触摸点数 + 没有精确指针补一刀 */
+      if (navigator.maxTouchPoints > 1) {
+        let fine = false;
+        try { fine = window.matchMedia('(pointer: fine)').matches; } catch (_) {}
+        if (!fine) return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  async function exportMP4() {
+    if (D.AppState.frames.length === 0) return;
+    if (D.getIsPlaying()) D.pause();
+    D.syncFrameRef();
+    const tid = D.isSubTrackMode() ? String(D.AppState.activeTrackId) : null;
+    const mimeType = getMP4MimeType();
+    const encOk = canEncodeMp4();
+    if (!mimeType && !encOk) {
+      alert('这台设备的浏览器不支持 MP4 导出。\n可以先用「导出 GIF」或「导出 PNG 序列」，或换 Chrome / Edge 桌面版。');
+      return;
+    }
+    const plan = mp4Setup(tid);
+    /* 选路（v7.4.6）：
+       移动端 / 根本没有 mp4 录制能力 → 先走 WebCodecs 编码；
+       桌面且能录 mp4 → 先走 MediaRecorder（老路径，行为不变）。
+       两条路都留着，前一条抛错就自动换另一条再试一次，最后才报错。 */
+    const preferEncoder = encOk && (!mimeType || looksMobile());
+    const steps = [];
+    if (preferEncoder) {
+      steps.push(() => exportMP4WithEncoder(plan, tid));
+      if (mimeType) steps.push(() => exportMP4WithRecorder(plan, mimeType, tid));
+    } else {
+      if (mimeType) steps.push(() => exportMP4WithRecorder(plan, mimeType, tid));
+      if (encOk) steps.push(() => exportMP4WithEncoder(plan, tid));
+    }
+    let lastErr = null;
+    for (let k = 0; k < steps.length; k++) {
+      try { await steps[k](); return; }
+      catch (e) { lastErr = e; }
+    }
+    alert('MP4 导出失败：' + (lastErr && lastErr.message ? lastErr.message : lastErr));
   }
 
   function exportPNGSeq() {

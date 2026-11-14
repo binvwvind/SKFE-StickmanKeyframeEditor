@@ -15634,6 +15634,11 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
         EventBus.emit('need:syncUI');
       },
 
+      /* v7.4.6：轨道改短之后，把时间轴尾巴上「所有元件都不出场」的空白帧收掉。
+         以前改动只同步「变长」，不会变短 —— 裁短长条后时间轴末尾留着一串空帧，
+         导出视频时就成了末尾的空白画面。 */
+      trimTail() { trimTrailingEmptyFrames(); },
+
       relayout() {
         refreshTimelineDockOffsets();
         resize();

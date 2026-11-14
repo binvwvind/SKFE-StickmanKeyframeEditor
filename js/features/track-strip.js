@@ -459,6 +459,8 @@
        会因为「不是同一个对象」把关键帧槽位覆写成普通帧 —— 关键帧、分割标记全丢，
        表现就是「点一下别处，段落就散架」。 */
     if (api.refreshObjects) api.refreshObjects();
+    /* v7.4.6：裁短 / 删掉尾部之后把时间轴尾巴收干净，别留一串谁都不出场的空白帧 */
+    if (api.trimTail) { try { api.trimTail(); } catch (_) {} }
     api.afterChange();
     if (api.isTxOpen && api.isTxOpen()) return;
     api.pushPre(api.snapshot(), label);
@@ -941,6 +943,29 @@
   function hideMarquee() {
     if (marqEl) { marqEl.hidden = true; marqEl.style.width = '0px'; marqEl.style.height = '0px'; }
   }
+  /* 选框配色跟着主题高亮走（v7.4.6）：读 --color-primary，再压暗 42% 保证在
+     浅色面板和缩略图上都看得清 —— 以前写死深绿，换主题还是绿的。 */
+  function paintMarquee() {
+    const el = marqueeEl();
+    if (!el) return;
+    let base = '#7d9bc4';
+    try {
+      const v = getComputedStyle(document.documentElement).getPropertyValue('--color-primary').trim();
+      if (v) base = v;
+    } catch (_) {}
+    const cu = (window.SKFE && SKFE.core && SKFE.core.colorUtils) || null;
+    const strong = cu ? cu.themeMixHex(base, '#000000', 0.42) : base;
+    el.style.borderColor = strong;
+    el.style.background = cu ? cu.themeHexToRgba(strong, 0.10) : 'rgba(0,0,0,.08)';
+  }
+  /* 这一行里覆盖第 i 帧的长条（没有就取第一条） */
+  function clipAt(id, i) {
+    const cv = $('tsCanvas');
+    if (!cv) return null;
+    const list = Array.prototype.slice.call(cv.querySelectorAll('.ts-clip[data-id="' + id + '"]'));
+    if (!list.length) return null;
+    return list.filter(c => i >= +c.dataset.a && i <= +c.dataset.b)[0] || list[0];
+  }
   /* 视口坐标的矩形 ∩ 每条长条的包围盒 —— 全用视口坐标，滚动/缩放都不用自己算 */
   function clipsInRect(rect) {
     const cv = $('tsCanvas');
@@ -1086,6 +1111,7 @@
          canvas 本身是视口，拿它算会在滚动后错位。 */
       const refEl = e.target.closest('.ts-lane') || cv.querySelector('.ts-lane') || cv;
       const lr = refEl.getBoundingClientRect();
+      paintMarquee();   /* v7.4.6：每次起手重新按当前主题上色 */
       drag = {
         kind: 'marquee',
         i: Math.floor((e.clientX - lr.left) / colW),
@@ -1220,12 +1246,20 @@
 
       if (st.kind === 'marquee') {
         if (!st.moved) {
-          /* 短按空白 = 跳帧 + 选中这一行的元件（用户点哪条轨就选哪个元件）。
+          /* 短按 = 跳帧；点在哪一行就把「这一行的长条」设为选中（已经选中的不会被清掉）。
+             v7.4.6：以前这里会 clearClipSel + clearKeySel —— 点一下旁边空白，
+             正在编辑的那条轨就掉了选中，很别扭。现在只有 Esc 才清选择。
              先跳帧再选：goToFrame 会重建 AppState.objects，反过来的话选中的是旧对象。 */
-          if (selKeys.size) clearKeySel();
-          clearClipSel();
           if (st.i >= 0 && st.i < totalFrames()) api.goToFrame(st.i);
-          if (st.rowId) { lastPickedId = st.rowId; api.selectTrack(st.rowId); markRow(st.rowId); }
+          if (st.rowId) {
+            lastPickedId = st.rowId;
+            const segEl = clipAt(st.rowId, st.i);
+            if (segEl) {
+              setClipSel([{ id: st.rowId, a: +segEl.dataset.a, b: +segEl.dataset.b }]);
+            }
+            api.selectTrack(st.rowId);
+            markRow(st.rowId);
+          }
           render();
           return;
         }

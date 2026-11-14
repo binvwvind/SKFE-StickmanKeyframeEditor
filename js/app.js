@@ -608,7 +608,11 @@ function syncDistortToAllFrames(obj) {
     const t = AppState.tracks[tid];
     if (!t || !t.frames) return false;
     const slot = t.frames[idx];
-    if (KF.isKey(slot)) return false;                      /* ① */
+    /* ① 已经是关键帧：用户接着摆这个姿势（比如先拖手臂、再拖腿）。
+       这一帧的对象就是关键帧本身，数据已经写进去了，但段内的派生帧还在
+       缓存里 —— 不失效的话播放时只有「第一次改动的那条肢体」在动，
+       后面改的肢体要等到这一帧才突然跳过去。 */
+    if (KF.isKey(slot)) { bumpKfEval(); return false; }
     const live = AppState.objects.find(o => o && o.type !== 'video' && String(o.id) === tid) || null;
     if (KF.isDerived(slot)) {                              /* ② */
       if (!live) return false;
@@ -728,6 +732,9 @@ function syncDistortToAllFrames(obj) {
       updateFrameBar();
       showHistoryToast('已自动生成关键帧（⌘Z 可撤销）', 'ink', 1800);
     }
+    /* v7.4.5：不管有没有新落菱形，这一帧的姿势都变了 —— 段内派生帧必须重算，
+       否则「接着改第二个肢体」时中间帧还是上一轮算出来的值（只动第一个肢体）。 */
+    bumpKfEval();
     if (AppState.frames[AppState.currentFrameIndex]) delete AppState.frames[AppState.currentFrameIndex]._thumb;
     if (isSubTrackMode()) trackThumbCache.delete(AppState.activeTrackId + '|' + AppState.currentFrameIndex);
     SKFE.systems.autosave.scheduleAutoArchiveSave();
@@ -7572,12 +7579,22 @@ function importActionPresets() {
     if (i < 0 || i >= AppState.frames.length) return;
     if (isPlaying) pause();
     syncFrameRef();
+    /* v7.4.5：换帧不再清掉选中。用户点时间轴只是「看这一帧」，
+       选中一没，自动关键帧就把当前元件当成「非选中件」而落不下来
+       （allowPlain=false 直接 return），表现为「改了半天没菱形、也不补间」。
+       每帧的对象是不同实例，所以按 id 去新列表里找回同 id 的那个。 */
+    const keepSelId = AppState.selected ? String(AppState.selected.id) : null;
     AppState.currentFrameIndex = i;
     AppState.objects = getCombinedObjectsForRender();
-    AppState.selected = isSubTrackMode() ? getActiveTrackObject() : null;
+    if (isSubTrackMode()) {
+      AppState.selected = getActiveTrackObject();
+    } else {
+      AppState.selected = (keepSelId && AppState.objects.find(o => o && String(o.id) === keepSelId)) || null;
+    }
     drag = null; isPanning = false; AppState.canvasSelected = false;
     cancelTransformBoxDrag(); anchorModeOn = false;
     seekVideoToFrame(AppState.currentFrameIndex);
+    updateTweenEaseLabel();   /* v7.4.5：跨进/跨出段时，标签栏的曲线跟着换 */
     EventBus.emit('need:render'); EventBus.emit('need:syncUI');
   }
 
@@ -12160,6 +12177,9 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     EventBus.emit('need:syncUI');
     updateLayerList();
     updateTrackOptions();
+    /* v7.4.5：曲线标签跟着「选中谁」和「播放头在哪段」走 —— 换元件 / 换帧都要重算，
+       否则切到另一条轨还显示上一条轨的曲线（或者一直停在初始的「匀速」）。 */
+    updateTweenEaseLabel();
     if (f) flashCoordDisplay();
   }
 

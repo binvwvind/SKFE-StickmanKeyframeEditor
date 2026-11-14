@@ -422,6 +422,11 @@
      否则前一个关键帧的段会一路盖过来，把这里又填成可见。
      v7.4.4：后面**没有**关键帧时不再插这颗 —— 那时候清空就够，
      否则缩短长条会在空白处留下一个谁也点不掉的隐藏菱形（就是「轨道缩短后空白处还有帧」那个 bug）。 */
+  /* 干净清空一段：不留「隐藏头」，裁短专用 */
+  function clearFrames(arr, from, to) {
+    for (let i = Math.max(0, from); i <= to && i < arr.length; i++) arr[i] = null;
+  }
+
   function vacate(id, arr, from, to) {
     if (to < from || from < 0) return;
     ensureLen(arr, to + 1);
@@ -501,8 +506,38 @@
       ensureLen(arr, nb + 1);
       for (let i = b + 1; i <= nb; i++) arr[i] = api.clone(base);
     } else if (nb < b) {
-      vacate(id, arr, nb + 1, b);
+      /* 裁短（v7.4.5）：拖到 14 就把 15 之后全裁掉，落在里面的关键帧（比如 17）一起取消；
+         剩下的尾巴（最后一个保留关键帧 +1 … 14）定格成那颗关键帧的姿势 ——
+         不然 17 一没，6 后面就成了「段外」，补间撤掉后这几帧会直接消失。 */
+      const anchor = lastKeyAtOrBefore(id, nb);
+      const hold = anchor >= 0 ? plainFrom(cloneAt(id, anchor)) : null;
+      /* 用干净清空：vacate 会在两侧都有关键帧时落一颗「隐藏头」，
+         裁短的场合那颗头正好落在新区间外面（15 帧），又会变成看不见的残留。 */
+      clearFrames(arr, nb + 1, b);
+      if (hold) {
+        for (let i = anchor + 1; i <= nb; i++) arr[i] = api.clone(hold);
+      }
     }
+  }
+
+  /* 轨道上 <= idx 的最后一颗关键帧；没有就 -1 */
+  function lastKeyAtOrBefore(id, idx) {
+    const t = trackOf(id);
+    const arr = t ? t.frames : [];
+    for (let i = Math.min(idx, arr.length - 1); i >= 0; i--) {
+      if (arr[i] && KF().isKey(arr[i])) return i;
+    }
+    return -1;
+  }
+
+  /* 轨道上 >= idx 的第一颗关键帧；没有就 -1 */
+  function firstKeyAtOrAfter(id, idx) {
+    const t = trackOf(id);
+    const arr = t ? t.frames : [];
+    for (let i = Math.max(0, idx); i < arr.length; i++) {
+      if (arr[i] && KF().isKey(arr[i])) return i;
+    }
+    return -1;
   }
 
   /* 左端拉到 na
@@ -534,7 +569,15 @@
         }
       }
     } else if (na > a) {
-      vacate(id, arr, a, na - 1);
+      /* 裁短左端（v7.4.5）：拖到 9 就把 9 之前全裁掉，落在里面的关键帧（比如 1、6）一起取消；
+         剩下的头（9 … 后面第一颗保留关键帧 -1）定格成那颗关键帧的姿势，
+         和右端裁短是同一套语义（只是取的是右边的锚点）。 */
+      const anchor = firstKeyAtOrAfter(id, na);
+      const hold = anchor >= 0 ? plainFrom(cloneAt(id, anchor)) : null;
+      clearFrames(arr, a, na - 1);
+      if (hold) {
+        for (let i = na; i < anchor; i++) arr[i] = api.clone(hold);
+      }
     }
   }
 
@@ -1035,24 +1078,25 @@
         return;
       }
 
-      /* 点空白 / 刻度尺：短按跳帧 + 选中这一行的元件，按住拖 = 框选多条长条 */
-      const lane = e.target.closest('.ts-lane');
-      if (lane) {
-        const lr = lane.getBoundingClientRect();
-        const i = Math.floor((e.clientX - lr.left) / colW);
-        const row = e.target.closest('.ts-row[data-id]');
-        drag = {
-          kind: 'marquee',
-          i: i,
-          rowId: row ? row.dataset.id : null,
-          sx: e.clientX,
-          sy: e.clientY,
-          rect: null,
-          moved: false
-        };
-        try { cv.setPointerCapture(e.pointerId); } catch (_) {}
-        return;
-      }
+      /* v7.4.5：面板任意空白处都能起框选 —— 轨道行、左侧标签列、刻度尺、行间空隙都算。
+         短按 = 跳帧 + 选中这一行的元件；按住拖 = 框选多条长条。
+         （长条、关键帧、把手、缩放/眼睛按钮在上面已经各自 return，摸不到这里。） */
+      const rowEl = e.target.closest('.ts-row[data-id]');
+      /* 列的起点以任意一条 lane 为准：它们左端对齐，横向滚动时也跟着一起动；
+         canvas 本身是视口，拿它算会在滚动后错位。 */
+      const refEl = e.target.closest('.ts-lane') || cv.querySelector('.ts-lane') || cv;
+      const lr = refEl.getBoundingClientRect();
+      drag = {
+        kind: 'marquee',
+        i: Math.floor((e.clientX - lr.left) / colW),
+        rowId: rowEl ? rowEl.dataset.id : null,
+        sx: e.clientX,
+        sy: e.clientY,
+        rect: null,
+        moved: false
+      };
+      try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+      return;
     });
 
     /* 按一下的动作：缩放、眼睛 */

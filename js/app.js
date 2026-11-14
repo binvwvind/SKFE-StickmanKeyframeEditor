@@ -15354,6 +15354,81 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     saveHistory('初始化');
   })();
 
+  /* ==================== v7.4.0：轨道模式（新增功能，独立模块） ====================
+     ★ 这一段是**纯追加**：只把内部接口注入给 js/features/track-strip.js，
+       不改动上面任何一行现有逻辑。模块自己订阅事件总线被动更新（need:syncUI / app:update），
+       所以不点「轨道」按钮时，程序行为与 v7.3.0 完全一致。 */
+  (function initTrackStrip() {
+    const TS = SKFE.features.trackStrip;
+    if (!TS) return;
+
+    /* 找元件对象：优先当前帧的真实对象，找不到就回落到该轨在当前帧的求值结果 */
+    const findObj = (id) => {
+      const n = String(id);
+      const live = (AppState.objects || []).find(o => o && String(o.id) === n);
+      if (live) return live;
+      return getTrackFrame(n, AppState.currentFrameIndex) || null;
+    };
+
+    TS.init({
+      tracks: () => AppState.tracks,
+      totalFrames: () => AppState.frames.length,
+      currentFrame: () => AppState.currentFrameIndex,
+      isMobile: () => isMobile,
+      goToFrame: (i) => goToFrame(i),
+      getTrackFrame: (id, i) => getTrackFrame(String(id), i),
+      clone: (o) => cloneObjectKeepImg(o),
+      snapshot: () => getSnapshot(),
+      pushPre: (snap, label) => pushPreSnapshot(snap, label),
+
+      /* 点长条 = 只选中这个元件（不动帧号）。子轨模式下不擅自改隔离轨。 */
+      selectTrack(id) {
+        if (isSubTrackMode() && String(AppState.activeTrackId) !== String(id)) return;
+        const o = findObj(id);
+        if (o) select(o);
+      },
+
+      /* 眼睛：直接复用元件列表现成的「全帧隐藏」，不新写一套 */
+      toggleHidden(id) {
+        const o = findObj(id);
+        if (o) setObjectHiddenGlobal(o, !o.hidden);
+      },
+
+      /* 切割目标：子轨模式下就是当前轨，否则取当前选中的元件 */
+      targetTrackId() {
+        if (isSubTrackMode()) return String(AppState.activeTrackId);
+        if (AppState.selected) return String(AppState.selected.id);
+        return null;
+      },
+
+      /* 轨道数据被改过之后的统一收尾 —— 全是现有函数，不新增语义 */
+      afterChange() {
+        bumpKfEval();
+        syncMainLengthFromTracks();
+        updateFrameBar();
+        EventBus.emit('need:render');
+        EventBus.emit('need:syncUI');
+      },
+
+      relayout() {
+        refreshTimelineDockOffsets();
+        resize();
+        /* v7.4.0：置底停靠时面板被拉高会钻到左边属性面板下面，
+           按「多出来的高度」把它收一收。正常高度时写回去的和原来完全一样，
+           自由缩放（用户亲手拖过尺寸）时一律不碰。 */
+        const tl = document.getElementById('timeline');
+        const ui = document.getElementById('ui');
+        if (tl && ui && !isMobile && !(uiResizable && uiCustomSize) && tl.classList.contains('timeline-bottom')) {
+          const extra = Math.max(0, tl.offsetHeight - 100);
+          const reserved = 114 + extra;
+          ui.style.maxHeight = 'calc(100vh - ' + reserved + 'px)';
+          ui.style.height = 'calc(100vh - ' + reserved + 'px)';
+        }
+      },
+      toast(msg) { showHistoryToast(msg, 'tips', 1800); }
+    });
+  })();
+
   /* v7.0.0：调试入口（只在 ?debug=1 时挂到 window，方便无头测试与排障）。
      不参与任何功能逻辑，正式使用时不会存在。 */
   if (/[?&]debug=1/.test(location.search)) {

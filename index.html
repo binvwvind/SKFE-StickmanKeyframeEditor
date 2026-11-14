@@ -3,7 +3,7 @@
 <head> <!-- 网页头部，包含元数据和外部引用 -->
 <meta charset="UTF-8"> <!-- 设置字符编码为 UTF-8，防止中文乱码 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover"> <!-- 移动端视口设置：宽度同设备，允许缩放，适配刘海屏 -->
-<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.3.0</title> <!-- 网页标题，带有多语言属性 -->
+<title data-i18n="app.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.4.0</title> <!-- 网页标题，带有多语言属性 -->
 <link rel="stylesheet" href="./style.css"> <!-- 引入外部样式表 -->
 </head> <!-- 头部结束 -->
 <body> <!-- 网页主体开始 -->
@@ -98,7 +98,7 @@
   <div id="uiMain"> <!-- v7.3.0：「属性」分区（data-sheet="props"），标题头由 JS 动态插入，见 mountUiSheets -->
 
   <div id="watermark"> <!-- 控制面板顶部的作者/版本水印 -->
-    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.3.0</div> <!-- 软件名称及版本 -->
+    <div data-i18n="watermark.title">SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.4.0</div> <!-- 软件名称及版本 -->
     <div class="author" data-i18n="watermark.author">作者 binvwvnid · QQ 交流群 1121039855</div> <!-- 作者信息及群号 -->
   </div> <!-- 水印结束 -->
 
@@ -904,6 +904,7 @@
 </div> <!-- 元件列表结束 -->
 
 <div id="timeline"> <!-- ==================== 时间轴（动画面板）主容器 ==================== -->
+  <div id="tlGrip" title="拖动调整动画面板高度" data-i18n-title="track.gripTitle"></div> <!-- v7.4.0：面板上沿的高度拖拽条 -->
   <button id="btnHideTimeline" data-i18n-title="timeline.hideTitle"><i data-icon="down"></i><span data-i18n="timeline.hide">收起</span></button> <!-- 收起时间轴按钮 -->
   <div id="frameBar"></div> <!-- 帧列表容器（横向滚动，由 JS 渲染） -->
   <div id="kfCurveWrap"><canvas id="kfCurveStrip"></canvas></div> <!-- v7.0.0：段曲线可视化（无段时自动隐藏） -->
@@ -914,6 +915,7 @@
   </div> <!-- 进度条包裹层结束 -->
   
   <div class="timeline-controls"> <!-- 时间轴操作控制栏 -->
+    <button id="btnTrackMode" class="btn-soft btn-track-mode" title="切换到轨道模式（每个元件一条长条，可拖动伸缩）" data-i18n-title="track.modeTitle" aria-pressed="false"><i data-icon="film"></i><span data-i18n="track.mode">轨道</span></button> <!-- v7.4.0：切换轨道模式（帧动画面板左侧） -->
     <button id="btnPrevFrame" title="上一帧" data-i18n-title="timeline.prevTitle"><i data-icon="arrow-left"></i></button> <!-- 上一帧 -->
     <button id="btnPlay" class="primary" title="播放/暂停" data-i18n-title="timeline.playTitle"><i data-icon="play"></i><span data-i18n="play.play">播放</span></button> <!-- 播放/暂停主按钮 -->
     <button id="btnNextFrame" title="下一帧" data-i18n-title="timeline.nextTitle"><i data-icon="arrow-right"></i></button> <!-- 下一帧 -->
@@ -929,6 +931,7 @@
     <span class="sep">|</span> <!-- 分隔符 -->
     <div class="tween-group"> <!-- 关键帧 / 插帧 / 曲线 -->
       <button id="btnKeyframe" class="btn-soft btn-keyframe" title="把当前帧设为 / 取消关键帧" data-i18n-title="timeline.keyframeTitle"><i data-icon="diamond-two"></i><span data-i18n="timeline.keyframe">关键帧</span></button> <!-- 关键帧开关（R1） -->
+      <button id="btnSplit" class="btn-soft" title="在播放头处把当前元件断开：后面的部分变成独立一段" data-i18n-title="track.splitTitle">✂ <span data-i18n="track.split">切割</span></button> <!-- v7.4.0：轨道切割（配合轨道模式使用） -->
       <button id="btnTween" class="btn-soft" title="在当前帧后面插入 N 帧：段内由两端关键帧自动补间，段外则复制当前帧" data-i18n-title="timeline.insertFramesTitle"><i data-icon="add-one"></i><span data-i18n="timeline.insertFrames">插 N 帧</span></button> <!-- 插 N 帧（段内补间 / 段外续帧，v7.2.0 放开段外限制） -->
       <input type="number" id="tweenCount" value="5" min="1" max="60" title="插入帧数" data-i18n-title="timeline.insertCountTitle"> <!-- 插入帧数量 -->
       <button id="btnTweenMore" class="tween-more-toggle" title="段曲线设置（缓动/分部）" data-i18n-title="timeline.easeMenuTitle" aria-haspopup="menu" aria-expanded="false" aria-controls="tweenMoreMenu"> <!-- 展开段曲线设置 -->
@@ -948,6 +951,15 @@
     </select> <!-- 轨道选择结束 -->
     <!-- v7.0.5：原「⚙️ 高级设置」按钮已移除，内容整体搬到控制面板底部栏的「高级」分区 -->
   </div> <!-- 时间轴操作控制栏结束 -->
+
+  <!-- ==================== v7.4.0：轨道模式（每个元件一条长条） ====================
+       只在点左侧「轨道」按钮后显示；帧块那一套完全不受影响，切回来照旧。
+       内容全部由 js/features/track-strip.js 渲染。 -->
+  <div id="trackStrip" hidden> <!-- 轨道容器 -->
+    <div class="ts-scroll" id="tsScroll"> <!-- 唯一滚动区（横竖共用） -->
+      <div class="ts-canvas" id="tsCanvas"><!-- 内容层：宽高由 JS 按列宽×帧数算 --></div>
+    </div>
+  </div> <!-- 轨道容器结束 -->
   
   <div class="adv-panel" id="timelineAdvancedPanel" hidden> <!-- ==================== 时间轴高级设置弹窗 ==================== -->
     <div class="adv-panel-head"> <!-- 头部 -->
@@ -1103,6 +1115,7 @@
 <script src="./js/systems/keyframes.js"></script> <!-- 关键帧数据层 v7.0.0（槽位身份 / 段 / 曲线挂在关键帧上） -->
 
 <script src="./js/platform.js"></script> <!-- 运行环境适配层：浏览器/桌面/移动端的文件保存差异 -->
+<script src="./js/features/track-strip.js"></script> <!-- v7.4.0：轨道模式（独立模块，只读 AppState.tracks，不改现有帧块逻辑） -->
 <script src="./js/app.js"></script> <!-- 引入主程序逻辑 -->
 </body> <!-- 主体结束 -->
 </html> <!-- 文档结束 -->

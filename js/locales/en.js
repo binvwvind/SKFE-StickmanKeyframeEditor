@@ -1,7 +1,7 @@
 /* SKFE locale: English */
 window.SKFE_LOCALES = window.SKFE_LOCALES || {};
 window.SKFE_LOCALES['en'] = {
-  "app.title": "SKFE | Stickman Keyframe Editor v7.3.0",
+  "app.title": "SKFE | Stickman Keyframe Editor v7.4.0",
   "tbox.move": "Drag to move the whole object",
   "tbox.scale": "Drag to scale proportionally (enable Free Stretch to scale X/Y separately)",
   "tbox.rotate": "Drag to rotate",
@@ -23,7 +23,7 @@ window.SKFE_LOCALES['en'] = {
   "cameraPreview.closeTitle": "Close preview",
   "cameraPreview.hint": "Always shows the camera export view for the current frame",
   "timeline.show": "Frame panel",
-  "watermark.title": "SKFE | Stickman Keyframe Editor v7.3.0",
+  "watermark.title": "SKFE | Stickman Keyframe Editor v7.4.0",
   "watermark.author": "by binvwvnid · QQ group: 1121039855",
   "panel.title": "Control panel",
   "lang.toggle": "EN/中",
@@ -573,4 +573,18 @@ window.SKFE_LOCALES['en'] = {
   "theme.presetDelTitle": "Delete this preset",
   "theme.presetDelConfirm": "Delete this theme preset?",
   "theme.presetDefaultName": "Theme",
+"track.mode": "Tracks",
+"track.modeTitle": "Switch to track mode: one bar per element, drag ends to stretch, drag middle to move",
+"track.split": "Split",
+"track.splitTitle": "Cut at the playhead: the element stops appearing from this frame; the part before can still be dragged",
+"track.gripTitle": "Drag to resize the animation panel",
+"track.empty": "No elements yet. Add one on the canvas and its track will show up here.",
+"track.gutterHead": "Element",
+"track.show": "Click to show (all frames)",
+"track.hide": "Click to hide (all frames)",
+"track.needPick": "Click a bar first to pick the element you want to split",
+"track.cutEmpty": "This element is not present at the playhead frame",
+"track.cutDone": "Cut done: this element no longer appears from this frame",
+"track.cutLabel": "Split track",
+"track.dragLabel": "Adjust track",
 };

@@ -1,7 +1,7 @@
 /* SKFE locale: Simplified Chinese (default) */
 window.SKFE_LOCALES = window.SKFE_LOCALES || {};
 window.SKFE_LOCALES['zh-CN'] = {
-  "app.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.3.0",
+  "app.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.4.0",
   "tbox.move": "拖动整体移动",
   "tbox.scale": "拖动等比缩放（开启自由拉伸后按 X/Y 分别拉伸）",
   "tbox.rotate": "拖动旋转",
@@ -23,7 +23,7 @@ window.SKFE_LOCALES['zh-CN'] = {
   "cameraPreview.closeTitle": "关闭预览",
   "cameraPreview.hint": "始终显示当前帧的摄像机导出画面",
   "timeline.show": "帧动画面板",
-  "watermark.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.3.0",
+  "watermark.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.4.0",
   "watermark.author": "作者 binvwvnid · QQ 交流群 1121039855",
   "panel.title": "控制面板",
   "lang.toggle": "中/EN",
@@ -572,4 +572,18 @@ window.SKFE_LOCALES['zh-CN'] = {
   "theme.presetDelTitle": "删除该预设",
   "theme.presetDelConfirm": "确定删除该主题预设吗？",
   "theme.presetDefaultName": "主题",
+"track.mode": "轨道",
+"track.modeTitle": "切换到轨道模式：每个元件一条长条，拖两端伸缩、拖中间平移",
+"track.split": "切割",
+"track.splitTitle": "在播放头处切割：这一帧起该元件不再出场，前一段仍可单独拖动",
+"track.gripTitle": "拖动调整动画面板高度",
+"track.empty": "还没有元件。先在画布上添加一个元件，它的轨道就会出现在这里。",
+"track.gutterHead": "元件",
+"track.show": "点击显示（全帧生效）",
+"track.hide": "点击隐藏（全帧生效）",
+"track.needPick": "先在轨道上点一条长条，选中要切割的元件",
+"track.cutEmpty": "播放头这一帧这个元件本来就不在场",
+"track.cutDone": "已切割：这一帧起该元件不再出场",
+"track.cutLabel": "切割轨道",
+"track.dragLabel": "调整轨道",
 };

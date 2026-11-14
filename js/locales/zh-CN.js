@@ -1,7 +1,7 @@
 /* SKFE locale: Simplified Chinese (default) */
 window.SKFE_LOCALES = window.SKFE_LOCALES || {};
 window.SKFE_LOCALES['zh-CN'] = {
-  "app.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.2.0",
+  "app.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.2.1",
   "tbox.move": "拖动整体移动",
   "tbox.scale": "拖动等比缩放（开启自由拉伸后按 X/Y 分别拉伸）",
   "tbox.rotate": "拖动旋转",
@@ -23,8 +23,8 @@ window.SKFE_LOCALES['zh-CN'] = {
   "cameraPreview.closeTitle": "关闭预览",
   "cameraPreview.hint": "始终显示当前帧的摄像机导出画面",
   "timeline.show": "帧动画面板",
-  "watermark.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.2.0",
-  "watermark.author": "Author: binvwvind qq交流分享群:1121039855",
+  "watermark.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.2.1",
+  "watermark.author": "作者 binvwvnid · QQ 交流群 1121039855",
   "panel.title": "控制面板",
   "lang.toggle": "中/EN",
   "export.hd": "高清导出（4倍分辨率）",
@@ -302,7 +302,7 @@ window.SKFE_LOCALES['zh-CN'] = {
   "help.summary": "简易使用说明 (点击展开)",
   "help.content": "\n      <b>1. 控制面板从上到下：</b><br>\n      • 最上方是<b>导出PNG / 导出JPG / 全屏</b>，可勾选高清（4 倍分辨率）。<br>\n      • <b>「＋ 添加物体」</b>可折叠展开：火柴人、插入图片、上传配饰、对话框、内置形状都在里面。<br>\n      • 下方是复制、删除、重置，再往下是<b>「更多设置」</b>与<b>本地预设</b>。<br><br>\n      <b>2. 基础操作：</b><br>\n      • 选中：点击画布中的物体，或在元件列表点击。<br>\n      • 移动：<b>拖动画面上方的 <i data-icon='direction-adjustment-three'></i> 手柄</b>，或直接输入 X / Y 坐标；拖火柴人骨盆/躯干可整体移动。<br>\n      • 旋转：<b>基础属性栏旋转数值可输入任意角度（不受 ±180 限制）</b>，也可点击 <i data-icon='rotate'></i> 打开旋转手柄在画面上拖动旋转；图片/配饰/图形可点击 <i data-icon='anchor'></i> 设置自定义锚点，旋转围绕锚点进行。<br>\n      • 关节：拖蓝色关节点调整姿势，红色点为已固定的关节。<br>\n      • 视角：PC 端拖空白处平移、滚轮缩放；移动端双指拖动平移、捏合缩放。<br><br>\n      <b>3. 更多设置（小按钮）：</b><br>\n      • 层级、比例、关节、发光、画布、主题依次排列，<b>点哪个按钮就展开哪个面板，再点一次收起</b>；固定 (IK) 已并入“关节”面板底部。<br>\n      • <b>比例</b>面板同时包含小手小脚参数。<br>\n      • <b>发光</b>面板同时包含高光、渐变、地面阴影、深色处理。<br>\n      • <b>画布</b>面板可设置画布边界与地面参考线，开启后导出仅保留画布内容；点击画布内部可选中画布，用“缩放”缩放，拖边框移动。可开启暗角遮罩并调节透明度。<br><br>\n      <b>4. 帧动画与高级设置：</b><br>\n      • 点右下角「<i data-icon='film'></i> 帧动画面板」，用「＋ 帧」或「复制帧」制作动画；补间按钮旁「▾」可切换缓动曲线，<b>「<i data-icon='aiming'></i> 分部」可为位置、缩放、旋转以及各个关节分别设置曲线</b>。<br>\n      • 补间支持<b>缩放与旋转</b>，旋转可跨越 360° 生成多圈转动（如 0°→360° 顺时针一圈，0°→-720° 逆时针两圈）。<br>\n      • 时间轴支持<b>多选复制</b>（勾选多选后按住 Shift 或连续点击可多选）。<br>\n      • 高级设置里可调节 FPS、洋葱皮、帧缩略图预览、导出 GIF / PNG 序列 / <b>WebM 视频（支持透明底）</b> / <b>MP4 视频（不支持透明底，可自定义背景色）</b>、导入参考视频，以及<b>全局属性修改</b>开关。<br>\n      • 快捷键：<code>C</code> 复制、<code>Delete</code> 删除、<code>空格</code> 播放/暂停、<code>方向键</code> 切换帧。<br><br>\n      <b>5. 保存与导出：</b><br>\n      • 本地预设可保存当前火柴人的外观与颜色；预设列表支持重命名与删除。<br>\n      • GIF / 视频支持透明底（视频需浏览器支持 WebM Alpha），iOS 端长按图片即可保存。\n    ",
   "uiResize.title": "按住拖拽调整大小，双击恢复默认",
-  "mobile.expand": "展开设置",
+  "mobile.expand": "控制面板",
   "timeline.prevTitle": "上一帧",
   "timeline.playTitle": "播放/暂停",
   "timeline.nextTitle": "下一帧",

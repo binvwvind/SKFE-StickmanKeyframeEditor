@@ -1676,9 +1676,10 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
       /* v7.0.5：padding 归零，safe-area 交给底部栏自己处理 */
       overscroll-behavior-y: contain; /* 防止长按拖动触发系统手势 */
     } /* 移动端面板样式结束 */
-    #ui.hidden { transform: translateY(calc(100% - 64px)); } /* 隐藏状态：向下平移，只留出顶部拖动条高度 */
-    #ui.hidden .bar { background: var(--text-sub); } /* 隐藏状态下拖动条颜色变深 */
-    #ui.hidden::after { display: none; } /* 隐藏状态下的伪元素隐藏 */
+    /* v7.2.1：收起 = 彻底隐藏，和「🎬 帧动画面板」的 toggleTimeline 完全一致。
+       原来是 translateY(calc(100% - 64px))，屏幕底部永远露一条 64px 的拖动条 + 半截面板，
+       既不是「收起」也不是「浮窗」，还挡住了画布下沿。 */
+    #ui.hidden { display: none; }
 
     /* v7.0.5：底部栏固定后，抽屉不再需要给右下角浮钮额外留白 —— 浮钮改由 JS 抬到底部栏上方 */
     #uiBottomBar { padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px)); }
@@ -1706,26 +1707,30 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
 
   } /* 移动端媒体查询结束 */
 
-  /* 手机端展开按钮：与动画面板展开按钮同款样式，位于控制面板左上角 */
+  /* v7.2.1：手机端「展开控制面板」浮窗。
+     位置和尺寸对齐右下角的「🎬 帧动画面板」浮钮 —— 一个在左下一个在右下，交互逻辑一致：
+     面板收起了就在这里出现，点它把面板拉出来；面板展开后按钮自动消失。 */
   #btnMobileExpand { /* 移动端展开面板按钮 */
-    display: none; /* 默认隐藏 */
+    display: none; /* 默认隐藏，由 JS / 相邻选择器控制 */
     position: fixed; /* 固定定位 */
-    left: 16px; /* 靠左 */
-    bottom: 92px; /* 在底部时间轴上方 */
-    z-index: 101; /* 层级 101 */
+    left: 20px; /* 靠左（与右下角浮钮对称） */
+    bottom: 40px; /* 贴屏幕下方，时间轴展开时由 JS 整体抬高 */
+    z-index: 101; /* 层级 101，压住面板与时间轴 */
     border-radius: var(--radius-chip); /* 胶囊圆角 */
-    padding: 5px 16px; min-height: 28px; /* 内边距，高度 */
-    font-size: 12px; font-weight: 600; /* 字号，加粗 */
+    padding: 10px 20px; min-height: 40px; /* 内边距，高度 — 与 #btnShowTimeline 一致 */
+    font-size: 14px; font-weight: 600; /* 字号，加粗 */
     background: var(--bg-panel); /* 面板色背景 */
     border: none; /* 无边框 */
     color: var(--color-primary); /* 主题色文字 */
     box-shadow: var(--shadow-float); /* 悬浮阴影 */
-    align-items: center; justify-content: center; /* 内容居中 */
+    align-items: center; gap: 8px; justify-content: center; /* 内容居中，图标与文字间距 */
     white-space: nowrap; cursor: pointer; /* 不换行，指针 */
   } /* 展开按钮基础样式结束 */
   #btnMobileExpand:hover { background: var(--btn-hover); color: var(--color-primary); } /* 悬浮背景色 */
+  #btnMobileExpand:active { transform: translateY(1px); } /* 点击时轻微下沉，和帧动画面板浮钮同款 */
   @media (max-width: 768px) { /* 移动端适配 */
-    #ui.hidden + #btnMobileExpand { display: flex; } /* 面板隐藏时显示展开按钮 */
+    /* 注意用 ~ 而不是 + ：#ui 和 #btnMobileExpand 之间还夹着 #uiResizeHandle */
+    #ui.hidden ~ #btnMobileExpand { display: flex; } /* 面板隐藏时显示展开按钮 */
   } /* 媒体查询结束 */
 
   @media (max-width: 768px) { /* 移动端局部样式适配 */
@@ -1899,8 +1904,7 @@ svg.skfe-ic { /* 直接由 SKFEIcon() 拼进 innerHTML 时用（后面总跟着�
   } /* 缩放手柄样式结束 */
   #uiResizeHandle:hover { opacity: 1; } /* 悬浮时完全不透明 */
   @media (max-width: 768px) { /* 移动端适配 */
-    #ui.ui-resizable { /* 开启自由缩放的移动端面板 */
-      border-radius: var(--radius-panel); /* 大面板圆角 */
-      border-bottom-left-radius: 0; /* 左下角无圆角 */
-    } /* 样式结束 */
+    /* v7.2.1：开了自由缩放后移动端面板不再固定贴底，可能被拖到屏幕中间，
+       四角统一用大圆角（原来只留左下角是直角，浮在画布上很割裂）。 */
+    #ui.ui-resizable { border-radius: var(--radius-panel) var(--radius-panel) 0 0; } /* 顶部圆角，底部贴边 */
   } /* 媒体查询结束 */

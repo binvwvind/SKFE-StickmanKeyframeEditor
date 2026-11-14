@@ -1,10 +1,16 @@
-# SKFE-Stickman-Keyframe-Editor---
-SKFE | Stickman Keyframe Editor -火柴人关键帧动画编辑器 For the Alan Becker stick figure fandom
+# SKFE | Stickman Keyframe Editor
+
+火柴人关键帧动画编辑器 —— For the Alan Becker stick figure fandom.
+
+**作者**：binvwvnid　│　**QQ 交流群**：1121039855　│　**版本**：v7.2.1
+
+- 网页版：https://binvwvnid.github.io/SKFE-StickmanKeyframeEditor/
+- 安装包（Windows / 安卓）：https://github.com/binvwvnid/SKFE-StickmanKeyframeEditor/releases
 
 > 开发者请看 **`项目结构.md`**：哪个文件该改、一键出包在哪、哪些目录别碰，都写在那里。
 > 下面这份是给最终用户看的操作教程。
 
-# SKFE 火柴人帧动画编辑器 v7.0.2 完全使用教程
+# SKFE 火柴人帧动画编辑器 v7.2.1 完全使用教程
 
 欢迎使用 SKFE！这是一款轻量且支持多轨道的火柴人帧动画编辑器。
 
@@ -204,3 +210,7 @@ SKFE | Stickman Keyframe Editor -火柴人关键帧动画编辑器 For the Alan 
 3. **橡皮擦提示受限？** 确保你选中了对象。橡皮擦只对当前选中的对象生效，并且关闭擦除模式时不会退出选择。
 4. **缩放时想保持比例？** 使用自由缩放，浏览器会自动记住你调整的面板尺寸（强制刷新浏览器即可看到记忆生效）。
 5. **避免画面抖动**：补间动画如果生成了不需要旋转的帧（例如原地不动），确保起始帧和结束帧的角度完全一致。
+
+---
+
+> Made by **binvwvnid** · [SKFE-StickmanKeyframeEditor](https://github.com/binvwvnid/SKFE-StickmanKeyframeEditor) · QQ 交流群 1121039855

@@ -1986,6 +1986,15 @@ function importActionPresets() {
   let uiResizable = localStorage.getItem('skfe_ui_resizable') === '1'; // 读取是否开启了自由缩放
   let uiCustomSize = null; // 新增：缓存的尺寸
   try { uiCustomSize = JSON.parse(localStorage.getItem('skfe_ui_size_v1')); } catch(_) {}
+  /* v7.2.1：自由缩放面板的**顶边位置**（px）。null = 用户还没拖过，按老规矩贴底。
+     起因是移动端 applyCustomSize() 里无条件写 bottom:0 / top:auto —— 而 resize() 每次都会
+     调它，用户把面板拖到半空，随便点一下别的地方就又被按回屏幕底部，
+     表现就是「开了自由缩放之后面板离不开底部」。 */
+  let uiCustomTop = null;
+  try {
+    const t = JSON.parse(localStorage.getItem('skfe_ui_top_v1'));
+    if (Number.isFinite(t)) uiCustomTop = t;
+  } catch(_) {}
   let uiStartLeft = 0, uiStartTop = 0, uiStartWidth = 0;
   let uiPanelDragged = false;
   const uiDragHandle = document.getElementById('uiDragHandle');
@@ -2027,14 +2036,31 @@ function importActionPresets() {
       const timelineVisible = getComputedStyle(timelineEl).display !== 'none';
       // 判断时间轴是否在底部，如果在顶部则不留底部空隙
       const bottomOffset = (timelineDock === 'bottom' && timelineVisible) ? (TIMELINE_H || 100) : 0;
-      const maxTop = window.innerHeight - bottomOffset - 50;
-      const nt = Math.max(10, Math.min(maxTop, uiStartTop + dy));
-      uiPanel.style.left = '0';
-      uiPanel.style.right = '0';
-      uiPanel.style.width = '100%';
-      uiPanel.style.top = nt + 'px';
-      uiPanel.style.bottom = bottomOffset + 'px'; // 精准贴底
-      uiPanel.style.maxHeight = Math.max(120, window.innerHeight - nt - bottomOffset) + 'px';
+      if (uiResizable && uiCustomSize) {
+        /* v7.2.1：开了自由缩放 —— 宽高是用户定的，拖动**只改位置**。
+           顶边可以在整块可视区里自由移动（不再被 bottom:0 拴在底部），
+           否则「自由缩放」和「不能离开底部」这对组合就是个笑话。 */
+        const ch = uiCustomSize.h;
+        const maxTop = Math.max(0, window.innerHeight - Math.min(ch, window.innerHeight));
+        const nt = Math.max(0, Math.min(maxTop, uiStartTop + dy));
+        uiCustomTop = nt;
+        uiPanel.style.left = '0';
+        uiPanel.style.right = 'auto';
+        uiPanel.style.width = uiCustomSize.w + 'px';
+        uiPanel.style.top = nt + 'px';
+        uiPanel.style.bottom = 'auto';
+        uiPanel.style.height = ch + 'px';
+        uiPanel.style.maxHeight = 'none';
+      } else {
+        const maxTop = window.innerHeight - bottomOffset - 50;
+        const nt = Math.max(10, Math.min(maxTop, uiStartTop + dy));
+        uiPanel.style.left = '0';
+        uiPanel.style.right = '0';
+        uiPanel.style.width = '100%';
+        uiPanel.style.top = nt + 'px';
+        uiPanel.style.bottom = bottomOffset + 'px'; // 精准贴底
+        uiPanel.style.maxHeight = Math.max(120, window.innerHeight - nt - bottomOffset) + 'px';
+      }
       uiPanelDragged = true;
     } else {
       const maxL = window.innerWidth - 60;
@@ -2056,6 +2082,10 @@ function importActionPresets() {
       uiDragMode = null;
       uiPanel.style.transition = 'transform .3s ease, bottom .3s ease'; // 松手后恢复动画
       try { uiDragHandle.releasePointerCapture(e.pointerId); } catch (_) {}
+      /* v7.2.1：记住拖到的位置，刷新页面 / 关了再开自由缩放都能还原 */
+      if (isMobile && uiResizable && Number.isFinite(uiCustomTop)) {
+        try { localStorage.setItem('skfe_ui_top_v1', JSON.stringify(Math.round(uiCustomTop))); } catch (_) {}
+      }
     }
   };
   uiDragHandle.addEventListener('pointerup', endUiDrag);
@@ -2094,13 +2124,25 @@ function importActionPresets() {
   function applyCustomSize() {
     if (!uiResizable || !uiCustomSize) return;
     if (isMobile) {
+      const cw = uiCustomSize.w, chh = uiCustomSize.h;
       uiPanel.style.left = '0';
       uiPanel.style.right = 'auto';
-      uiPanel.style.top = 'auto';
-      uiPanel.style.bottom = '0';
-      uiPanel.style.width = uiCustomSize.w + 'px';
-      uiPanel.style.height = uiCustomSize.h + 'px';
+      uiPanel.style.width = cw + 'px';
+      uiPanel.style.height = chh + 'px';
       uiPanel.style.maxHeight = 'none';
+      /* v7.2.1：位置。用户拖过就还原他拖到的顶边（并夹回可视区），没拖过才贴底。
+         原来这里无条件 top:auto / bottom:0 —— 而 resize() 每次都会走到这儿，
+         于是「拖到半空 → 点一下别处 → 面板又滑回底部」。 */
+      if (Number.isFinite(uiCustomTop)) {
+        const maxTop = Math.max(0, window.innerHeight - Math.min(chh, window.innerHeight));
+        const top = Math.max(0, Math.min(maxTop, uiCustomTop));
+        uiCustomTop = top;
+        uiPanel.style.top = top + 'px';
+        uiPanel.style.bottom = 'auto';
+      } else {
+        uiPanel.style.top = 'auto';
+        uiPanel.style.bottom = '0';
+      }
     } else {
       uiPanel.style.width = uiCustomSize.w + 'px';
       uiPanel.style.height = uiCustomSize.h + 'px';
@@ -2111,7 +2153,9 @@ function importActionPresets() {
 
   // 实时更新右下角手柄的位置（让手柄紧贴面板右下角）
   function updateResizeHandlePos() {
-    if (!uiResizable || isPanelLocked || !uiResizeHandle) {
+    /* v7.2.1：面板被 display:none 收起时（移动端），getBoundingClientRect 全是 0，
+       手柄会被塞到屏幕左上角外，先算出来再说就晚了 —— 直接藏掉。 */
+    if (!uiResizable || isPanelLocked || !uiResizeHandle || !uiPanel.getClientRects().length) {
       if (uiResizeHandle) uiResizeHandle.style.display = 'none';
       return;
     }
@@ -2163,11 +2207,19 @@ function importActionPresets() {
       newH = Math.max(150, Math.min(window.innerHeight - 50, newH));
 
       if (isMobile) {
+        /* v7.2.1：以**顶边**为锚点缩放 —— 手柄拖的是右下角，底边跟着手走，顶边不动。
+           原来这里写死 bottom:0 / top:auto，一拖高度面板就被钉回屏幕底部，
+           用户在屏幕中间调完尺寸，面板直接掉下去，还再也拉不回来。 */
+        const topPx = Number.isFinite(uiCustomTop)
+          ? uiCustomTop
+          : Math.max(0, window.innerHeight - resizeDragState.startH);
+        newH = Math.max(150, Math.min(window.innerHeight - topPx, newH));
+        uiCustomTop = topPx;
         uiPanel.style.left = '0';
         uiPanel.style.right = 'auto';
         uiPanel.style.width = newW + 'px';
-        uiPanel.style.bottom = '0';
-        uiPanel.style.top = 'auto';
+        uiPanel.style.top = topPx + 'px';
+        uiPanel.style.bottom = 'auto';
         uiPanel.style.height = newH + 'px';
         uiPanel.style.maxHeight = 'none';
       } else {
@@ -2185,6 +2237,9 @@ function importActionPresets() {
       const rect = uiPanel.getBoundingClientRect();
       uiCustomSize = { w: Math.round(rect.width), h: Math.round(rect.height) };
       try { localStorage.setItem('skfe_ui_size_v1', JSON.stringify(uiCustomSize)); } catch(_) {}
+      if (isMobile && Number.isFinite(uiCustomTop)) {
+        try { localStorage.setItem('skfe_ui_top_v1', JSON.stringify(Math.round(uiCustomTop))); } catch(_) {}
+      }
     };
     uiResizeHandle.addEventListener('pointerup', endResize);
     uiResizeHandle.addEventListener('pointercancel', endResize);
@@ -2192,10 +2247,14 @@ function importActionPresets() {
     uiResizeHandle.addEventListener('dblclick', (e) => {
       e.preventDefault(); e.stopPropagation();
       uiCustomSize = null;
+      uiCustomTop = null; /* v7.2.1：位置也一并复位，否则双击后还悬在半空 */
       localStorage.removeItem('skfe_ui_size_v1');
+      localStorage.removeItem('skfe_ui_top_v1');
       uiPanel.style.width = '';
       uiPanel.style.height = '';
       uiPanel.style.maxHeight = '';
+      uiPanel.style.top = '';
+      uiPanel.style.bottom = '';
       syncResizeUI();
       showHistoryToast('已恢复面板默认大小', 'undo');
     });
@@ -2229,49 +2288,37 @@ function importActionPresets() {
   /* ==================== 移动端 UI ==================== */
   const btnMobileExpand = document.getElementById('btnMobileExpand');
 
+  /* v7.2.1：移动端控制面板的展开/收起统一入口，行为**完全对齐「🎬 帧动画面板」**：
+       收起 → #ui 直接 display:none（不再留一条 64px 的拖动条），左下角出现同款浮窗按钮；
+       展开 → 面板回来，浮窗按钮消失。
+     原来收起态是 translateY(calc(100% - 64px)) 的半截抽屉，底部永远露着一条拖动条
+     和半屏面板的边，既不算收起也不算浮窗，还压住画布下沿。 */
+  function toggleUiPanel(show) {
+    if (!isMobile) return;
+    const open = !!show;
+    uiPanel.classList.toggle('hidden', !open);
+    if (btnToggleUI) btnToggleUI.textContent = open ? '收起' : '展开';
+    if (btnMobileExpand) btnMobileExpand.style.display = open ? 'none' : 'flex';
+    document.body.classList.toggle('ui-open', open);
+    /* 收起时把「元件」浮窗一起关掉，别让它孤零零浮在画布上 */
+    if (!open) setLayerPopOpen(false);
+    /* 面板隐藏/显示之后，画布可用区、浮钮位置、缩放手柄全部要重算 */
+    refreshTimelineDockOffsets();
+    resize();
+    if (open) updateResizeHandlePos();
+  }
+
   if (isMobile) {
     btnToggleUI.style.display = 'block';
+    /* 默认收起 —— 手机上屏幕就这么高，一上来就盖掉半屏画布不合适 */
     uiPanel.classList.add('hidden');
-    /* v6.0：面板默认收起，必须同时给出「展开」入口，否则手机上找不到设置面板 */
     if (btnMobileExpand) btnMobileExpand.style.display = 'flex';
-    uiPanel.addEventListener('click', (e) => {
-      const collapsed = uiPanel.classList.contains('hidden');
-      /* 收起状态下点拖动条/空白处都应展开；展开状态下这些区域交给拖动逻辑，不抢事件 */
-      if (!collapsed && (e.target.closest('#uiDragHandle') || e.target.closest('button') || e.target.closest('input') ||
-          e.target.closest('select') || e.target.closest('details') || e.target.closest('label'))) return;
-      if (collapsed) {
-        uiPanel.classList.remove('hidden');
-        btnToggleUI.textContent = '收起';
-        btnMobileExpand.style.display = 'none';
-        document.body.classList.add('ui-open');   /* 展开时让底部浮动按钮让位 */
-        setTimeout(resize, 0);                    /* 让 70vh 的面板高度规则立即生效 */
-        setTimeout(refreshTimelineDockOffsets, 120);
-        setTimeout(refreshTimelineDockOffsets, 340);
-      }
-    });
-    btnToggleUI.addEventListener('click', (e) => {
-      e.stopPropagation();
-      uiPanel.classList.add('hidden');
-      btnToggleUI.textContent = '展开';
-      btnMobileExpand.style.display = 'flex';
-      document.body.classList.remove('ui-open');
-      /* v6.3.0：抽屉收起时元件浮窗一起关掉，别让它孤零零浮在画布上 */
-      setLayerPopOpen(false);
-      /* v6.3.0：收起后把「🎬 帧动画面板」浮钮放回默认位置 */
-      refreshTimelineDockOffsets();
-      setTimeout(refreshTimelineDockOffsets, 340);
-    });
-    btnMobileExpand.addEventListener('click', (e) => {
-      e.stopPropagation();
-      uiPanel.classList.remove('hidden');
-      btnToggleUI.textContent = '收起';
-      btnMobileExpand.style.display = 'none';
-      document.body.classList.add('ui-open');
-      setTimeout(resize, 0);
-      /* 抽屉高度有 .3s 过渡，过渡结束后再量一次，浮钮才不会停在半路 */
-      setTimeout(refreshTimelineDockOffsets, 120);
-      setTimeout(refreshTimelineDockOffsets, 340);
-    });
+    btnToggleUI.addEventListener('click', (e) => { e.stopPropagation(); toggleUiPanel(false); });
+    if (btnMobileExpand) {
+      btnMobileExpand.addEventListener('click', (e) => { e.stopPropagation(); toggleUiPanel(true); });
+    }
+    /* 注：原来「点收起状态的面板空白处展开」那条监听已经删掉 —— 收起是 display:none，
+       点不到。入口统一走左下角浮窗，和帧动画面板一个交互。 */
     setTimeout(resize, 100);
     const tip = document.createElement('div');
     tip.innerHTML = ic('tips') + '双指拖动平移，捏合缩放';
@@ -12031,7 +12078,8 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     if (pointers.size > 2) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (e.target.closest('#transformBoxUI') || e.target.closest('#ui') || e.target.closest('#timeline') ||
-        e.target.closest('#btnShowTimeline') || e.target.closest('#historyControls') ||
+        e.target.closest('#btnShowTimeline') || e.target.closest('#btnMobileExpand') ||
+        e.target.closest('#uiResizeHandle') || e.target.closest('#historyControls') ||
         e.target.closest('#layerPop')) return;
 
     const p = getPos(e);
@@ -14660,6 +14708,14 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       }
     }
 
+    /* v7.2.1：左下角「展开控制面板」浮窗，规则和右边那颗「🎬 帧动画面板」浮钮一致 ——
+       时间轴贴底展开时抬到时间轴上方，否则回到 CSS 的 bottom:40px。
+       放在 uiResizable 的提前 return 之前，自由缩放态也要跟着时间轴让位。 */
+    if (isMobile) {
+      const expandBtn = document.getElementById('btnMobileExpand');
+      if (expandBtn) expandBtn.style.bottom = (timelineDock === 'bottom' && visible) ? (h + 8) + 'px' : '';
+    }
+
     // 【修复】不论是否开启了自由缩放，桌面端顶部停靠时先把 UI 面板往下推，否则会被时间轴压住
     if (!isMobile && ui) {
       const baseTop = 14;
@@ -14676,37 +14732,30 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
     if (uiResizable) return; // 防冲突：自由缩放的其余逻辑不需要重复执行
 
     // 移动端底部抽屉
-    if (isMobile) {
-      const expand = document.getElementById('btnMobileExpand');
-      const isUiHidden = ui && ui.classList.contains('hidden');
-      
+    if (isMobile && ui) {
+      const isUiHidden = ui.classList.contains('hidden');
+
       let bottomOffset = 0;
       if (timelineDock === 'bottom' && visible) {
         bottomOffset = h;
       }
 
-      if (ui) {
-        ui.style.bottom = (isUiHidden ? 0 : bottomOffset) + 'px';
-        if (!isUiHidden) {
-          if (!uiPanelDragged) {
-            ui.style.top = 'auto';
-            /* v7.0.5：高度交给 CSS 的 height:50vh（写死高度，切分区不塌缩），这里只保证清掉拖拽残留 */
-            ui.style.height = '';
-            ui.style.maxHeight = '50vh';
-          } else {
-            const topPx = parseFloat(ui.style.top) || 60;
-            const hh = Math.max(120, window.innerHeight - topPx - bottomOffset);
-            ui.style.height = hh + 'px';     /* 手动拖高时用内联高度覆盖 CSS */
-            ui.style.maxHeight = hh + 'px';
-          }
+      ui.style.bottom = (isUiHidden ? 0 : bottomOffset) + 'px';
+      if (!isUiHidden) {
+        if (!uiPanelDragged) {
+          ui.style.top = 'auto';
+          /* v7.0.5：高度交给 CSS 的 height:50vh（写死高度，切分区不塌缩），这里只保证清掉拖拽残留 */
+          ui.style.height = '';
+          ui.style.maxHeight = '50vh';
         } else {
-          ui.style.height = '';              /* 收起状态清掉内联高度，回到 CSS 的 50vh */
-          ui.style.maxHeight = '';
+          const topPx = parseFloat(ui.style.top) || 60;
+          const hh = Math.max(120, window.innerHeight - topPx - bottomOffset);
+          ui.style.height = hh + 'px';     /* 手动拖高时用内联高度覆盖 CSS */
+          ui.style.maxHeight = hh + 'px';
         }
-      }
-      
-      if (expand) {
-        expand.style.bottom = (isUiHidden ? 0 : bottomOffset + 64 + 8) + 'px';
+      } else {
+        ui.style.height = '';              /* 收起状态清掉内联高度，回到 CSS 的 50vh */
+        ui.style.maxHeight = '';
       }
     }
   }

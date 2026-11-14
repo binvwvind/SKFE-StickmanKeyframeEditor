@@ -1,7 +1,7 @@
 /* SKFE locale: English */
 window.SKFE_LOCALES = window.SKFE_LOCALES || {};
 window.SKFE_LOCALES['en'] = {
-  "app.title": "SKFE | Stickman Keyframe Editor v7.2.0",
+  "app.title": "SKFE | Stickman Keyframe Editor v7.2.1",
   "tbox.move": "Drag to move the whole object",
   "tbox.scale": "Drag to scale proportionally (enable Free Stretch to scale X/Y separately)",
   "tbox.rotate": "Drag to rotate",
@@ -23,8 +23,8 @@ window.SKFE_LOCALES['en'] = {
   "cameraPreview.closeTitle": "Close preview",
   "cameraPreview.hint": "Always shows the camera export view for the current frame",
   "timeline.show": "Frame panel",
-  "watermark.title": "SKFE | Stickman Keyframe Editor v7.2.0",
-  "watermark.author": "Author: binvwvind · QQ group: 1121039855",
+  "watermark.title": "SKFE | Stickman Keyframe Editor v7.2.1",
+  "watermark.author": "by binvwvnid · QQ group: 1121039855",
   "panel.title": "Control panel",
   "lang.toggle": "EN/中",
   "export.hd": "HD export (4× resolution)",
@@ -301,7 +301,7 @@ window.SKFE_LOCALES['en'] = {
   "preset.tips": "<i data-icon=\"tips\"></i> Click an item in the layer list to select it; selections are independent.<br><i data-icon=\"layers\"></i> Every limb has its own absolute layer number, so they can cross freely.",
   "help.summary": "Quick guide (click to expand)",
   "uiResize.title": "Hold and drag to resize; double-click to restore the default",
-  "mobile.expand": "Expand settings",
+  "mobile.expand": "Control panel",
   "timeline.prevTitle": "Previous frame",
   "timeline.playTitle": "Play/Pause",
   "timeline.nextTitle": "Next frame",

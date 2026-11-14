@@ -71,9 +71,7 @@
   let currentColor = '#111111';
   let currentLW = 10.5;
 
-  let groundShadowEnabled = false;
-  let shadowColor = '#000000';
-  let shadowAlpha = 0.3;
+  /* v7.2.1：地面阴影不再是工程级全局量，已搬到每个火柴人的 shadow* 字段上 */
   let shadowEditMode = false;
 
   let groundLineEnabled = false;
@@ -705,7 +703,6 @@ function syncDistortToAllFrames(obj) {
       frames: serializeFrames(),
       tracks: serializeTracks(),
       currentFrameIndex: AppState.currentFrameIndex, defaultFPS,
-      groundShadowEnabled, shadowColor, shadowAlpha,
       groundLineEnabled, groundLineY,
       onionEnabled, onionBefore, onionAfter,
       canvasBounds: AppState.canvasBounds, canvasBoundsEnabled: AppState.canvasBoundsEnabled,
@@ -730,9 +727,6 @@ function syncDistortToAllFrames(obj) {
       if (AppState.activeTrackId !== TRACK_ALL_ID && !AppState.tracks[AppState.activeTrackId]) AppState.activeTrackId = TRACK_ALL_ID;
       AppState.objects = getCombinedObjectsForRender();
       defaultFPS = data.defaultFPS || 12;
-      groundShadowEnabled = data.groundShadowEnabled || false;
-      shadowColor = data.shadowColor || '#000000';
-      shadowAlpha = data.shadowAlpha !== undefined ? data.shadowAlpha : 0.3;
       groundLineEnabled = data.groundLineEnabled || false;
       groundLineY = data.groundLineY !== undefined ? data.groundLineY : 400;
       onionEnabled = data.onionEnabled || false;
@@ -800,7 +794,6 @@ function syncDistortToAllFrames(obj) {
         frames: serializeFrames(),
         tracks: serializeTracks(),
         currentFrameIndex: AppState.currentFrameIndex, defaultFPS,
-        groundShadowEnabled, shadowColor, shadowAlpha,
         groundLineEnabled, groundLineY,
         onionEnabled, onionBefore, onionAfter,
         canvasBounds: AppState.canvasBounds, canvasBoundsEnabled: AppState.canvasBoundsEnabled,
@@ -856,7 +849,6 @@ function syncDistortToAllFrames(obj) {
       canvasBounds: AppState.canvasBounds, canvasBoundsEnabled: AppState.canvasBoundsEnabled, canvasBaseBounds,
       canvasMaskEnabled, canvasMaskAlpha,
       canvasMaskBgColor, canvasMaskGridColor, // 新增
-      groundShadowEnabled, shadowColor, shadowAlpha,
       groundLineEnabled, groundLineY,
       gridEnabled, gridSize, pageBgColor,
       onionEnabled, onionBefore, onionAfter,
@@ -892,9 +884,6 @@ function syncDistortToAllFrames(obj) {
         if (data.canvasMaskAlpha !== undefined) canvasMaskAlpha = data.canvasMaskAlpha;
         if (data.canvasMaskBgColor !== undefined) canvasMaskBgColor = data.canvasMaskBgColor; // 新增
         if (data.canvasMaskGridColor !== undefined) canvasMaskGridColor = data.canvasMaskGridColor; // 新增
-        groundShadowEnabled = !!data.groundShadowEnabled;
-        if (data.shadowColor) shadowColor = data.shadowColor;
-        if (data.shadowAlpha !== undefined) shadowAlpha = data.shadowAlpha;
         groundLineEnabled = !!data.groundLineEnabled;
         if (data.groundLineY !== undefined) groundLineY = data.groundLineY;
         if (data.gridEnabled !== undefined) gridEnabled = !!data.gridEnabled;
@@ -1282,7 +1271,10 @@ function syncDistortToAllFrames(obj) {
       depth: JSON.parse(JSON.stringify(AppState.selected.depth || { enabled: false, useCustom: false, customColor: '#555555' })),
       ikEnabled: AppState.selected.ikEnabled,
       shadowOffX: AppState.selected.shadowOffX || 0, shadowOffY: AppState.selected.shadowOffY || 0,
-      shadowScaleX: AppState.selected.shadowScaleX || 1, shadowScaleY: AppState.selected.shadowScaleY || 1
+      shadowScaleX: AppState.selected.shadowScaleX || 1, shadowScaleY: AppState.selected.shadowScaleY || 1,
+      shadowEnabled: !!AppState.selected.shadowEnabled,
+      shadowColor: AppState.selected.shadowColor || '#000000',
+      shadowAlpha: AppState.selected.shadowAlpha == null ? 0.3 : AppState.selected.shadowAlpha
     };
     const boundAccs = AppState.objects.filter(o => o.type === 'acc' && o.targetId === AppState.selected.id);
     const accessories = boundAccs.map(acc => ({
@@ -1328,6 +1320,9 @@ function syncDistortToAllFrames(obj) {
     f.shadowOffX = d.shadowOffX || 0; f.shadowOffY = d.shadowOffY || 0;
     f.shadowScaleX = d.shadowScaleX !== undefined ? d.shadowScaleX : 1;
     f.shadowScaleY = d.shadowScaleY !== undefined ? d.shadowScaleY : 1;
+    f.shadowEnabled = !!d.shadowEnabled;
+    f.shadowColor = d.shadowColor || '#000000';
+    f.shadowAlpha = d.shadowAlpha != null ? d.shadowAlpha : 0.3;
     if (f.light.size === undefined) f.light.size = 1.0;
     if (f.light.angle === undefined) f.light.angle = 315;
     generateName(f);
@@ -2427,6 +2422,8 @@ function importActionPresets() {
       x, y, color: color || '#111111', lw: lw || 10.5,
       alpha: 1, scale: 2, locked: false,
       rot: 0, mirror: false,
+      /* v7.2.1：地面阴影从「工程级全局开关」搬到每个火柴人身上，才能分别打关键帧 */
+      shadowEnabled: false, shadowColor: '#000000', shadowAlpha: 0.3,
       shadowOffX: 0, shadowOffY: 0, shadowScaleX: 1, shadowScaleY: 1,
       headFilled: false, headFillCustom: false, headFillColor: '#111111',
       headShape: 'TCO',   /* v7.0.4：默认头型改成 TCO（'circle' | 'Vic' | 'TCO' | 'TDL' | 'TSC'） */
@@ -3394,7 +3391,7 @@ function importActionPresets() {
       margin += Math.max(gb * 2.5, 0) + gs + Math.max(gx, gy);
     }
     if (f.light && f.light.enabled) margin += 2 * (f.light.size || 1) + 4;
-    if (groundShadowEnabled) margin += 48;
+    if (f.shadowEnabled) margin += 48;
 
     const ex = {
       w: fr.w + margin * 2,
@@ -3589,10 +3586,10 @@ function importActionPresets() {
       });
     }
 
-    if (!isGhost && groundShadowEnabled) {
+    if (!isGhost && f.shadowEnabled) {
       const drawGroundShadow = () => {
         ctx.save();
-        ctx.globalAlpha = f.alpha * shadowAlpha * alphaMul;
+        ctx.globalAlpha = f.alpha * (f.shadowAlpha == null ? 0.3 : f.shadowAlpha) * alphaMul;
         const lowestY = Math.max(j.footL.y, j.footR.y, j.toeL.y, j.toeR.y);
         const shadowX = f.x + (f.shadowOffX || 0);
         const shadowY = lowestY + 10 + (f.shadowOffY || 0);
@@ -3601,10 +3598,11 @@ function importActionPresets() {
         ctx.translate(shadowX, shadowY);
         ctx.scale(rx, ry);
         let r = 0, g = 0, b = 0;
-        if (shadowColor.startsWith('#')) {
-          r = parseInt(shadowColor.slice(1, 3), 16) || 0;
-          g = parseInt(shadowColor.slice(3, 5), 16) || 0;
-          b = parseInt(shadowColor.slice(5, 7), 16) || 0;
+        const sCol = f.shadowColor || '#000000';
+        if (sCol.startsWith('#')) {
+          r = parseInt(sCol.slice(1, 3), 16) || 0;
+          g = parseInt(sCol.slice(3, 5), 16) || 0;
+          b = parseInt(sCol.slice(5, 7), 16) || 0;
         }
         const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
         grad.addColorStop(0, `rgba(${r},${g},${b},1)`);
@@ -7658,7 +7656,8 @@ function importActionPresets() {
     const st = mainKeyStateAt(AppState.currentFrameIndex);
     btn.classList.toggle('kf-on', st === 'all');
     btn.classList.toggle('kf-partial-on', st === 'partial');
-    const base = (SKFE.i18n && SKFE.i18n.t) ? (SKFE.i18n.t('timeline.keyframeTitle') || '把当前帧设为 / 取消关键帧') : '把当前帧设为 / 取消关键帧';
+    /* v7.2.1：i18n 实际挂在 window.t / window.SKFE_I18N 上，SKFE.i18n 一直是 undefined */
+    const base = (typeof window.t === 'function' ? window.t('timeline.keyframeTitle') : '') || '把当前帧设为 / 取消关键帧';
     if (st === 'all') btn.title = '这一帧已是关键帧，点一下取消（只取消主轨广播的锚点）';
     else if (st === 'partial') {
       const names = kfPartialNames(AppState.currentFrameIndex);
@@ -7833,6 +7832,7 @@ function importActionPresets() {
 
   function updateFrameBar() {
     syncMainLengthFromTracks();
+    syncTweenButtonLabel();   /* v7.2.1：段内/段外决定按钮是「插 N 帧」还是「补间 N 帧」 */
     refreshSubTrackOptions();
     const bar = document.getElementById('frameBar');
     const scrubber = document.getElementById('timelineScrubber');
@@ -9318,6 +9318,14 @@ function importActionPresets() {
     while (diff < -Math.PI) diff += Math.PI * 2;
     return a + diff * t;
   }
+  /* v7.2.1：角度制（0-360）最短弧插值 —— 侧面高光的「高光方向」滑条用的是角度，
+     350° → 10° 应该走 20° 的小弧，而不是反向绕 340°。 */
+  function lerpAngleDeg(a, b, t) {
+    let diff = b - a;
+    while (diff > 180) diff -= 360;
+    while (diff < -180) diff += 360;
+    return a + diff * t;
+  }
 
   function buildTweenFrames(f1, f2, count, trackId, i1, i2) {
     const targetTrackId = (trackId != null && trackId !== TRACK_ALL_ID) ? String(trackId) : null;
@@ -9384,9 +9392,44 @@ function importActionPresets() {
             g.offsetY = (o1.glow.offsetY || 0) + ((o2.glow.offsetY || 0) - (o1.glow.offsetY || 0)) * tt;
             g.alpha = (o1.glow.alpha == null ? 1 : o1.glow.alpha) + ((o2.glow.alpha == null ? 1 : o2.glow.alpha) - (o1.glow.alpha == null ? 1 : o1.glow.alpha)) * tt;
             g.enabled = !!o1.glow.enabled;
+            g.includeAcc = !!o1.glow.includeAcc;   /* v7.2.1：离散量，取起点 */
             g.color = obj.glow.color || o1.glow.color || '#000000';
           }
           if (o1.joint && o1.joint.color && o2.joint && o2.joint.color) obj.joint.color = lerpColor(o1.joint.color, o2.joint.color, tt);
+          /* v7.2.1：侧面高光的粗细 / 方向、手部渐变的起始位置，以前补间是硬跳的 */
+          if (o1.light && o2.light) {
+            const l = obj.light = obj.light || {};
+            l.enabled = !!o1.light.enabled;
+            const s1 = o1.light.size == null ? 1 : o1.light.size;
+            const s2 = o2.light.size == null ? 1 : o2.light.size;
+            l.size = s1 + (s2 - s1) * tt;
+            const a1 = o1.light.angle == null ? 0 : o1.light.angle;
+            const a2 = o2.light.angle == null ? 0 : o2.light.angle;
+            l.angle = lerpAngleDeg(a1, a2, tt);
+          }
+          if (o1.joint && o2.joint) {
+            const jj = obj.joint = obj.joint || {};
+            jj.enabled = !!o1.joint.enabled;
+            const n1 = o1.joint.len == null ? 0.5 : o1.joint.len;
+            const n2 = o2.joint.len == null ? 0.5 : o2.joint.len;
+            jj.len = n1 + (n2 - n1) * tt;
+          }
+          /* v7.2.1：地面阴影（每个火柴人独立）也参与补间 */
+          if (o1.shadowEnabled !== undefined || o2.shadowEnabled !== undefined) {
+            obj.shadowEnabled = !!o1.shadowEnabled;
+            obj.shadowColor = lerpColor(o1.shadowColor || '#000000', o2.shadowColor || o1.shadowColor || '#000000', tt);
+            const al1 = o1.shadowAlpha == null ? 0.3 : o1.shadowAlpha;
+            const al2 = o2.shadowAlpha == null ? 0.3 : o2.shadowAlpha;
+            obj.shadowAlpha = al1 + (al2 - al1) * tt;
+            const sx1 = o1.shadowScaleX == null ? 1 : o1.shadowScaleX;
+            const sx2 = o2.shadowScaleX == null ? 1 : o2.shadowScaleX;
+            obj.shadowScaleX = sx1 + (sx2 - sx1) * tt;
+            const sy1 = o1.shadowScaleY == null ? 1 : o1.shadowScaleY;
+            const sy2 = o2.shadowScaleY == null ? 1 : o2.shadowScaleY;
+            obj.shadowScaleY = sy1 + (sy2 - sy1) * tt;
+            obj.shadowOffX = (o1.shadowOffX || 0) + ((o2.shadowOffX || 0) - (o1.shadowOffX || 0)) * tt;
+            obj.shadowOffY = (o1.shadowOffY || 0) + ((o2.shadowOffY || 0) - (o1.shadowOffY || 0)) * tt;
+          }
           if (o1.depth && o2.depth) {
             if (!obj.depth) obj.depth = {};
             obj.depth.enabled = tt < 0.5 ? o1.depth.enabled : o2.depth.enabled;
@@ -10019,20 +10062,89 @@ function importActionPresets() {
 
   /* 段内插入 N 帧：只改变段的长度，不生成任何画面数据。
      段内的槽位插派生帧（由两端关键帧实时求值），段外维持原来的克隆行为。 */
+  /* v7.2.1：这个按钮的文案跟着「段内 / 段外」变 ——
+       段内（后面还有关键帧）→「插 N 帧」：插的是派生帧，画面由两端关键帧算出来；
+       段外且有下一帧        →「补间 N 帧」：在当前帧和下一帧之间补出过渡帧（老补间行为）；
+       已经是最后一帧        →「插 N 帧」：没有终点可补，只能是复制当前帧往后续。 */
+  function syncTweenButtonLabel() {
+    const btn = document.getElementById('btnTween');
+    if (!btn) return;
+    const span = btn.querySelector('[data-i18n="timeline.insertFrames"],[data-i18n="timeline.tweenFrames"]');
+    if (!span) return;
+    const idx = AppState.currentFrameIndex;
+    let anySeg = false;
+    for (const id in AppState.tracks) {
+      const t = AppState.tracks[id];
+      if (t && t.frames && segmentAhead(t.frames, idx)) { anySeg = true; break; }
+    }
+    const isTween = !anySeg && idx < AppState.frames.length - 1;
+    const key = isTween ? 'timeline.tweenFrames' : 'timeline.insertFrames';
+    const tr = (k) => (typeof window.t === 'function' ? window.t(k) : k);
+    if (span.getAttribute('data-i18n') !== key) {
+      span.setAttribute('data-i18n', key);
+      span.textContent = tr(key);
+    }
+    const titleKey = isTween ? 'timeline.tweenFramesTitle' : 'timeline.insertFramesTitle';
+    if (btn.getAttribute('data-i18n-title') !== titleKey) {
+      btn.setAttribute('data-i18n-title', titleKey);
+      btn.title = tr(titleKey);
+    }
+  }
+
+  /* v7.2.1：段外补间 —— 当前帧后面没有关键帧、但后面还有帧时，
+     在当前帧和**下一帧**之间补出 N 帧过渡（这才是 v7.0 之前「补间」按钮的老行为）。
+     原来这里是把当前帧克隆 N 份（续帧），用户摆好两端姿势后按插帧只会得到一叠静止画面。 */
+  function insertTweenAfter(idx, count) {
+    const ids = Object.keys(AppState.tracks);
+    const tweenFrames = buildTweenFrames(AppState.frames[idx], AppState.frames[idx + 1], count, null, idx, idx + 1);
+    if (!tweenFrames || !tweenFrames.length) return false;
+    let insertPos = idx + 1;
+    for (const nf of tweenFrames) {
+      AppState.frames.splice(insertPos, 0, { id: nf.id, duration: nf.duration, isTween: false });
+      for (const id of ids) {
+        const t = AppState.tracks[id];
+        if (!t) continue;
+        if (!t.frames) t.frames = [];
+        while (t.frames.length < insertPos) t.frames.push(null);
+        if (segmentAhead(t.frames, idx)) {
+          /* 这条轨道后面还有关键帧 → 继续插派生帧，别把它的插值烘死成静态画面 */
+          t.frames.splice(insertPos, 0, KF.DERIVED_SLOT);
+        } else {
+          const src = nf.objects ? (nf.objects.find(o => String(o.id) === id) || null) : null;
+          /* stripFrameMarks 会剥掉 __k / __d，补出来的帧是普通帧，不是关键帧 */
+          t.frames.splice(insertPos, 0, src ? KF.stripFrameMarks(src) : null);
+        }
+      }
+      insertPos++;
+      syncMainLengthFromTracks();
+    }
+    reconcileAllTracks();
+    trimTrailingEmptyFrames();
+    AppState.objects = getCombinedObjectsForRender();
+    if (isSubTrackMode()) AppState.selected = getActiveTrackObject();
+    invalidateAllFrameThumbs();
+    updateFrameBar();
+    seekVideoToFrame(AppState.currentFrameIndex);
+    EventBus.emit('need:render'); EventBus.emit('need:syncUI');
+    EventBus.emit('history:save', '补间');
+    return true;
+  }
+
   function insertFramesInSegment(count) {
     const idx = AppState.currentFrameIndex;
     const at = idx + 1;
     if (isPlaying) pause();
     syncFrameRef();
     const ids = Object.keys(AppState.tracks);
-    /* v7.2.0：补间回归 —— 段外也允许插帧，不再弹提示拦下来。
-       段内（当前帧后面还有一个关键帧）→ 插派生帧，中间画面由两端关键帧自动补出来；
-       段外（后面没有关键帧，或当前帧本身不在任何段里）→ 克隆当前帧当普通帧，
-       于是可以一帧一帧地往下一帧之前续，先摆位、再补间。 */
+    /* v7.2.0：段外也允许插帧，不再弹提示拦下来。
+       v7.2.1：段外且后面还有帧 → 走**老补间**（当前帧 ↔ 下一帧之间补 N 帧）；
+               段内 → 插派生帧，中间画面由两端关键帧自动补出来；
+               段外且已经是最后一帧 → 还是克隆当前帧当普通帧（往后续画）。 */
     const anySeg = ids.some(id => {
       const t = AppState.tracks[id];
       return t && t.frames && segmentAhead(t.frames, idx);
     });
+    if (!anySeg && idx < AppState.frames.length - 1 && insertTweenAfter(idx, count)) return;
     const metas = [];
     const dur = Math.round(1000 / defaultFPS);
     for (let k = 0; k < count; k++) metas.push({ id: ++uid, duration: dur, isTween: false });
@@ -10618,17 +10730,38 @@ function importActionPresets() {
   const shadowScaleYInput = document.getElementById('shadowScaleY');
   const shadowScaleYVal = document.getElementById('shadowScaleYVal');
 
+  /* v7.2.1：地面阴影改成每个火柴人独立（原来是一套工程级全局参数，
+     所有火柴人共用、也没法打关键帧）。现在 6 个参数都挂在火柴人对象上，
+     改任何一项都走 setGlobalProp + markCurrentFrameModified，和描边阴影其余控件完全一致。 */
+  const shadowFig = () => (AppState.selected && AppState.selected.type === 'figure') ? AppState.selected : null;
+
   btnGroundShadow.onclick = () => {
-    groundShadowEnabled = !groundShadowEnabled;
-    btnGroundShadow.classList.toggle('on', groundShadowEnabled);
-    btnGroundShadow.textContent = groundShadowEnabled ? '关闭地面阴影' : '开启地面阴影';
+    const f = shadowFig();
+    if (!f) return;
+    shadowFill(f);
+    f.shadowEnabled = !f.shadowEnabled;
+    setGlobalProp(f, 'shadowEnabled', f.shadowEnabled);
+    btnGroundShadow.classList.toggle('on', f.shadowEnabled);
+    btnGroundShadow.textContent = f.shadowEnabled ? '关闭地面阴影' : '开启地面阴影';
     shadowEditMode = activeTool === 'glow';
     EventBus.emit('need:render');
+    markCurrentFrameModified();
     EventBus.emit('history:save', '切换地面阴影');
   };
 
-  shadowColorInput.addEventListener('input', e => { shadowColor = e.target.value; EventBus.emit('need:render'); });
-  shadowAlphaInput.addEventListener('input', e => { shadowAlpha = +e.target.value; shadowAlphaVal.textContent = shadowAlpha.toFixed(2); EventBus.emit('need:render'); });
+  shadowColorInput.addEventListener('input', e => {
+    const f = shadowFig(); if (!f) return;
+    shadowFill(f); f.shadowColor = e.target.value;
+    setGlobalProp(f, 'shadowColor', f.shadowColor);
+    EventBus.emit('need:render'); markCurrentFrameModified();
+  });
+  shadowAlphaInput.addEventListener('input', e => {
+    const f = shadowFig(); if (!f) return;
+    shadowFill(f); f.shadowAlpha = +e.target.value;
+    shadowAlphaVal.textContent = f.shadowAlpha.toFixed(2);
+    setGlobalProp(f, 'shadowAlpha', f.shadowAlpha);
+    EventBus.emit('need:render'); markCurrentFrameModified();
+  });
   shadowColorInput.addEventListener('change', () => EventBus.emit('history:save', '修改阴影颜色'));
   shadowAlphaInput.addEventListener('change', () => EventBus.emit('history:save', '修改阴影透明度'));
 
@@ -10638,6 +10771,7 @@ function importActionPresets() {
       shadowScaleXVal.textContent = AppState.selected.shadowScaleX.toFixed(2);
       setGlobalProp(AppState.selected, 'shadowScaleX', AppState.selected.shadowScaleX);
       EventBus.emit('need:render');
+      markCurrentFrameModified();
     }
   });
   shadowScaleXInput.addEventListener('change', () => EventBus.emit('history:save', '调整阴影宽度'));
@@ -10648,6 +10782,7 @@ function importActionPresets() {
       shadowScaleYVal.textContent = AppState.selected.shadowScaleY.toFixed(2);
       setGlobalProp(AppState.selected, 'shadowScaleY', AppState.selected.shadowScaleY);
       EventBus.emit('need:render');
+      markCurrentFrameModified();
     }
   });
   shadowScaleYInput.addEventListener('change', () => EventBus.emit('history:save', '调整阴影高度'));
@@ -11153,6 +11288,20 @@ function importActionPresets() {
     if (g.includeAcc == null) g.includeAcc = false;
     return g;
   }
+
+  /* v7.2.1：地面阴影默认值。这些字段以前是工程级全局量，老工程加载时会统一迁移到火柴人身上
+     （见 migrateGroundShadowToFigures），迁移后仍缺字段的（比如更老的存档）在这里兜底。 */
+  function shadowFill(f) {
+    if (!f) return f;
+    if (f.shadowEnabled === undefined) f.shadowEnabled = false;
+    if (f.shadowColor == null) f.shadowColor = '#000000';
+    if (f.shadowAlpha == null) f.shadowAlpha = 0.3;
+    if (f.shadowOffX == null) f.shadowOffX = 0;
+    if (f.shadowOffY == null) f.shadowOffY = 0;
+    if (f.shadowScaleX == null) f.shadowScaleX = 1;
+    if (f.shadowScaleY == null) f.shadowScaleY = 1;
+    return f;
+  }
   const btnJoint = document.getElementById('btnJoint');
   const jointColor = document.getElementById('jointColor');
   const jointLen = document.getElementById('jointLen');
@@ -11502,6 +11651,10 @@ function togglePin(part) {
 
     shadowScaleXInput.disabled = !isFig;
     shadowScaleYInput.disabled = !isFig;
+    /* v7.2.1：地面阴影现在是每个火柴人自己的属性，非火柴人时整组禁用 */
+    if (btnGroundShadow) btnGroundShadow.disabled = !isFig;
+    if (shadowColorInput) shadowColorInput.disabled = !isFig;
+    if (shadowAlphaInput) shadowAlphaInput.disabled = !isFig;
     if (isFig) {
       const sSx = AppState.selected.shadowScaleX || 1;
       const sSy = AppState.selected.shadowScaleY || 1;
@@ -11654,6 +11807,17 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       jointLen.value = AppState.selected.joint.len; jointLenVal.textContent = AppState.selected.joint.len.toFixed(2);
       btnJoint.textContent = AppState.selected.joint.enabled ? '关闭渐变' : '开启渐变';
       btnJoint.classList.toggle('on', AppState.selected.joint.enabled);
+      /* v7.2.1：地面阴影（已改成每个火柴人独立，所以这里跟着选中对象走） */
+      shadowFill(AppState.selected);
+      if (btnGroundShadow) {
+        btnGroundShadow.textContent = AppState.selected.shadowEnabled ? '关闭地面阴影' : '开启地面阴影';
+        btnGroundShadow.classList.toggle('on', !!AppState.selected.shadowEnabled);
+      }
+      if (shadowColorInput) shadowColorInput.value = AppState.selected.shadowColor;
+      if (shadowAlphaInput) {
+        shadowAlphaInput.value = AppState.selected.shadowAlpha;
+        shadowAlphaVal.textContent = (+AppState.selected.shadowAlpha).toFixed(2);
+      }
     }
 
     if (hasCanvasSel) {
@@ -12216,7 +12380,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
            未变形时 distortInvWorld 原样返回，等于没有这段。 */
         const pSrc = distortInvWorld(o, p);
         const pLocal = (o.rot || o.mirror) ? worldToFigureLocal(o, pSrc) : pSrc;
-        if (groundShadowEnabled && shadowEditMode && o === AppState.selected) {
+        if (o.shadowEnabled && shadowEditMode && o === AppState.selected) {
           const jS = jointData(o);
           const lowestY = Math.max(jS.footL.y, jS.footR.y, jS.toeL.y, jS.toeR.y);
           const sx = o.x + (o.shadowOffX || 0);
@@ -12644,6 +12808,8 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
         o.shadowOffY = drag.startShadowOffY + (p.y - drag.startY);
         setGlobalProp(o, 'shadowOffX', o.shadowOffX);
         setGlobalProp(o, 'shadowOffY', o.shadowOffY);
+        /* v7.2.1：地面阴影已经能打关键帧了，画布上拖阴影也要把这一帧升成关键帧 */
+        markCurrentFrameModified();
         EventBus.emit('need:render'); return;
       }
       if (drag.part === 'pelvis') {
@@ -13402,6 +13568,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       AppState.selected.headOffset = { x: 0, y: 0 };
       AppState.selected.shadowOffX = 0; AppState.selected.shadowOffY = 0;
       AppState.selected.shadowScaleX = 1; AppState.selected.shadowScaleY = 1;
+      AppState.selected.shadowColor = '#000000'; AppState.selected.shadowAlpha = 0.3;
       AppState.selected.light = { enabled: false, color: '#ffbb66', size: 1.0, angle: 315 };
       AppState.selected.glow = { enabled: false, color: '#000000', alpha: 0.45, blur: 14, offsetX: 3, offsetY: -4, spread: 0, includeAcc: false };
       AppState.selected.joint = { enabled: false, color: '#ff0000', len: 0.5 };
@@ -15184,6 +15351,8 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       historySize: () => undoStack.length,
       historyTop: () => (undoStack[undoStack.length - 1] || {}).label || null,
       addObjectToFrames, makeFigure, mainKeyStateAt, kfPartialNames,
+      /* v7.2.1：无头回归要能直接选中某个元件（不用模拟画布点击） */
+      select: (o) => select(o),
       kfChipKind: (i) => kfChipKind(i),
       segmentAhead: (trackId, idx) => {
         const t = AppState.tracks[String(trackId)];

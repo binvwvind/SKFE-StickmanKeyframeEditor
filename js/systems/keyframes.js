@@ -214,6 +214,14 @@
     while (d < -Math.PI) d += Math.PI * 2;
     return a + d * t;
   }
+  /* v7.2.1：角度制（0-360）的最短弧插值 —— 侧面高光的「高光方向」滑条是角度，不是弧度。
+     不加这个的话，350° → 10° 会绕一整圈（走反方向）。 */
+  function lerpAngleDeg(a, b, t) {
+    let d = b - a;
+    while (d > 180) d -= 360;
+    while (d < -180) d += 360;
+    return a + d * t;
+  }
   function lerpScale(a, b, t) {
     a = (a == null) ? 1 : a;
     b = (b == null) ? 1 : b;
@@ -280,7 +288,31 @@
         g.alpha = lerp(o1.glow.alpha == null ? 1 : o1.glow.alpha, o2.glow.alpha == null ? 1 : o2.glow.alpha, tt);
         /* 开关是离散量：段内取起点（与 D6 一致） */
         g.enabled = !!o1.glow.enabled;
+        g.includeAcc = !!o1.glow.includeAcc;   /* v7.2.1：连同绑定配饰也是离散量 */
         g.color = obj.glow.color || o1.glow.color || '#000000';
+      }
+      /* v7.2.1：侧面高光的粗细 / 方向也走插值（原来只有颜色会变，粗细和方向是硬跳的） */
+      if (o1.light && o2.light) {
+        const l = obj.light = obj.light || {};
+        l.enabled = !!o1.light.enabled;   /* 离散：段内 hold 起点 */
+        l.size = lerp(o1.light.size == null ? 1 : o1.light.size, o2.light.size == null ? 1 : o2.light.size, tt);
+        l.angle = lerpAngleDeg(o1.light.angle == null ? 0 : o1.light.angle, o2.light.angle == null ? 0 : o2.light.angle, tt);
+      }
+      /* v7.2.1：手部渐变的起始位置也插值 */
+      if (o1.joint && o2.joint) {
+        const jj = obj.joint = obj.joint || {};
+        jj.enabled = !!o1.joint.enabled;  /* 离散：段内 hold 起点 */
+        jj.len = lerp(o1.joint.len == null ? 0.5 : o1.joint.len, o2.joint.len == null ? 0.5 : o2.joint.len, tt);
+      }
+      /* v7.2.1：地面阴影（v7.2.1 起是每个火柴人独立的属性，所以能参与插值） */
+      if (o1.shadowEnabled !== undefined || o2.shadowEnabled !== undefined) {
+        obj.shadowEnabled = !!o1.shadowEnabled;   /* 离散：段内 hold 起点 */
+        obj.shadowColor = col(o1.shadowColor || '#000000', o2.shadowColor || o1.shadowColor || '#000000', tt);
+        obj.shadowAlpha = lerp(o1.shadowAlpha == null ? 0.3 : o1.shadowAlpha, o2.shadowAlpha == null ? 0.3 : o2.shadowAlpha, tt);
+        obj.shadowScaleX = lerp(o1.shadowScaleX == null ? 1 : o1.shadowScaleX, o2.shadowScaleX == null ? 1 : o2.shadowScaleX, tt);
+        obj.shadowScaleY = lerp(o1.shadowScaleY == null ? 1 : o1.shadowScaleY, o2.shadowScaleY == null ? 1 : o2.shadowScaleY, tt);
+        obj.shadowOffX = lerp(o1.shadowOffX || 0, o2.shadowOffX || 0, tt);
+        obj.shadowOffY = lerp(o1.shadowOffY || 0, o2.shadowOffY || 0, tt);
       }
       if (o1.joint && o1.joint.color && o2.joint && o2.joint.color) obj.joint.color = col(o1.joint.color, o2.joint.color, tt);
       if (o1.depth && o2.depth) {

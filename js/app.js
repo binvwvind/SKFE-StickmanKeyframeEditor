@@ -204,6 +204,9 @@
       }
     }
     if (AppState.selected && String(AppState.selected.id) === targetId) set(AppState.selected, path, value);
+    /* v7.4.7：关键帧写过了，段内派生帧就得按新值重算 —— 不清缓存的话
+       「全局改了颜色/比例，关键帧之间那几帧还是旧样子」。 */
+    bumpKfEval();
   }
 
 /* 判断对象是否处于"已绑定"状态（配饰/图形/对话框/画笔） */
@@ -258,6 +261,8 @@ function setGlobalPropForBound(obj, path, value) {
       }
     }
   }
+  /* v7.4.7：绑定件的全局改动同样要让段内派生帧重算 */
+  bumpKfEval();
 }
 
 /* v5.3.0 全局属性：四角扭曲也要跨帧同步。
@@ -604,6 +609,76 @@ function syncDistortToAllFrames(obj) {
      返回 true = 落了新关键帧（调用方要刷新缩略图 / 帧条）。
      allowPlain=false 时只认派生帧（②）—— 给「不是用户正在改的那只元件」用，
      免得拖 A 的动作时顺手把 B 的普通帧也点成关键帧。 */
+  /* v7.4.7：轨道尾部「定格帧」刷新。
+     最后一颗关键帧之后那些普通帧，本来就是「关键帧姿势的复制品」——
+     建元件时烘出来的、拉长时 clone 出来的、裁短时定格出来的，来源都是它。
+     所以最后一颗关键帧一改，尾巴必须跟着改；不然就是用户说的
+     「第 2 个关键帧上挪了位置，后面几十帧全都还是老位置」。
+     只动普通帧：空白帧（不出场）保持空白，派生帧 / 关键帧不碰。 */
+  function holdTailFromKey(tid, idx) {
+    const t = AppState.tracks[tid];
+    if (!t || !t.frames || !KF.isKey(t.frames[idx])) return 0;
+    if (KF.nextKeyIndex(t.frames, idx) >= 0) return 0;   /* 后面还有关键帧 → 中间是段，交给补间 */
+    const src = t.frames[idx];
+    let n = 0;
+    for (let i = idx + 1; i < t.frames.length; i++) {
+      const d = t.frames[i];
+      if (d == null) continue;                            /* 不出场，别补回来 */
+      if (KF.isDerived(d) || KF.isKey(d)) continue;
+      const c = cloneObjectKeepImg(src);
+      if (!c) continue;
+      delete c[KF.KEY];
+      t.frames[i] = c;
+      n++;
+    }
+    return n;
+  }
+
+  /* v7.4.7：打开工程时修一次「尾巴和最后一颗关键帧对不上」的旧数据。
+     只认一种情况：最后一颗关键帧之后全是普通帧，并且这些普通帧的**姿势**彼此完全一样
+     （= 同一张烘出来的画被复制了很多份）。这种尾巴一定是历史遗留，
+     真正的逐帧动画不会整段长得一模一样，所以不会误伤老工程。
+     ⚠️ 只比姿势，不比整个对象：同一个姿势在不同帧里可能一个有 shadowAlpha、
+     一个没有（缺省即默认值），逐字段比会把它们判成「不一样」。 */
+  function holdPoseSig(o) {
+    if (!o) return '';
+    try {
+      const r2 = (v) => Math.round((v || 0) * 100) / 100;
+      return JSON.stringify([
+        r2(o.x), r2(o.y), Math.round((o.scale == null ? 1 : o.scale) * 1000) / 1000,
+        Math.round((o.rot || 0) * 1000) / 1000, o.alpha == null ? 1 : o.alpha,
+        o.color || '', o.headShape || '', !!o.mirror, !!o.hidden,
+        o.a || null, r2(o.headAngle), o.bodyScale || null, o.extremity || null
+      ]);
+    } catch (_) { return ''; }
+  }
+
+  function repairHoldTails() {
+    let fixed = 0;
+    for (const tid in AppState.tracks) {
+      const t = AppState.tracks[tid];
+      if (!t || !t.frames || !t.frames.length) continue;
+      let last = -1;
+      for (let i = t.frames.length - 1; i >= 0; i--) { if (KF.isKey(t.frames[i])) { last = i; break; } }
+      if (last < 0 || last === t.frames.length - 1) continue;
+      const tail = [];
+      let bad = false;
+      for (let i = last + 1; i < t.frames.length; i++) {
+        const d = t.frames[i];
+        if (d == null) continue;
+        if (!KF.isPlain(d)) { bad = true; break; }
+        tail.push(d);
+      }
+      if (bad || tail.length < 2) continue;
+      const sig0 = holdPoseSig(tail[0]);
+      if (!tail.every(d => holdPoseSig(d) === sig0)) continue;   /* 尾巴不一致 → 可能是真动画，别动 */
+      if (sig0 === holdPoseSig(t.frames[last])) continue;        /* 本来就一样，省事 */
+      fixed += holdTailFromKey(tid, last);
+    }
+    if (fixed) bumpKfEval();
+    return fixed;
+  }
+
   function landAutoKey(tid, idx, allowPlain) {
     const t = AppState.tracks[tid];
     if (!t || !t.frames) return false;
@@ -612,7 +687,7 @@ function syncDistortToAllFrames(obj) {
        这一帧的对象就是关键帧本身，数据已经写进去了，但段内的派生帧还在
        缓存里 —— 不失效的话播放时只有「第一次改动的那条肢体」在动，
        后面改的肢体要等到这一帧才突然跳过去。 */
-    if (KF.isKey(slot)) { bumpKfEval(); return false; }
+    if (KF.isKey(slot)) { bumpKfEval(); holdTailFromKey(tid, idx); return false; }
     const live = AppState.objects.find(o => o && o.type !== 'video' && String(o.id) === tid) || null;
     if (KF.isDerived(slot)) {                              /* ② */
       if (!live) return false;
@@ -640,6 +715,8 @@ function syncDistortToAllFrames(obj) {
        因为段内每一帧还各自留着自己那张画，补间永远没机会上场。
        （轨道视图一直有 reconcile，所以只有从画布上改动作时才会踩到。） */
     KF.reconcileTrack(t);
+    /* v7.4.7：新落的关键帧如果正好是这一轨的最后一颗，尾巴也要跟着换成它的姿势 */
+    holdTailFromKey(tid, idx);
     bumpKfEval();
     return true;
   }
@@ -890,6 +967,9 @@ function syncDistortToAllFrames(obj) {
       AppState.frames = newFrames;
       AppState.tracks = newTracks;
       reconcileAllTracks({ adoptPlain: false });
+      /* v7.4.7：清掉一个元件都没有的空轨道；再把「尾巴和最后一颗关键帧对不上」的旧数据修一次 */
+      pruneEmptyTracks();
+      repairHoldTails();
       syncMainLengthFromTracks();
       AppState.currentFrameIndex = data.currentFrameIndex || 0;
       if (AppState.currentFrameIndex >= AppState.frames.length) AppState.currentFrameIndex = 0;
@@ -7786,10 +7866,14 @@ function importActionPresets() {
     showHistoryToast(msg, undefined, 2600);
   }
 
-  /* 关键帧按钮的三种状态：全部有锚点 / 部分 / 没有 */
+  /* 关键帧按钮的三种状态：全部有锚点 / 部分 / 没有
+     v7.4.7：子轨道模式只看这一条轨 —— 「关键帧」按钮点下去改的就是这一条轨
+     （currentScopeTrackIds 同一套作用域），状态却按全部轨道算的话，
+     在子轨里明明已经是关键帧，按钮还是「部分」，图标也跟着显示 ＋。 */
   function mainKeyStateAt(idx) {
     let has = 0, can = 0;
-    for (const id in AppState.tracks) {
+    const scope = isSubTrackMode() ? [String(AppState.activeTrackId)] : Object.keys(AppState.tracks);
+    for (const id of scope) {
       const t = AppState.tracks[id];
       if (!t || !t.frames) continue;
       const slot = (idx < t.frames.length) ? t.frames[idx] : undefined;
@@ -7809,6 +7893,17 @@ function importActionPresets() {
     const st = mainKeyStateAt(AppState.currentFrameIndex);
     btn.classList.toggle('kf-on', st === 'all');
     btn.classList.toggle('kf-partial-on', st === 'partial');
+    /* v7.4.7：菱形图标直接说明「点一下会怎样」——
+       这一帧还没有关键帧（或只有一部分元件有）就画「＋」，已经是了就画「−」。
+       改的是 data-icon 属性本身，SKFEApplyIcons 认得，会就地重画。 */
+    const icEl = btn.querySelector('i[data-icon]');
+    if (icEl) {
+      const want = (st === 'all') ? 'diamond-sub' : 'diamond-add';
+      if (icEl.getAttribute('data-icon') !== want) {
+        icEl.setAttribute('data-icon', want);
+        if (window.SKFEApplyIcons) window.SKFEApplyIcons(btn);
+      }
+    }
     /* v7.2.1：i18n 实际挂在 window.t / window.SKFE_I18N 上，SKFE.i18n 一直是 undefined */
     const base = (typeof window.t === 'function' ? window.t('timeline.keyframeTitle') : '') || '把当前帧设为 / 取消关键帧';
     if (st === 'all') btn.title = tr2('kf.titleFull', '这一帧已是关键帧，点一下取消（只取消主轨广播的锚点）');
@@ -10031,6 +10126,26 @@ function importActionPresets() {
     /* v6.1.0：收尾清掉可能残留的尾部空帧 */
     trimTrailingEmptyFrames();
     return { ok: true };
+  }
+
+  /* v7.4.7：整条轨全是空白帧 = 这个元件在整条时间轴上都不出场，
+     这条轨道已经没有意义了，直接删掉（轨道面板那一行也跟着消失）。
+     以前只在「删除元件」那一个入口扫一次，导出的工程里攒下了空轨道，
+     再打开就在轨道面板里留一行什么都没有的空壳。 */
+  function pruneEmptyTracks() {
+    let removed = 0;
+    for (const tid in AppState.tracks) {
+      const t = AppState.tracks[tid];
+      if (!t || !t.frames) { delete AppState.tracks[tid]; removed++; continue; }
+      if (!t.frames.some(d => d != null)) {
+        delete AppState.tracks[tid];
+        removed++;
+        if (String(AppState.activeTrackId) === String(tid)) AppState.activeTrackId = TRACK_ALL_ID;
+      }
+    }
+    /* 轨道少了一行，面板要重画（事件只是排进 rAF，不会打断当前的加载/删除流程） */
+    if (removed && typeof EventBus !== 'undefined') EventBus.emit('need:render');
+    return removed;
   }
 
   function trimTrailingEmptyFrames() {
@@ -13656,14 +13771,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       }
     }
     /* 清空后移除整条轨道，避免残留空轨道 */
-    for (const tid in AppState.tracks) {
-      const t = AppState.tracks[tid];
-      if (!t || !t.frames) { delete AppState.tracks[tid]; continue; }
-      if (t.frames.every(d => d == null)) {
-        delete AppState.tracks[tid];
-        if (AppState.activeTrackId === tid) AppState.activeTrackId = TRACK_ALL_ID;
-      }
-    }
+    pruneEmptyTracks();
     AppState.selected = null;
     AppState.canvasSelected = false;
     syncMainLengthFromTracks();
@@ -13689,6 +13797,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
         if (AppState.activeTrackId === tid) AppState.activeTrackId = TRACK_ALL_ID;
       }
     }
+    pruneEmptyTracks();
     if (AppState.selected && AppState.selected.type === 'ink' && inkIds.indexOf(String(AppState.selected.id)) !== -1) {
       AppState.selected = null;
     }
@@ -15605,11 +15714,18 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       txEnd: () => txEnd(),
       isTxOpen: () => isTxOpen(),
 
-      /* 点长条 = 只选中这个元件（不动帧号）。子轨模式下不擅自改隔离轨。 */
+      /* 点长条 / 点关键帧 / 点行内空白 = 选中这一行的元件（v7.4.7：子轨模式下也生效）。
+         以前这里有一句「子轨模式且不是当前轨就 return」——
+         结果在子轨里点别的行完全没反应，用户报的就是这个「点轨道没选中元件」。
+         现在点谁就是谁：select() 内部会把隔离轨一起切过去。 */
       selectTrack(id) {
-        if (isSubTrackMode() && String(AppState.activeTrackId) !== String(id)) return;
-        const o = findObj(id);
-        if (o) select(o);
+        if (id == null) return;
+        const sid = String(id);
+        if (!AppState.tracks[sid]) return;
+        const o = findObj(sid);
+        if (o) { select(o); return; }
+        /* 这一帧这个元件不出场（空白帧）：至少把「当前轨道」切过去，属性面板留空 */
+        if (isSubTrackMode()) setActiveTrack(sid);
       },
 
       /* 眼睛：直接复用元件列表现成的「全帧隐藏」，不新写一套 */
@@ -15638,6 +15754,10 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
          以前改动只同步「变长」，不会变短 —— 裁短长条后时间轴末尾留着一串空帧，
          导出视频时就成了末尾的空白画面。 */
       trimTail() { trimTrailingEmptyFrames(); },
+
+      /* v7.4.7：这条轨一个元件都不剩了（全空白帧）就把这一行删掉，
+         别在轨道面板里留一行空壳。轨道视图每次提交后调一次。 */
+      pruneTracks() { return pruneEmptyTracks(); },
 
       relayout() {
         refreshTimelineDockOffsets();
@@ -15669,6 +15789,7 @@ const spatialGroupVals = spatialReadGroups(AppState.selected);
       toggleKeyframe: () => toggleKeyframeAtCurrent(),
       insertFrames: (n) => insertFramesInSegment(n),
       trimTrailingEmptyFrames, addFrame, deleteFrame,
+      pruneEmptyTracks, repairHoldTails, holdTailFromKey,
       deleteSelectedFrames, deleteSelected,
       applyEase: (k) => applyEaseToCurrentSegments(k),
       applyChannelEase: (objId, part, k) => pushChannelEaseToSegments(objId, part, k),

@@ -240,7 +240,9 @@
     lastSig = signature();
 
     const map = tracksMap();
-    const ids = Object.keys(map).filter(id => map[id] && map[id].frames);
+    /* v7.4.7：全空白帧的轨道不画行 —— 元件已经彻底删掉了，这一行不该留在面板里。
+       （数据层由 pruneEmptyTracks 清，这里再兜一层，避免别的入口漏扫。） */
+    const ids = Object.keys(map).filter(id => map[id] && map[id].frames && map[id].frames.some(d => d != null));
     const total = Math.max(totalFrames(), 1);
     const width = total * colW;
     const rowsH = Math.max(ids.length, 1) * ROW_H;
@@ -461,6 +463,8 @@
     if (api.refreshObjects) api.refreshObjects();
     /* v7.4.6：裁短 / 删掉尾部之后把时间轴尾巴收干净，别留一串谁都不出场的空白帧 */
     if (api.trimTail) { try { api.trimTail(); } catch (_) {} }
+    /* v7.4.7：整条轨被清空（元件已经不出场）→ 这一行直接消失，别留空壳 */
+    if (api.pruneTracks) { try { api.pruneTracks(); } catch (_) {} }
     api.afterChange();
     if (api.isTxOpen && api.isTxOpen()) return;
     api.pushPre(api.snapshot(), label);
@@ -1281,8 +1285,15 @@
       if (st.kind === 'keys') {
         if (!st.moved) {
           /* v7.4.4：点轨道上的关键帧也算「点了这一行」，顺手把这行的元件选上，
-             用户点完就能直接去左上属性面板改它。 */
-          if (st.items.length) api.selectTrack(st.items[0].id);
+             用户点完就能直接去左上属性面板改它。
+             v7.4.7：单颗点时先把播放头挪到这颗关键帧上 —— 不然点在一条
+             「这一帧本来空白」的轨上，selectTrack 找不到元件，属性面板是空的。 */
+          if (st.items.length) {
+            if (st.items.length === 1 && st.items[0].i !== api.currentFrame()) {
+              api.goToFrame(st.items[0].i);
+            }
+            api.selectTrack(st.items[0].id);
+          }
           return;
         }
         if (st.items.length === 1) {

@@ -1,7 +1,7 @@
 /* SKFE locale: Simplified Chinese (default) */
 window.SKFE_LOCALES = window.SKFE_LOCALES || {};
 window.SKFE_LOCALES['zh-CN'] = {
-  "app.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.4.6",
+  "app.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.4.7",
   "tbox.move": "拖动整体移动",
   "tbox.scale": "拖动等比缩放（开启自由拉伸后按 X/Y 分别拉伸）",
   "tbox.rotate": "拖动旋转",
@@ -23,7 +23,7 @@ window.SKFE_LOCALES['zh-CN'] = {
   "cameraPreview.closeTitle": "关闭预览",
   "cameraPreview.hint": "始终显示当前帧的摄像机导出画面",
   "timeline.show": "帧动画面板",
-  "watermark.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.4.6",
+  "watermark.title": "SKFE | Stickman Keyframe Editor-火柴人帧动画编辑器v7.4.7",
   "watermark.author": "作者 binvwvnid · QQ 交流群 1121039855",
   "panel.title": "控制面板",
   "lang.toggle": "中/EN",
